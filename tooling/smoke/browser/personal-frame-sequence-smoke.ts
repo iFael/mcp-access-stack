@@ -529,15 +529,15 @@ async function main(): Promise<void> {
         !sharedWindowTab.emulated) {
       throw new Error("The owned tab's window did not resize as requested.");
     }
-    // The user shares an already open tab from the extension popup; MCP can work in
-    // it and list other tabs only on opt-in, but never close it.
+    // Exercise internal controls from the extension options test page, not a toolbar popup.
+    // A user-shared tab remains protected against automatic closure.
     const userTab = await context.newPage();
     await userTab.goto(`http://share-site.test:${sitePort}/`);
     const otherTab = await context.newPage();
     await otherTab.goto(`http://plain-site.test:${sitePort}/?segredo=1#x`);
     const worker = context.serviceWorkers().find((candidate) => candidate.url().startsWith("chrome-extension://"))!;
     const popup = await context.newPage();
-    await popup.goto(new URL("browser-status.html", worker.url()).href);
+    await popup.goto(new URL("secret-provision.html", worker.url()).href);
     const popupCall = (type: string, extra: Record<string, unknown> = {}) => popup.evaluate(`(async () => {
       const [tab] = await chrome.tabs.query({ url: "http://share-site.test/*" });
       return chrome.runtime.sendMessage({ type: ${JSON.stringify(type)}, tabId: tab.id, ...${JSON.stringify(extra)} });
@@ -568,8 +568,8 @@ async function main(): Promise<void> {
       throw new Error("Stopping the share did not release the tab cleanly.");
     }
 
-    // Handing a tab to the user: MCP is refused there until the user hands it back
-    // from the popup, and a timed-out wait does not take the turn back.
+    // Handing a tab to the user: MCP stays blocked until Chrome notification handback;
+    // a timed-out wait does not take the turn back.
     const handTab = plain.tab.tabId;
     const handChromeId = Number(handTab.slice("personal:".length));
     const popupFor = (type: string) => popup.evaluate(

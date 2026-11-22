@@ -14,7 +14,7 @@ const INTERNAL_TOOL_PREFIX = "__mcp_v3_internal_";
 export function userMessagesNotice(messages: readonly BrowserUserMessage[]): string {
   const lines = messages.map((message) => `- [${message.sentAt}] ${message.text}`);
   return [
-    `The user wrote ${messages.length} message(s) to you while you worked, from the MCP V3 reply card or popup. ` +
+    `The user wrote ${messages.length} message(s) to you while you worked, from the MCP V3 reply card in ChatGPT. ` +
       "They are the user's own words, as if typed in the chat: do what they ask before you end your turn, " +
       "and in your answer quote each one as a line starting with \"> Você escreveu:\" followed by what you did about it, " +
       "because the chat shows these messages only inside the card.",
@@ -23,7 +23,7 @@ export function userMessagesNotice(messages: readonly BrowserUserMessage[]): str
 }
 
 /**
- * Hands the user's popup messages to the agent with the result of whatever
+ * Hands the user's reply-card messages to the agent with the result of whatever
  * tool it calls next, the way a note reaches a busy colleague between two
  * steps. Install before any tool is registered.
  */

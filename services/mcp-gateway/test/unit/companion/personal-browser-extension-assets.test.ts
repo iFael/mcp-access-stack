@@ -6,22 +6,96 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
-  it("keeps the popup status-only, with secure handoff on the extension options page", () => {
+  it("has no toolbar popup and preserves the secure options page and native controls", () => {
     const assets = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const manifest = JSON.parse(assets.manifest) as {
-      action: { default_popup: string }; options_page: string; version: string;
+      action: { default_popup?: string; default_title: string };
+      options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.2");
-    expect(manifest.action.default_popup).toBe("browser-status.html");
+    expect(manifest.version).toBe("1.17.5");
+    expect(manifest.action).not.toHaveProperty("default_popup");
+    expect(manifest.action.default_title).toContain("Parar");
+    expect(manifest.permissions).toContain("contextMenus");
     expect(manifest.options_page).toBe("secret-provision.html");
-    expect(assets.popupHtml).toContain("Parar o MCP");
-    expect(assets.popupHtml).toContain("tab-sharing.js");
-    expect(assets.popupHtml).not.toContain('id="generate"');
-    expect(assets.popupHtml).not.toContain("aprovação automática");
-    expect(assets.tabSharingScript).toContain("mcp-tab-stop");
-    expect(assets.secureChannelHtml).toContain("secret-provision.js");
+    expect(assets).not.toHaveProperty("popupHtml");
+    expect(assets).not.toHaveProperty("tabSharingScript");
+    expect(assets.serviceWorker).toContain("chrome.action?.onClicked");
+    expect(assets.serviceWorker).toContain("chrome.contextMenus?.onClicked");
     expect(assets.secureChannelHtml).toContain('id="generate"');
-    expect(assets.secureChannelHtml).not.toContain("Parar o MCP");
+    expect(assets.secureChannelHtml).toContain("secret-provision.js");
+    expect(assets.secureChannelScript).toContain("mcp-secret-fill");
+  });
+
+  it("uses trusted Chrome gestures for stop and exact-site revocation, not page messages", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: Array<Record<string, unknown>> = [];
+    const context = vm.createContext({
+      URL, Number, Object, PERSONAL_REVOKE_MENU_ID: "mcp-revoke-site",
+      readOwnedTabs: async () => ({ 7: { ownership: "mcp" } }),
+      finishTask: async (input: Record<string, unknown>) => { events.push({ action: "stop", ...input }); },
+      personalTabSharingDispatch: async (input: Record<string, unknown>) => { events.push(input); },
+      assertPersonalNavigationTarget: (url: string) => {
+        if (!url.startsWith("https://")) throw new Error("private");
+        return url;
+      },
+    });
+    const stop = vm.runInContext(`(${extractFunction(serviceWorker, "personalBrowserToolbarClick")})`, context) as
+      (tab: { id?: number | string }) => Promise<boolean>;
+    const revoke = vm.runInContext(`(${extractFunction(serviceWorker, "personalBrowserRevokeMenuClick")})`, context) as
+      (info: { menuItemId: string }, tab: { id: number; url: string }) => Promise<boolean>;
+
+    await expect(stop({ id: 7 })).resolves.toBe(true);
+    await expect(stop({ id: "7" })).resolves.toBe(false);
+    await expect(revoke({ menuItemId: "unknown" }, { id: 7, url: "https://example.com/" })).resolves.toBe(false);
+    await expect(revoke({ menuItemId: "mcp-revoke-site" }, { id: 7, url: "chrome://settings/" })).resolves.toBe(false);
+    await expect(revoke({ menuItemId: "mcp-revoke-site" }, { id: 7, url: "https://example.com/a" }))
+      .resolves.toBe(true);
+    expect(events).toEqual([
+      { action: "stop", keepOpen: true },
+      { type: "mcp-tab-revoke", tabId: 7, expectedOrigin: "https://example.com" },
+    ]);
+    expect(serviceWorker).toContain('contexts: ["action"]');
+  });
+
+  it("registers native toolbar and context-menu actions without a popup", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const start = serviceWorker.indexOf("chrome.action?.onClicked?.addListener");
+    const end = serviceWorker.indexOf("// Plans and MCP tabs change", start);
+    const events: string[] = [];
+    let toolbar: ((tab: { id: number }) => void) | undefined;
+    let contextMenu: ((info: { menuItemId: string }, tab: { id: number }) => void) | undefined;
+    let installed: (() => void) | undefined;
+    let created: Record<string, unknown> | undefined;
+    const ctx = vm.createContext({
+      personalBrowserToolbarClick: async () => { events.push("stop"); },
+      personalBrowserRevokeMenuClick: async () => { events.push("revoke"); },
+      connect: () => { events.push("connect"); },
+      PERSONAL_REVOKE_MENU_ID: "mcp-revoke-site",
+      chrome: {
+        action: { onClicked: { addListener: (f: typeof toolbar) => { toolbar = f; } } },
+        contextMenus: {
+          onClicked: { addListener: (f: typeof contextMenu) => { contextMenu = f; } },
+          removeAll: (callback: () => void) => callback(),
+          create: (value: Record<string, unknown>, callback: () => void) => { created = value; callback(); },
+        },
+        runtime: {
+          lastError: undefined,
+          onStartup: { addListener: () => undefined },
+          onInstalled: { addListener: (f: typeof installed) => { installed = f; } },
+        },
+      },
+    });
+    vm.runInContext(serviceWorker.slice(start, end), ctx);
+    expect(toolbar).toBeDefined();
+    expect(contextMenu).toBeDefined();
+    installed!();
+    expect(created).toMatchObject({
+      id: "mcp-revoke-site", title: "Revogar permissões do MCP neste site", contexts: ["action"],
+    });
+    toolbar!({ id: 7 });
+    contextMenu!({ menuItemId: "mcp-revoke-site" }, { id: 7 });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(events).toEqual(["connect", "stop", "revoke"]);
   });
 
   it("reads an owned top-level document to bounded completeness and fails closed on navigation", async () => {
@@ -3455,7 +3529,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.2");
+    expect(parsedManifest.version).toBe("1.17.5");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3591,12 +3665,13 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";', context);
     vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
       'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
-      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
+      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' +
+      'const PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY = "mcpV3RememberedJavaScriptOrigins"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
       'const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
       "personalTabContextEnabled", "personalPlanRequired", "listPersonalOpenTabs", "personalTabSharingDispatch",
       "personalApprovalStatus", "readPersonalApprovalRequest", "readPersonalSiteGrants", "readPersonalAutoSites",
-      "clearPersonalApprovalRequest",
+      "readPersonalPermanentScriptOrigins", "clearPersonalApprovalRequest",
       "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask",
       "readPersonalHandoff", "resumePersonalHandoff", "clearPersonalHandoff", "settlePersonalHandoffSignals",
       "notifyPersonalTaskFinished"]) {
@@ -3612,7 +3687,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
       ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
-      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], inbox: expect.objectContaining({ recent: [] }),
+      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], permanentScript: false,
+      inbox: expect.objectContaining({ recent: [] }),
       wake: { enabled: true, waiting: 0, recent: [] },
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
@@ -3822,6 +3898,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       Number,
       resumePersonalHandoff: async (id: number) => { resumed.push(id); },
       grantPersonalSiteApproval: async (id: number) => { granted.push(id); },
+      personalWakeTargetTab: async () => ({ id: 44 }),
       chrome: {
         notifications: {
           onButtonClicked: { addListener: (fn: typeof onButton) => { onButton = fn; } },
@@ -3839,12 +3916,15 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await new Promise((resolve) => setImmediate(resolve));
     onBody!("mcp-approval:12");
     await new Promise((resolve) => setImmediate(resolve));
+    onBody!("mcp-question:44");
+    await new Promise((resolve) => setImmediate(resolve));
     expect(resumed).toEqual([7]);
     expect(granted).toEqual([12]);
-    expect(focused).toEqual([["tab", 9], ["window", 4, { focused: true }], ["tab", 12], ["window", 4, { focused: true }]]);
+    expect(focused).toEqual([["tab", 9], ["window", 4, { focused: true }], ["tab", 12], ["window", 4, { focused: true }],
+      ["tab", 44], ["window", 4, { focused: true }]]);
   });
 
-  it("answers tab sharing messages only from the extension popup", async () => {
+  it("accepts legacy tab controls only from the extension options page", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const marker = 'message.type.startsWith("mcp-tab-")';
     const start = serviceWorker.lastIndexOf("if (chrome.runtime.onMessage", serviceWorker.indexOf(marker));
@@ -3862,12 +3942,14 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       },
     });
     vm.runInContext(listenerSource, context);
-    const popup = { id: "ext", url: "chrome-extension://ext/browser-status.html" };
+    const optionsPage = { id: "ext", url: "chrome-extension://ext/secret-provision.html" };
     const replies: unknown[] = [];
-    expect(handler!({ type: "mcp-secret-status" }, popup, (value) => replies.push(value))).toBe(false);
-    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...popup, url: "https://evil.example/" }, () => undefined)).toBe(false);
-    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...popup, id: "other" }, () => undefined)).toBe(false);
-    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, popup, (value) => replies.push(value))).toBe(true);
+    expect(handler!({ type: "mcp-secret-status" }, optionsPage, (value) => replies.push(value))).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 },
+      { ...optionsPage, url: "chrome-extension://ext/browser-status.html" }, () => undefined)).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...optionsPage, url: "https://evil.example/" }, () => undefined)).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...optionsPage, id: "other" }, () => undefined)).toBe(false);
+    expect(handler!({ type: "mcp-tab-share", tabId: 5 }, optionsPage, (value) => replies.push(value))).toBe(true);
     await new Promise((resolve) => setImmediate(resolve));
     expect(dispatched).toEqual([{ type: "mcp-tab-share", tabId: 5 }]);
     expect(replies).toEqual([{ ok: true }]);
@@ -3894,6 +3976,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     };
     const windows: Array<Record<string, unknown>> = [];
     const removedWindows: number[] = [];
+    const taskScopeReports: Array<Record<string, unknown>> = [];
     const notifications: Array<[string, string, Record<string, unknown>?]> = [];
     let onTick: (() => Promise<void>) | undefined;
     let onSiteRequest: ((id: string) => Promise<void>) | undefined;
@@ -3904,6 +3987,10 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const context = vm.createContext({
       URL, Date, Number, String, Math, Promise, Array, Object, Set, coded,
       PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
+      send: (message: Record<string, unknown>) => { taskScopeReports.push(message); },
+      readPersonalSiteGrants: async () => [],
+      readPersonalAutoSites: async () => [],
+      readPersonalPermanentScriptOrigins: async () => [],
       crypto: { randomUUID: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd` },
       chromeTabIdFrom: (id: string) => {
         const match = /^personal:(\d+)$/u.exec(String(id));
@@ -3948,6 +4035,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       if (id.startsWith("mcp-plan-site:")) queueMicrotask(() => void onSiteRequest?.(id));
     };
     vm.runInContext(serviceWorker.slice(start, end), context);
+    vm.runInContext(extractFunction(serviceWorker, "pushPersonalSiteApprovals"), context);
     loadGroupSupport(context, serviceWorker);
     vm.runInContext("const withOwnershipLock = (work) => work();", context);
     const syncRules = vm.runInContext("syncPersonalPlanNavigationRules", context) as () => Promise<void>;
@@ -4007,6 +4095,9 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       domains: ["shop.example"], actions: ["navigate", "interact", "fill"], tabIds: ["personal:8"],
       feedback: "Sem JavaScript, por favor" });
     expect(notifications.at(-1)).toEqual(["clear", "mcp-plan:" + planId]);
+    expect(taskScopeReports.at(-1)).toMatchObject({ type: "site-approvals", taskScopes: [
+      { taskId: "t1", domains: ["shop.example"], actions: ["navigate", "interact", "fill"] },
+    ] });
     expect(removedWindows).toEqual([]);
     await expect(review({ type: "mcp-plan-decide", planId, approve: false })).rejects.toThrow("not-pending");
 
@@ -4085,6 +4176,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     // Only owned or shared tabs can be listed, and finishing the task ends its plans.
     await expect(plan({ ...proposal, tabIds: ["personal:12"] })).rejects.toMatchObject({ code: "TAB_NOT_OWNED" });
     await clear("t1");
+    expect(taskScopeReports.at(-1)).toMatchObject({ type: "site-approvals", taskScopes: [] });
     await expect(planRules()).resolves.toEqual([]);
     expect(sessionRules).toEqual([expect.objectContaining({ id: 1 })]);
     await expect(plan({ planId: fourth.planId })).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
@@ -4113,6 +4205,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       URL, Date, Number, String, Math, Promise, Array, Object, Set,
       PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
       send: (message: Record<string, unknown>) => { sent.push(message); },
+      readPersonalPlans: async () => ({}),
       chromeTabIdFrom: (id: string) => Number(/^personal:(\d+)$/u.exec(id)![1]),
       readOwnedTabs: async () => owned,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -4138,7 +4231,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     }
     loadGroupSupport(context, serviceWorker);
     const record = vm.runInContext("recordPersonalApprovalRequest", context) as (message: Record<string, unknown>) => Promise<void>;
-    const grant = vm.runInContext("grantPersonalSiteApproval", context) as (chromeTabId: number) => Promise<boolean>;
+    const grant = vm.runInContext("grantPersonalSiteApproval", context) as
+      (chromeTabId: number, rememberScript?: boolean) => Promise<boolean>;
     const clearTask = vm.runInContext("clearPersonalTaskApprovals", context) as
       (taskId: string | undefined, chromeTabIds: number[]) => Promise<void>;
     const clearTab = vm.runInContext("clearPersonalTabApprovals", context) as (chromeTabId: number) => Promise<void>;
@@ -4168,7 +4262,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await ask("personal:7", "https://shop.example");
     await expect(grant(7)).resolves.toBe(true);
     const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown>>; autoSites: string[] };
-    expect(report).toEqual({ type: "site-approvals", autoSites: [],
+    expect(report).toEqual({ type: "site-approvals", autoSites: [], permanentScriptOrigins: [], taskScopes: [],
       grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1" }] });
     // No time limit: the grant is held until its task ends.
     expect(session.get("mcpV3SiteGrants")).toEqual([{ origin: "https://shop.example", category: "upload-file",
@@ -4179,10 +4273,10 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 7 })).resolves.toMatchObject({
       grants: [{ category: "upload-file", until: "task" }] });
 
-    // A shared tab has no task: its grant is bound to that tab, granted from the popup.
+    // A shared tab has no task: its grant is bound to that tab, granted from Chrome.
     await ask("personal:8", "https://docs.example", "execute-script");
     expect(notifications.at(-1)).toEqual(["create", "mcp-approval:8", expect.objectContaining({
-      message: "Executar JavaScript. Permitir libera isso neste site enquanto esta aba estiver com o MCP." })]);
+      message: "JavaScript pode ler e alterar esta página. Permita somente nesta tarefa ou lembre a escolha para esta origem HTTPS." })]);
     await expect(dispatch({ type: "mcp-tab-approve", tabId: 8 })).resolves.toMatchObject({
       grants: [{ category: "execute-script", until: "tab" }] });
     expect(session.has("mcpV3ApprovalRequest:8")).toBe(false);
@@ -4196,7 +4290,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(session.has("mcpV3ApprovalRequest:7")).toBe(false);
     expect((sent.at(-1) as typeof report).grants).toEqual([
       { origin: "https://docs.example", category: "execute-script", tabId: "personal:8" }]);
-    // Releasing or closing that tab ends its grant; the user can also revoke from the popup.
+    // Releasing or closing that tab ends its grant; the user can also revoke from Chrome.
     await clearTab(8);
     expect((sent.at(-1) as typeof report).grants).toEqual([]);
     await ask("personal:8", "https://docs.example", "execute-script");
@@ -4224,6 +4318,26 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(local.has("mcpV3AutoApproveSites")).toBe(false);
     expect((sent.at(-1) as typeof report).autoSites).toEqual([]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 9 })).resolves.toMatchObject({ autoEligible: false, auto: false });
+
+    // Remembering JavaScript requires the explicit second button on a Chrome notification.
+    await ask("personal:7", "https://shop.example", "execute-script");
+    expect(notifications.at(-1)).toEqual(["create", "mcp-approval:7", expect.objectContaining({
+      buttons: [{ title: "Permitir nesta tarefa" }, { title: "Lembrar neste site" }],
+    })]);
+    await expect(grant(7, true)).resolves.toBe(true);
+    expect(local.get("mcpV3RememberedJavaScriptOrigins")).toEqual(["https://shop.example"]);
+    await clearTask("t1", [7]);
+    expect((sent.at(-1) as typeof report & { permanentScriptOrigins: string[] }).permanentScriptOrigins)
+      .toEqual(["https://shop.example"]);
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 7 }))
+      .resolves.toMatchObject({ permanentScript: true });
+    await expect(dispatch({ type: "mcp-tab-revoke", tabId: 7, expectedOrigin: "https://other.example" }))
+      .rejects.toThrow("site-changed");
+    expect(local.get("mcpV3RememberedJavaScriptOrigins")).toEqual(["https://shop.example"]);
+    await dispatch({ type: "mcp-tab-revoke", tabId: 7, expectedOrigin: "https://shop.example" });
+    expect(local.get("mcpV3RememberedJavaScriptOrigins")).toEqual([]);
+    expect((sent.at(-1) as typeof report & { permanentScriptOrigins: string[] }).permanentScriptOrigins)
+      .toEqual([]);
   });
 
   it("answers plan window messages only from the extension's plan page", async () => {
@@ -4317,6 +4431,17 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       name: "Password",
     });
     expect(JSON.stringify(result)).not.toContain("fictional-super-secret");
+  });
+
+  it("exposes native HTML draggable elements as fresh refs without inventing a button role", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    expect(serviceWorker).toContain('"[draggable=\'true\']"');
+    const item = fakeElement({ tagName: "DIV", text: "A", attributes: { draggable: "true" } });
+    const dom = createDom([item]);
+    const snapshotPage = vm.runInContext(
+      `(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context,
+    ) as (generation: string) => { refs: Array<{ ref: string; role: string; name: string }> };
+    expect(snapshotPage("drag-a").refs[0]).toMatchObject({ role: "generic", name: "A" });
   });
 
   it("emits richer safe DOM semantics without exposing input values", () => {

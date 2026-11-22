@@ -1,5 +1,4 @@
-import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_SECURE_CHANNEL_HTML, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
-import { TAB_SHARING_POPUP_SCRIPT } from "./personal-browser-tab-sharing-assets.js";
+import { HANDOFF_EXTENSION_VERSION, HANDOFF_SECURE_CHANNEL_SCRIPT, HANDOFF_SECURE_CHANNEL_HTML, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
 import { PERSONAL_DOM_SETTLE_SOURCE } from "./personal-browser-dom-settle-assets.js";
 import { PLAN_REVIEW_HTML, PLAN_REVIEW_SCRIPT } from "./personal-browser-plan-review-assets.js";
 import { TASK_HOME_HTML, TASK_HOME_SCRIPT } from "./personal-browser-task-home-assets.js";
@@ -8,10 +7,8 @@ import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
 export interface PersonalBrowserExtensionAssets {
   manifest: string;
   serviceWorker: string;
-  popupHtml: string;
   secureChannelHtml: string;
-  popupScript: string;
-  tabSharingScript: string;
+  secureChannelScript: string;
   planReviewHtml: string;
   planReviewScript: string;
   taskHomeHtml: string;
@@ -106,10 +103,10 @@ export function buildPersonalBrowserExtensionAssets(
     description: "Connects explicitly MCP-owned tabs in your personal Chrome profile to MCP V3.",
     minimum_chrome_version: "116",
     permissions: ["tabs", "scripting", "storage", "debugger", "downloads", "tabGroups", "webNavigation", "notifications",
-      "declarativeNetRequest", "alarms"],
+      "declarativeNetRequest", "alarms", "contextMenus"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
-    action: { default_title: "MCP V3 Personal Browser", default_popup: "browser-status.html" },
+    action: { default_title: "MCP V3 — clique para Parar sem fechar as abas" },
     options_page: "secret-provision.html",
     commands: { "fill-mcp-preparation-secret": { suggested_key: { default: "Ctrl+Shift+8" }, description: "Fill the focused MCP prepare-secret field without showing its value" } },
     // Chrome fetches a notification's data: icon under this policy; without
@@ -527,8 +524,8 @@ async function tabs(input) {
   });
 }
 
-// Titles and addresses of the user's other tabs, only while the user allows it
-// from the popup. Query strings and fragments are dropped, private hosts are
+// Titles and addresses of other tabs only while the legacy explicit opt-in is enabled.
+// Query strings and fragments are dropped, private hosts are
 // skipped, and none of these tabs can be controlled until the user shares it.
 async function listPersonalOpenTabs(owned) {
   if (!(await personalTabContextEnabled())) return undefined;
@@ -556,9 +553,8 @@ async function personalTabContextEnabled() {
   return value?.[PERSONAL_TAB_CONTEXT_KEY] === true;
 }
 
-// Only the user shares an already open tab, from the extension popup. A shared
-// tab stays the user's: MCP never closes it, and finishing tasks or "Parar de
-// compartilhar" only releases it.
+// An explicitly shared tab remains user-owned. MCP never closes it;
+// finishing tasks or revoking sharing only releases it.
 async function personalTabSharingDispatch(message) {
   if (["mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan", "mcp-tab-confirm-drag"].includes(message.type)) {
     if (typeof message.enabled !== "boolean") throw Error("invalid");
@@ -580,7 +576,7 @@ async function personalTabSharingDispatch(message) {
   if (pendingShare && (message.type === "mcp-tab-share" || message.type === "mcp-tab-unshare")) {
     await answerPersonalShare(tab.id, message.type === "mcp-tab-share");
   } else if (message.type === "mcp-tab-share") {
-    // A tab shared from the popup gets an MCP group of its own: tabs dragged
+    // A tab shared through the trusted extension channel gets an MCP group: tabs dragged
     // into that group are shared too. The group is not a task, so its tabs keep
     // their approvals while they stay shared, as before.
     const groupKey = PERSONAL_POPUP_SHARE_PREFIX + crypto.randomUUID();
@@ -630,7 +626,15 @@ async function personalTabSharingDispatch(message) {
     if (!(await grantPersonalSiteApproval(tab.id))) throw Error("not-requested");
   } else if (message.type === "mcp-tab-revoke") {
     const origin = new URL(tab.url).origin;
-    await withPersonalSiteGrants(() => changePersonalSiteGrants((grants) => grants.filter((grant) => grant.origin !== origin)));
+    if (message.expectedOrigin !== undefined && message.expectedOrigin !== origin) throw Error("site-changed");
+    await withPersonalSiteGrants(async () => {
+      await changePersonalSiteGrants((grants) => grants.filter((grant) => grant.origin !== origin));
+      const permanent = await readPersonalPermanentScriptOrigins();
+      if (permanent.includes(origin)) {
+        await chrome.storage.local.set({ [PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY]: permanent.filter((site) => site !== origin) });
+        await pushPersonalSiteApprovals();
+      }
+    });
   } else if (message.type === "mcp-tab-auto") {
     // The old popup setting is retired; hidden persistent approvals are
     // neither read nor created in autonomous mode.
@@ -674,13 +678,16 @@ async function personalApprovalStatus(tab) {
     grants: [...new Set((await readPersonalSiteGrants()).filter((grant) => grant.origin === url.origin)
       .map((grant) => grant.category + " " + (typeof grant.taskId === "string" ? "task" : "tab")))]
       .map((key) => ({ category: key.split(" ")[0], until: key.split(" ")[1] })),
+    permanentScript: (await readPersonalPermanentScriptOrigins()).includes(url.origin),
     ...(request?.origin === url.origin ? { approval: request.category } : {}),
   };
 }
 
 const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants";
+const PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY = "mcpV3RememberedJavaScriptOrigins";
 const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites";
 const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";
+const PERSONAL_REVOKE_MENU_ID = "mcp-revoke-site";
 // Deleting, paying, sending, publishing, credentials and contracts are never
 // approved per site: each one keeps its own confirmation.
 const PERSONAL_APPROVAL_LABELS = {
@@ -723,6 +730,16 @@ async function readPersonalAutoSites() {
   return [];
 }
 
+// Only an explicit Chrome notification choice remembers JavaScript on one exact HTTPS origin.
+async function readPersonalPermanentScriptOrigins() {
+  const value = await chrome.storage.local.get(PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY).catch(() => ({}));
+  const origins = value?.[PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY];
+  return Array.isArray(origins) ? [...new Set(origins.filter((origin) => {
+    if (typeof origin !== "string" || !origin.startsWith("https://")) return false;
+    try { return new URL(origin).origin === origin; } catch { return false; }
+  }))].slice(0, 100) : [];
+}
+
 // The bridge learns approvals only from here and never grants one itself.
 async function pushPersonalSiteApprovals() {
   const grants = await readPersonalSiteGrants();
@@ -731,6 +748,11 @@ async function pushPersonalSiteApprovals() {
     grants: grants.map((grant) => ({ origin: grant.origin, category: grant.category,
       ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : { tabId: grant.tabId }) })),
     autoSites: await readPersonalAutoSites(),
+    permanentScriptOrigins: await readPersonalPermanentScriptOrigins(),
+    taskScopes: Object.values(await readPersonalPlans())
+      .filter((plan) => plan?.status === "approved")
+      .map((plan) => ({ taskId: plan.taskId, domains: plan.approvedDomains,
+        actions: plan.approvedActions })),
   });
 }
 
@@ -747,7 +769,7 @@ async function clearPersonalApprovalRequest(chromeTabId) {
 
 // The bridge asks after it refused an action. The request is recorded only
 // for an MCP or shared tab still on that origin, with the tab's own task, and
-// the user answers from the notification or the popup. There is no time
+// the user answers through Chrome notification. There is no time
 // limit: a grant lasts until its task ends or, for a tab without a task, until
 // that tab leaves MCP.
 function recordPersonalApprovalRequest(message) {
@@ -765,14 +787,18 @@ function recordPersonalApprovalRequest(message) {
     } });
     await Promise.resolve(chrome.notifications?.create?.("mcp-approval:" + chromeTabId, {
       type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP pede permissão em " + new URL(origin).host,
-      message: PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site " +
-        (taskId ? "até o fim da tarefa." : "enquanto esta aba estiver com o MCP."),
-      buttons: [{ title: "Permitir neste site" }], requireInteraction: true, priority: 1,
+      message: message.category === "execute-script"
+        ? "JavaScript pode ler e alterar esta página. Permita somente nesta tarefa ou lembre a escolha para esta origem HTTPS."
+        : PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site " +
+          (taskId ? "até o fim da tarefa." : "enquanto esta aba estiver com o MCP."),
+      buttons: message.category === "execute-script"
+        ? [{ title: "Permitir nesta tarefa" }, { title: "Lembrar neste site" }]
+        : [{ title: "Permitir neste site" }], requireInteraction: true, priority: 1,
     })).catch(() => undefined);
   });
 }
 
-function grantPersonalSiteApproval(chromeTabId) {
+function grantPersonalSiteApproval(chromeTabId, rememberScript = false) {
   return withPersonalSiteGrants(async () => {
     const request = await readPersonalApprovalRequest(chromeTabId);
     await clearPersonalApprovalRequest(chromeTabId);
@@ -787,6 +813,14 @@ function grantPersonalSiteApproval(chromeTabId) {
     // The tab left that site, or MCP no longer holds it in that task: nothing is granted.
     const metadata = (await readOwnedTabs())[String(chromeTabId)];
     if (origin !== request.origin || !metadata || metadata.taskId !== request.taskId) return false;
+    if (rememberScript) {
+      if (request.category !== "execute-script" || !origin.startsWith("https://")) return false;
+      const existing = await readPersonalPermanentScriptOrigins();
+      if (!existing.includes(origin) && existing.length >= 100) return false;
+      await chrome.storage.local.set({ [PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY]: [...new Set([...existing, origin])] });
+      await pushPersonalSiteApprovals();
+      return true;
+    }
     const grant = { origin, category: request.category, tabId: PERSONAL_PREFIX + chromeTabId,
       ...(request.taskId ? { taskId: request.taskId } : {}), grantedAt: Date.now() };
     const owner = (candidate) => typeof candidate.taskId === "string" ? "task:" + candidate.taskId : "tab:" + candidate.tabId;
@@ -865,8 +899,8 @@ async function refuseDuringPersonalHandoff(operation, input) {
 }
 
 // Hands an owned or shared tab to the user for a login, a CAPTCHA or a choice
-// only they should make, and waits until they click "Pronto, pode continuar" in
-// the popup or the notification. The turn is not handed back on a timeout.
+// only they should make, and waits for the Chrome notification handback.
+// The turn is not handed back on a timeout.
 async function waitForUser(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId, true);
@@ -991,7 +1025,7 @@ async function markPersonalTaskMessagesDelivered(ids) {
   });
 }
 
-// The agent asks without ending its turn; the popup shows the question until the user answers.
+// The agent asks without ending its turn; ChatGPT handles the answer and Chrome notifies.
 async function recordPersonalTaskQuestion(message) {
   if (typeof message.taskId !== "string" || !message.taskId || message.taskId.length > 128 ||
       typeof message.question !== "string" || !message.question.trim()) return;
@@ -1003,7 +1037,7 @@ async function recordPersonalTaskQuestion(message) {
   await Promise.resolve(chrome.action?.setBadgeText?.({ text: "?" })).catch(() => undefined);
   await Promise.resolve(chrome.notifications?.create?.("mcp-question:" + Date.now(), {
     type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP tem uma pergunta",
-    message: question + " Responda no ChatGPT ou pelo ícone da extensão MCP V3.", requireInteraction: true, priority: 2,
+    message: question + " Responda no ChatGPT.", requireInteraction: true, priority: 2,
   })).catch(() => undefined);
 }
 
@@ -1018,7 +1052,7 @@ async function clearPersonalTaskQuestion(taskId) {
   }
 }
 
-// A popup message goes to the task of the current tab; otherwise to the task
+// A task message goes to the task of the current tab; otherwise to the task
 // that asked the latest open question, or else the task MCP used last.
 async function personalTaskMessageTarget(chromeTabId) {
   const owned = await readOwnedTabs().catch(() => ({}));
@@ -1228,6 +1262,8 @@ async function readPersonalPlans() {
 
 async function writePersonalPlans(plans) {
   await chrome.storage.session.set({ [PERSONAL_PLANS_KEY]: plans });
+  // Revoke or replace task-scoped permissions whenever approved plans change.
+  await pushPersonalSiteApprovals();
 }
 
 async function personalPlanRequired() {
@@ -1410,6 +1446,7 @@ const PERSONAL_ONE_USE_LABELS = {
   "purchase-or-payment": "Pagar ou contratar", "delete-or-cancel": "Excluir ou cancelar",
   "send-message": "Enviar mensagem", "publish-content": "Publicar conteúdo",
   "change-credentials": "Alterar credenciais", "accept-terms-or-contract": "Aceitar contrato ou termos",
+  "unverified-pointer-action": "Arrastar entre pontos sem alvo semântico confiável",
 };
 
 async function requestPersonalOneUseConfirmation(message) {
@@ -1568,7 +1605,8 @@ async function decidePersonalPlanSiteExtension(id, accepted) {
 }
 
 // An approved plan bounds what MCP does for its task: only its sites, only its
-// actions. With "Pedir um plano" on in the popup, nothing runs without one.
+// actions. Without a plan, basic navigation remains autonomous, but sensitive
+// operations continue to use their existing confirmation policy.
 async function enforcePersonalPlan(operation, input, signal) {
   const needs = personalPlanNeeds(operation, input);
   if (needs.length === 0) return;
@@ -6197,7 +6235,7 @@ function followPersonalTabGroup(chromeTabId, groupId) {
       if (Number.isInteger(metadata.mcpGroupId) && metadata.mcpGroupId === groupId) return;
       if (typeof metadata.taskId === "string" && metadata.taskId === groupTask) return;
       if (!Number.isInteger(metadata.mcpGroupId)) {
-        // A tab shared from the popup outside any group joins the group it is
+        // A user-shared tab outside any group joins the group it is
         // dragged into; any other tab that sat in no group stays as it is.
         if (metadata.ownership === "user" && metadata.taskId === undefined && groupTask) {
           await attachSharedTabToTask(chromeTabId, groupTask, groupId);
@@ -6273,13 +6311,13 @@ async function joinPersonalTaskGroup(chromeTabId, taskId, groupId) {
   }
   const title = await mcpGroupTitle(groupId);
   if (await personalDragShareNeedsConfirmation()) {
-    // The answer is given in the extension popup, the one place for MCP V3 controls.
+    // An explicit user choice is needed if this optional confirmation is enabled.
     await changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => {
       shares[String(chromeTabId)] = { taskId, groupId, title };
     });
     await Promise.resolve(chrome.action?.setBadgeText?.({ tabId: chromeTabId, text: "?" })).catch(() => undefined);
     await notifyPersonalShare(chromeTabId, "Compartilhar esta aba com " + title + "?",
-      "Abra o MCP V3 nesta aba para confirmar.");
+      "Confirme pela notificação do Chrome.");
     return;
   }
   if (await sharePersonalTabWithTask(chromeTabId, taskId, groupId)) {
@@ -6318,7 +6356,7 @@ async function readPendingPersonalShare(chromeTabId) {
   return (await readSessionMap(PERSONAL_PENDING_SHARES_KEY))[String(chromeTabId)];
 }
 
-// Only the user answers, from the extension popup: share it, or take it back out of the group.
+// A legacy pending share may only be answered by an explicit trusted extension action.
 async function answerPersonalShare(chromeTabId, share) {
   const pending = await readPendingPersonalShare(chromeTabId);
   await changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => { delete shares[String(chromeTabId)]; })
@@ -6334,7 +6372,7 @@ async function refusePersonalGroupShare(chromeTabId, reason) {
   await notifyPersonalShare(chromeTabId, "Esta aba não pode ficar no grupo do MCP", reason);
 }
 
-// Only a heads-up: every answer is given in the extension popup.
+// A heads-up only. The group gesture already authorizes sharing by default.
 async function notifyPersonalShare(chromeTabId, title, message) {
   await Promise.resolve(chrome.notifications?.create?.("mcp-share:" + chromeTabId, {
     type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title, message: message || " ", priority: 1,
@@ -6609,6 +6647,7 @@ function snapshotPage(generation, compact = false) {
     "[role='slider']",
     "[role='spinbutton']",
     "[contenteditable='true']",
+    "[draggable='true']",
     "[tabindex]:not([tabindex='-1'])",
     "[role='gridcell']",
     "[role='row']",
@@ -7107,9 +7146,9 @@ ${HANDOFF_WORKER_SOURCE}
 
 if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (typeof message?.type !== "string" || !message.type.startsWith("mcp-tab-")) return false;
-  // Only the extension's own popup, never a page, the bridge or another extension.
+  // Only the existing extension options page, never a website or another extension.
   if (sender.id !== chrome.runtime.id ||
-      sender.url !== chrome.runtime.getURL("browser-status.html")) return false;
+      sender.url !== chrome.runtime.getURL("secret-provision.html")) return false;
   void personalTabSharingDispatch(message).then(
     (result) => reply(result),
     () => reply({ ok: false, code: "refused" }),
@@ -7176,7 +7215,7 @@ chrome.notifications?.onButtonClicked?.addListener((id, buttonIndex) => {
   const match = /^mcp-handoff:(\\d+)$/u.exec(id);
   if (match) void resumePersonalHandoff(Number(match[1]));
   const approval = /^mcp-approval:(\\d+)$/u.exec(id);
-  if (approval) void grantPersonalSiteApproval(Number(approval[1]));
+  if (approval) void grantPersonalSiteApproval(Number(approval[1]), buttonIndex === 1);
 });
 chrome.notifications?.onClosed?.addListener((id) => {
   if (id.startsWith("mcp-plan-site:")) pendingPersonalPlanSiteExtensions.get(id)?.done(false);
@@ -7191,7 +7230,13 @@ chrome.notifications?.onClicked?.addListener((id) => {
     return;
   }
   if (id.startsWith("mcp-question:")) {
-    void Promise.resolve(chrome.action?.openPopup?.()).catch(() => undefined);
+    void personalWakeTargetTab().then(async (target) => {
+      if (!target) return;
+      const active = await chrome.tabs.update(target.id, { active: true });
+      if (Number.isSafeInteger(active?.windowId)) {
+        await chrome.windows.update(active.windowId, { focused: true });
+      }
+    }).catch(() => undefined);
     return;
   }
   const match = /^mcp-(?:handoff|approval|share):(\\d+)$/u.exec(id);
@@ -7228,8 +7273,39 @@ setInterval(() => {
   if (socket?.readyState === WebSocket.OPEN) send({ type: "heartbeat", at: Date.now() });
   else connect();
 }, 20000);
+// The toolbar icon is a direct, explicit stop control; it never opens a popup.
+async function personalBrowserToolbarClick(tab) {
+  if (!Number.isSafeInteger(tab?.id)) return false;
+  if (Object.keys(await readOwnedTabs()).length === 0) return false;
+  await finishTask({ keepOpen: true });
+  return true;
+}
+
+// Chrome owns the menu gesture. Bind revocation to the origin at click time.
+async function personalBrowserRevokeMenuClick(info, tab) {
+  if (info?.menuItemId !== PERSONAL_REVOKE_MENU_ID || !Number.isSafeInteger(tab?.id)) return false;
+  let origin;
+  try { origin = new URL(assertPersonalNavigationTarget(tab.url)).origin; }
+  catch { return false; }
+  await personalTabSharingDispatch({ type: "mcp-tab-revoke", tabId: tab.id, expectedOrigin: origin });
+  return true;
+}
+chrome.action?.onClicked?.addListener((tab) => {
+  void personalBrowserToolbarClick(tab).catch(() => undefined);
+});
+chrome.contextMenus?.onClicked?.addListener((info, tab) => {
+  void personalBrowserRevokeMenuClick(info, tab).catch(() => undefined);
+});
 chrome.runtime.onStartup.addListener(connect);
-chrome.runtime.onInstalled.addListener(connect);
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus?.removeAll?.(() => {
+    chrome.contextMenus.create({
+      id: PERSONAL_REVOKE_MENU_ID, title: "Revogar permissões do MCP neste site",
+      contexts: ["action"],
+    }, () => { void chrome.runtime.lastError; });
+  });
+  connect();
+});
 // Plans and MCP tabs change in many places; the plan's navigation rules follow both.
 chrome.storage.onChanged.addListener((changes, area) => {
   if ((area === "session" && changes[PERSONAL_PLANS_KEY]) || (area === "local" && changes[OWNED_TABS_KEY])) {
@@ -7245,7 +7321,7 @@ void sweepPausedPersonalTasks();
 connect();
 `;
 
-  return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, secureChannelHtml: HANDOFF_SECURE_CHANNEL_HTML, popupScript: HANDOFF_POPUP_SCRIPT,
-    tabSharingScript: TAB_SHARING_POPUP_SCRIPT, planReviewHtml: PLAN_REVIEW_HTML, planReviewScript: PLAN_REVIEW_SCRIPT,
+  return { manifest, serviceWorker, secureChannelHtml: HANDOFF_SECURE_CHANNEL_HTML,
+    secureChannelScript: HANDOFF_SECURE_CHANNEL_SCRIPT, planReviewHtml: PLAN_REVIEW_HTML, planReviewScript: PLAN_REVIEW_SCRIPT,
     taskHomeHtml: TASK_HOME_HTML, taskHomeScript: TASK_HOME_SCRIPT };
 }

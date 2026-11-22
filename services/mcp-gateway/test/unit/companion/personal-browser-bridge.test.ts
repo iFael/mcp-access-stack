@@ -265,6 +265,49 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("asks Chrome once for an unverified pixel drag and blocks dispatch on refusal", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge(undefined, PERSONAL_BROWSER_CAPABILITIES);
+    const tabId = "personal:7";
+    const prompts: WireMessage[] = [];
+    const dispatched: WireMessage[] = [];
+    let approve = true;
+    const handler = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as WireMessage;
+      if (message.type === "one-use-confirmation-request") {
+        prompts.push(message);
+        extension.send(JSON.stringify({ type: "one-use-confirmation-result",
+          id: message.id, tabId, approved: approve }));
+        return;
+      }
+      if (message.type !== "request") return;
+      const result = message.operation === "snapshot"
+        ? { tabId, url: "https://example.com/", content: "Drag test", refs: [] }
+        : message.operation === "screenshot"
+          ? { tabId, path: "/private/drag.png", sizeBytes: 5,
+              mimeType: "image/png", contentBase64: "aGVsbG8=" }
+          : { tabId, completed: true };
+      if (message.operation === "drag") dispatched.push(message);
+      extension.send(JSON.stringify({ type: "response", id: message.id, ok: true, result }));
+    };
+    extension.on("message", handler);
+    try {
+      const input = { tabId, from: { x: 110, y: 120 }, to: { x: 240, y: 260 } };
+      await bridge.snapshot({ tabId });
+      await bridge.screenshot({ tabId });
+      await expect(bridge.drag(input)).resolves.toMatchObject({ completed: true });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toMatchObject({ tabId, category: "unverified-pointer-action", action: "pixel-drag" });
+      expect(dispatched).toHaveLength(1);
+      approve = false;
+      await expect(bridge.drag(input)).rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
+      expect(prompts).toHaveLength(2);
+      expect(dispatched).toHaveLength(1);
+    } finally {
+      extension.off("message", handler);
+      await close();
+    }
+  });
+
   it("requires fresh screenshot and single-use confirmation before a pixel-only canvas click", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";
@@ -568,6 +611,55 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
+  it("accepts task-approved script scope from the authenticated extension and fails closed on revocation", async () => {
+    const { bridge, extension, close } = await startAuthenticatedBridge();
+    const tabId = "personal:7";
+    const handler = (data: WebSocket.RawData) => {
+      const request = JSON.parse(data.toString()) as WireMessage;
+      if (request.type !== "request") return;
+      const result = request.operation === "selectTab" ? { tab: {
+        tabId, url: "https://example.com/account",
+        ownership: "mcp", lifecycle: "task-scoped", taskId: "task-1",
+        purpose: "test", reusable: false, protected: false, sticky: false,
+        createdAt: "2026-11-22T10:00:00.000Z", lastUsedAt: "2026-11-22T10:00:00.000Z",
+      } } : request.operation === "snapshot" ? {
+        tabId, url: "https://example.com/account", content: "Account", refs: [],
+      } : { tabId, value: "Account" };
+      extension.send(JSON.stringify({ type: "response", id: request.id, ok: true, result }));
+    };
+    extension.on("message", handler);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+    const script = { tabId, function: "() => document.title" };
+    try {
+      await bridge.selectTab({ tabId });
+      await bridge.snapshot({ tabId });
+      const sendScope = (scope: Record<string, unknown>[]) =>
+        extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: [],
+          taskScopes: scope }));
+      for (const malformed of [
+        { taskId: "task-1", domains: ["example.com/path"], actions: ["evaluate"] },
+        { taskId: "task-1", domains: ["example.com"], actions: ["delete-or-cancel"] },
+        { taskId: "task-1", domains: ["com"], actions: ["evaluate"] },
+      ]) {
+        sendScope([malformed]);
+        await settle();
+        await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      }
+      sendScope([{ taskId: "task-1", domains: ["example.com"], actions: ["evaluate"] }]);
+      await settle();
+      await expect(bridge.evaluate(script)).resolves.toEqual({ tabId, value: "Account" });
+      sendScope([{ taskId: "other-task", domains: ["example.com"], actions: ["evaluate"] }]);
+      await settle();
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      sendScope([]);
+      await settle();
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+    } finally {
+      extension.off("message", handler);
+      await close();
+    }
+  });
+
   it("asks Chrome for a site approval and honors only approvals the extension reports", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";
@@ -607,6 +699,21 @@ describe("PersonalBrowserBridge", () => {
       await settle();
       await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
       extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: ["example.com"] }));
+      await settle();
+      await expect(bridge.evaluate(script)).resolves.toEqual({ tabId, value: "Example" });
+      extension.send(JSON.stringify({ type: "site-approvals", grants: [], autoSites: [] }));
+      await settle();
+      // A forged or off-origin remembered JavaScript grant cannot authorize execution.
+      for (const origin of ["http://example.com", "https://example.com/path", "https://other.example.com"]) {
+        extension.send(JSON.stringify({
+          type: "site-approvals", grants: [], autoSites: [], permanentScriptOrigins: [origin],
+        }));
+        await settle();
+        await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      }
+      extension.send(JSON.stringify({
+        type: "site-approvals", grants: [], autoSites: [], permanentScriptOrigins: ["https://example.com"],
+      }));
       await settle();
       await expect(bridge.evaluate(script)).resolves.toEqual({ tabId, value: "Example" });
     } finally {
@@ -1393,6 +1500,10 @@ describe("PersonalBrowserBridge", () => {
   it("materializes the extension, rejects an invalid token and accepts authenticated RPC", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-personal-browser-"));
     temporaryRoots.push(root);
+    const extensionDir = path.join(root, "browser", "personal-extension");
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(path.join(extensionDir, "browser-status.html"), "old popup");
+    await writeFile(path.join(extensionDir, "tab-sharing.js"), "old popup script");
     const port = await reservePort();
     const bridge = await PersonalBrowserBridge.start({
       stateRoot: root,
@@ -1419,6 +1530,8 @@ describe("PersonalBrowserBridge", () => {
     const token = /const BRIDGE_TOKEN = "([^"]+)";/u.exec(workerSource)?.[1];
 
     expect(manifest.manifest_version).toBe(3);
+    await expect(readFile(path.join(extensionDir, "browser-status.html"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(path.join(extensionDir, "tab-sharing.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(manifest.permissions).toEqual(expect.arrayContaining([
       "tabs",
       "scripting",

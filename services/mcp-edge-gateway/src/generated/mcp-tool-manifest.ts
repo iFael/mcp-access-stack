@@ -16809,7 +16809,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work. In personal Chrome, tabs the user shared from the extension popup appear with ownership=user (MCP never closes them), and openTabs lists the titles and addresses of the user's other tabs only while the user allows it there; ask the user to share a tab before working in it. Next: browser_select_tab or browser_open with a tabId.",
+    "description": "Lists registered task tabs without launching Chrome while idle; unknown tabs remain user-owned. Use browser_open to begin browser work. In personal Chrome, tabs the user deliberately shares with an MCP tab group appear with ownership=user (MCP never closes them), and openTabs is available only when the user explicitly enables that tab context; ask the user to share a tab before working in it. Next: browser_select_tab or browser_open with a tabId.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -26661,7 +26661,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "Reads the messages the user wrote to you while you work, in the MCP V3 Chrome extension popup or in the reply card this tool shows in the chat: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. The browser_progress card displays steps only, without a message field. Call this tool only to read what the user wrote or explicitly ask them something; each call brings you what they wrote meanwhile. To ask the user something without ending your turn, pass question with the taskId: the card and the popup show it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once. Next: with options: end your answer, the choice is written into this conversation; otherwise keep working.",
+    "description": "Reads the messages the user wrote to you while you work, in the reply card this tool shows in ChatGPT: answers, results of visual checks, errors they saw. They also arrive with the result of your next MCP V3 call on this device (browser, files, commands, git), so you never have to stop to ask in the chat; a message written for a browser task waits for a call on that task or one that names no task. The browser_progress card displays steps only, without a message field. Call this tool only to read what the user wrote or explicitly ask them something; each call brings you what they wrote meanwhile. To ask the user something without ending your turn, pass question with the taskId: the ChatGPT card shows it, and waitMs (up to 50000) waits for the answer; without waitMs the card appears at once and the answer comes with a later call, so keep working. When the user must choose before you can go on, pass question with options (2 to 4, shown as A to D) and the taskId, say so in one line and end your turn: the user gets one Windows notification, picks an option or writes in the card, and the answer is written into this conversation, with no time limit. Each message is delivered once. Next: with options: end your answer, the choice is written into this conversation; otherwise keep working.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -29283,15 +29283,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "1fda45be4af34195e7585ab3c2c7411a2cc90bbb728a1c2237cede43cf57e518",
-  "serverVersion": "0.4.0-catalog.c1fda45be4af3.sa15e528da70d",
+  "contractRevision": "189d0d1f0f04bd2fb3614e024b26410939e132c2215950b085b47046856008a7",
+  "serverVersion": "0.4.0-catalog.c189d0d1f0f04.sa15e528da70d",
   "toolCount": 134,
   "toolSetRevision": "a15e528da70d4c2688c5b8c3448a7454a26f0bcecad57eefd24358817c468135"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c1fda45be4af3.sa15e528da70d"
+  "version": "0.4.0-catalog.c189d0d1f0f04.sa15e528da70d"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. On a project task, after identifying its authorized repositoryId, call memory_context for relevant operational context when the central-memory authority is available. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. To show the user a pull request (after opening it, while CI runs, before a merge), call github_get_pull_request: the chat shows its card.";

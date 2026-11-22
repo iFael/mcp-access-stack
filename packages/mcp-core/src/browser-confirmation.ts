@@ -5,6 +5,7 @@ const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
 export type BrowserConfirmationCategory =
   | "submit-form"
+  | "unverified-pointer-action"
   | "publish-content"
   | "send-message"
   | "delete-or-cancel"

@@ -1170,11 +1170,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         assets.serviceWorker,
         { encoding: "utf8", mode: 0o600 },
       ),
-      writeFile(
-        path.join(this.extensionDirectory, "browser-status.html"),
-        assets.popupHtml,
-        { encoding: "utf8", mode: 0o600 },
-      ),
+      rm(path.join(this.extensionDirectory, "browser-status.html"), { force: true }),
       writeFile(
         path.join(this.extensionDirectory, "secret-provision.html"),
         assets.secureChannelHtml,
@@ -1182,14 +1178,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       ),
       writeFile(
         path.join(this.extensionDirectory, "secret-provision.js"),
-        assets.popupScript,
+        assets.secureChannelScript,
         { encoding: "utf8", mode: 0o600 },
       ),
-      writeFile(
-        path.join(this.extensionDirectory, "tab-sharing.js"),
-        assets.tabSharingScript,
-        { encoding: "utf8", mode: 0o600 },
-      ),
+      rm(path.join(this.extensionDirectory, "tab-sharing.js"), { force: true }),
       writeFile(
         path.join(this.extensionDirectory, "plan-review.html"),
         assets.planReviewHtml,
@@ -1357,7 +1349,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       } catch { throw error; }
       const sensitive = new Set([
         "purchase-or-payment", "delete-or-cancel", "send-message", "publish-content",
-        "change-credentials", "accept-terms-or-contract",
+        "change-credentials", "accept-terms-or-contract", "unverified-pointer-action",
       ]);
       if (!sensitive.has(String(request.category)) ||
           typeof request.confirmationId !== "string" ||
@@ -1585,7 +1577,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       );
     }
 
-    const deadlineAt = new Date(Date.now() + timeoutMs).toISOString();
+    const localDeadline = Date.now() + timeoutMs;
+    const upstreamDeadline = Date.parse(context?.deadline?.deadlineAt ?? "");
+    const deadlineAt = new Date(Number.isFinite(upstreamDeadline)
+      ? Math.min(localDeadline, upstreamDeadline) : localDeadline).toISOString();
     return new Promise((resolve, reject) => {
       const rejectWithTiming = (error: Error, outcome?: "cancelled" | "timeout") => reject(fail(error, outcome));
       const rejectAfterDispatch = (reason: "cancelled" | "timeout") => {
@@ -1874,8 +1869,10 @@ async function sweepStaleStagedUploads(root: string): Promise<void> {
 }
 
 function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalSiteApprovals | undefined {
-  const { grants, autoSites } = message;
-  if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200) return undefined;
+  const { grants, autoSites, permanentScriptOrigins = [], taskScopes = [] } = message;
+  if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200 ||
+      !Array.isArray(permanentScriptOrigins) || permanentScriptOrigins.length > 100 ||
+      !Array.isArray(taskScopes) || taskScopes.length > 100) return undefined;
   const parsedGrants: PersonalSiteGrant[] = [];
   for (const grant of grants) {
     if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
@@ -1895,7 +1892,21 @@ function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalS
     }
   }
   if (autoSites.some((site) => typeof site !== "string" || !/^[a-z0-9.-]{1,253}$/u.test(site))) return undefined;
-  return { grants: parsedGrants, autoSites: [...autoSites] as string[] };
+  if (permanentScriptOrigins.some((origin) => typeof origin !== "string" ||
+      !/^https:\/\/[^/\s]{1,260}$/u.test(origin) || new URL(origin).origin !== origin)) return undefined;
+  const planActions = new Set(["navigate", "interact", "fill", "upload", "download", "evaluate"]);
+  const approvedScopes: NonNullable<PersonalSiteApprovals["taskScopes"]>[number][] = [];
+  for (const scope of taskScopes) {
+    if (!isRecord(scope) || typeof scope.taskId !== "string" || scope.taskId.length < 1 ||
+        scope.taskId.length > 128 || !Array.isArray(scope.domains) || scope.domains.length > 100 ||
+        !Array.isArray(scope.actions) || scope.actions.length > 6 ||
+        scope.domains.some((domain) => typeof domain !== "string" ||
+          !/^(?=.{4,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/u.test(domain)) ||
+        scope.actions.some((action) => typeof action !== "string" || !planActions.has(action))) return undefined;
+    approvedScopes.push({ taskId: scope.taskId, domains: [...scope.domains], actions: [...scope.actions] });
+  }
+  return { grants: parsedGrants, autoSites: [...autoSites] as string[],
+    permanentScriptOrigins: [...permanentScriptOrigins] as string[], taskScopes: approvedScopes };
 }
 
 function sendCancel(socket: WebSocket, id: string): void {
