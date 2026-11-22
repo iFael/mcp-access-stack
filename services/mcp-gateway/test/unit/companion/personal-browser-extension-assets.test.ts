@@ -1264,6 +1264,25 @@ describe("personal browser extension assets", () => {
     const parseChromeKey = vm.runInContext("parseChromeKey", context) as (key: string) => unknown;
     expect(parseChromeKey("Shift+End")).toEqual({ key: "End", code: "End", keyCode: 35, modifiers: 8 });
     expect(parseChromeKey("pagedown")).toMatchObject({ key: "PageDown", keyCode: 34 });
+
+    // Exercise the generated worker, not only parseChromeKey: template literal
+    // escaping must preserve whitespace splitting for keys containing "s".
+    await guardedPress({ tabId: "personal:7", key: "Backspace Delete",
+      guard: { url: "https://example.com/" } });
+    expect(commands.slice(-4)).toEqual([
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8,
+      }) },
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8,
+      }) },
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46,
+      }) },
+      { method: "Input.dispatchKeyEvent", params: expect.objectContaining({
+        type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46,
+      }) },
+    ]);
   });
 
   it("keeps the same guarded editor ref when only its editable content changes", () => {
