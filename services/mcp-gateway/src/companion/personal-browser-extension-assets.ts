@@ -1,4 +1,4 @@
-import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
+import { HANDOFF_EXTENSION_VERSION, HANDOFF_POPUP_HTML, HANDOFF_POPUP_SCRIPT, HANDOFF_SECURE_CHANNEL_HTML, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
 import { TAB_SHARING_POPUP_SCRIPT } from "./personal-browser-tab-sharing-assets.js";
 import { PERSONAL_DOM_SETTLE_SOURCE } from "./personal-browser-dom-settle-assets.js";
 import { PLAN_REVIEW_HTML, PLAN_REVIEW_SCRIPT } from "./personal-browser-plan-review-assets.js";
@@ -9,6 +9,7 @@ export interface PersonalBrowserExtensionAssets {
   manifest: string;
   serviceWorker: string;
   popupHtml: string;
+  secureChannelHtml: string;
   popupScript: string;
   tabSharingScript: string;
   planReviewHtml: string;
@@ -80,6 +81,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "goForward",
   "tabGroups",
   "guardedActionsV1",
+  "chromeConfirmationV1",
   "snapshotRevisionV1",
   "frameSequenceMutationsV1",
   "openShadowDomV1",
@@ -107,7 +109,8 @@ export function buildPersonalBrowserExtensionAssets(
       "declarativeNetRequest", "alarms"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
-    action: { default_title: "MCP V3 Personal Browser", default_popup: "secret-provision.html" },
+    action: { default_title: "MCP V3 Personal Browser", default_popup: "browser-status.html" },
+    options_page: "secret-provision.html",
     commands: { "fill-mcp-preparation-secret": { suggested_key: { default: "Ctrl+Shift+8" }, description: "Fill the focused MCP prepare-secret field without showing its value" } },
     // Chrome fetches a notification's data: icon under this policy; without
     // data: every chrome.notifications.create call fails.
@@ -351,6 +354,15 @@ async function handleMessage(raw) {
     void recordPersonalApprovalRequest(message).catch(() => undefined);
     return;
   }
+  if (message?.type === "one-use-confirmation-request") {
+    void requestPersonalOneUseConfirmation(message).catch(() => {
+      if (typeof message?.id === "string") {
+        send({ type: "one-use-confirmation-result", id: message.id,
+          tabId: message.tabId, approved: false });
+      }
+    });
+    return;
+  }
   if (message?.type === "task-messages-delivered") {
     void markPersonalTaskMessagesDelivered(message.ids).catch(() => undefined);
     return;
@@ -420,7 +432,7 @@ async function runRequest(operation, input, signal, timing) {
     const previousSnapshot = timing?.snapshotMs ?? 0;
     await refuseDuringPersonalHandoff(operation, input);
     await refusePausedPersonalTab(operation, input);
-    await enforcePersonalPlan(operation, input);
+    await enforcePersonalPlan(operation, input, signal);
     try { return await perform(operation, input, signal, timing); }
     finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
   };
@@ -560,6 +572,10 @@ async function personalTabSharingDispatch(message) {
   }
   if (!Number.isSafeInteger(message.tabId)) throw Error("no-tab");
   const tab = await chrome.tabs.get(message.tabId);
+  if (message.type === "mcp-tab-stop") {
+    await finishTask({ keepOpen: true });
+    return { ok: true, stopped: true };
+  }
   const pendingShare = await readPendingPersonalShare(tab.id);
   if (pendingShare && (message.type === "mcp-tab-share" || message.type === "mcp-tab-unshare")) {
     await answerPersonalShare(tab.id, message.type === "mcp-tab-share");
@@ -616,12 +632,9 @@ async function personalTabSharingDispatch(message) {
     const origin = new URL(tab.url).origin;
     await withPersonalSiteGrants(() => changePersonalSiteGrants((grants) => grants.filter((grant) => grant.origin !== origin)));
   } else if (message.type === "mcp-tab-auto") {
-    if (typeof message.enabled !== "boolean") throw Error("invalid");
-    const host = new URL(assertPersonalNavigationTarget(tab.url)).hostname;
-    const sites = (await readPersonalAutoSites()).filter((site) => site !== host);
-    if (message.enabled) sites.push(host);
-    await chrome.storage.local.set({ [PERSONAL_AUTO_SITES_KEY]: sites.sort() });
-    await pushPersonalSiteApprovals();
+    // The old popup setting is retired; hidden persistent approvals are
+    // neither read nor created in autonomous mode.
+    throw Error("unsupported");
   } else if (!["mcp-tab-status", "mcp-tab-context", "mcp-tab-notify", "mcp-tab-require-plan", "mcp-tab-confirm-drag"]
     .includes(message.type)) {
     throw Error("unsupported");
@@ -706,9 +719,8 @@ async function changePersonalSiteGrants(change) {
 }
 
 async function readPersonalAutoSites() {
-  const value = await chrome.storage.local.get(PERSONAL_AUTO_SITES_KEY).catch(() => ({}));
-  const sites = value?.[PERSONAL_AUTO_SITES_KEY];
-  return Array.isArray(sites) ? sites.filter((site) => typeof site === "string") : [];
+  // The removed popup option must not leave invisible persistent auto-grants.
+  return [];
 }
 
 // The bridge learns approvals only from here and never grants one itself.
@@ -1219,8 +1231,9 @@ async function writePersonalPlans(plans) {
 }
 
 async function personalPlanRequired() {
-  const value = await chrome.storage.local.get(PERSONAL_REQUIRE_PLAN_KEY).catch(() => ({}));
-  return value?.[PERSONAL_REQUIRE_PLAN_KEY] === true;
+  // Autonomy is the default; explicitly approved plans still constrain their
+  // own task, and sensitive actions still require single-use confirmation.
+  return false;
 }
 
 function personalPlanResult(plan) {
@@ -1390,6 +1403,55 @@ async function clearPersonalPlans(taskId, onlyPlanId) {
 // rules, that next-action check still holds.
 const PERSONAL_PLAN_RULE_BASE = 7000;
 const PERSONAL_PLAN_RULE_LIMIT = 1000;
+const PERSONAL_LOGIN_READ_ONLY_HOSTS = ["login.microsoftonline.com", "login.live.com", "accounts.google.com", "auth.atlassian.com"];
+const pendingPersonalPlanSiteExtensions = new Map();
+const pendingPersonalOneUseConfirmations = new Map();
+const PERSONAL_ONE_USE_LABELS = {
+  "purchase-or-payment": "Pagar ou contratar", "delete-or-cancel": "Excluir ou cancelar",
+  "send-message": "Enviar mensagem", "publish-content": "Publicar conteúdo",
+  "change-credentials": "Alterar credenciais", "accept-terms-or-contract": "Aceitar contrato ou termos",
+};
+
+async function requestPersonalOneUseConfirmation(message) {
+  if (typeof message.id !== "string" || !/^[a-f0-9-]{36}$/u.test(message.id) ||
+      typeof message.tabId !== "string" || typeof message.url !== "string" ||
+      !Object.hasOwn(PERSONAL_ONE_USE_LABELS, message.category)) return;
+  const chromeTabId = chromeTabIdFrom(message.tabId);
+  const tab = await chrome.tabs.get(chromeTabId).catch(() => null);
+  const metadata = (await readOwnedTabs())[String(chromeTabId)];
+  if (!tab || !metadata || tab.url !== message.url || !chrome.notifications?.create) {
+    send({ type: "one-use-confirmation-result", id: message.id, tabId: message.tabId, approved: false });
+    return;
+  }
+  const id = "mcp-action:" + message.id;
+  let finished = false;
+  const done = async (approved) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    pendingPersonalOneUseConfirmations.delete(id);
+    void Promise.resolve(chrome.notifications?.clear?.(id)).catch(() => undefined);
+    const current = await chrome.tabs.get(chromeTabId).catch(() => null);
+    const owned = (await readOwnedTabs())[String(chromeTabId)];
+    send({ type: "one-use-confirmation-result", id: message.id, tabId: message.tabId,
+      approved: approved === true && current?.url === message.url &&
+        owned?.taskId === metadata.taskId && owned?.ownership === metadata.ownership });
+  };
+  const timer = setTimeout(() => void done(false), 48000);
+  pendingPersonalOneUseConfirmations.set(id, done);
+  let host = "";
+  try { host = new URL(message.url).hostname; } catch { void done(false); return; }
+  const label = PERSONAL_ONE_USE_LABELS[message.category];
+  const target = typeof message.target === "string" ? message.target.slice(0, 90) : "";
+  void chrome.notifications.create(id, {
+    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON,
+    title: "MCP V3 · Confirmar uma ação sensível",
+    message: label + " em " + host + (target ? " · " + target : "") +
+      ". A permissão vale uma única vez.",
+    buttons: [{ title: "Confirmar uma vez" }, { title: "Recusar" }],
+    requireInteraction: true, priority: 2,
+  }).catch(() => void done(false));
+}
 let personalPlanRulesQueue = Promise.resolve();
 
 function syncPersonalPlanNavigationRules() {
@@ -1412,7 +1474,8 @@ async function applyPersonalPlanNavigationRules() {
   }
   const addRules = [...tabsByPlan].slice(0, PERSONAL_PLAN_RULE_LIMIT).map(([plan, tabIds], index) => ({
     id: PERSONAL_PLAN_RULE_BASE + index, priority: 1, action: { type: "block" },
-    condition: { tabIds, resourceTypes: ["main_frame"], excludedRequestDomains: plan.approvedDomains },
+    condition: { tabIds, resourceTypes: ["main_frame"],
+      excludedRequestDomains: [...new Set([...plan.approvedDomains, ...PERSONAL_LOGIN_READ_ONLY_HOSTS])] },
   }));
   const removeRuleIds = (await rules.getSessionRules()).map((rule) => rule.id)
     .filter((id) => id >= PERSONAL_PLAN_RULE_BASE && id < PERSONAL_PLAN_RULE_BASE + PERSONAL_PLAN_RULE_LIMIT);
@@ -1429,7 +1492,7 @@ function personalPlanNeeds(operation, input) {
   return category ? [category] : [];
 }
 
-function personalPlanAllowsUrl(plan, url) {
+function personalPlanAllowsUrl(plan, url, readOnly = false) {
   if (url === "about:blank") return true;
   let host;
   try {
@@ -1439,12 +1502,74 @@ function personalPlanAllowsUrl(plan, url) {
   } catch {
     return false;
   }
-  return plan.approvedDomains.some((domain) => host === domain || host.endsWith("." + domain));
+  return plan.approvedDomains.some((domain) => host === domain || host.endsWith("." + domain)) ||
+    (readOnly && PERSONAL_LOGIN_READ_ONLY_HOSTS.includes(host));
+}
+
+// Request an incremental, task-scoped extension instead of replacing the plan.
+async function requestPersonalPlanSite(plan, rawUrl, chromeTabId, signal) {
+  const url = assertPersonalNavigationTarget(rawUrl);
+  const host = new URL(url).hostname.toLowerCase();
+  if (!chrome.notifications?.create) return false;
+  const tab = Number.isInteger(chromeTabId) ? await chrome.tabs.get(chromeTabId).catch(() => null) : null;
+  const sourceUrl = tab?.url;
+  const id = "mcp-plan-site:" + crypto.randomUUID();
+  return new Promise((resolve) => {
+    let finished = false;
+    const done = (allowed) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      pendingPersonalPlanSiteExtensions.delete(id);
+      void Promise.resolve(chrome.notifications?.clear?.(id)).catch(() => undefined);
+      resolve(allowed);
+    };
+    const onAbort = () => done(false);
+    // Finish before the MCP tool's 60-second deadline, so denial is an
+    // explicit non-dispatch rather than an unknown operation outcome.
+    const timer = setTimeout(() => done(false), 48000);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    pendingPersonalPlanSiteExtensions.set(id, { planId: plan.planId, taskId: plan.taskId,
+      chromeTabId, sourceUrl, host, done });
+    void chrome.notifications.create(id, {
+      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "MCP V3 · Adicionar este site?",
+      message: host + " está fora dos sites do plano. Permitir neste plano até o fim da tarefa?",
+      buttons: [{ title: "Adicionar este site" }, { title: "Não permitir" }],
+      requireInteraction: true, priority: 2,
+    }).catch(() => done(false));
+  });
+}
+
+async function decidePersonalPlanSiteExtension(id, accepted) {
+  const pending = pendingPersonalPlanSiteExtensions.get(id);
+  if (!pending) return;
+  if (!accepted) { pending.done(false); return; }
+  try {
+    const tab = Number.isInteger(pending.chromeTabId)
+      ? await chrome.tabs.get(pending.chromeTabId).catch(() => null) : null;
+    if (pending.sourceUrl && tab?.url !== pending.sourceUrl) { pending.done(false); return; }
+    const owned = Number.isInteger(pending.chromeTabId)
+      ? (await readOwnedTabs())[String(pending.chromeTabId)] : null;
+    if (pending.sourceUrl && owned?.taskId !== pending.taskId) { pending.done(false); return; }
+    const approved = await withPersonalPlanLock(async () => {
+      const plans = await readPersonalPlans();
+      const plan = plans[pending.planId];
+      if (!plan || plan.status !== "approved" || plan.taskId !== pending.taskId) return false;
+      if (!plan.approvedDomains.includes(pending.host)) plan.approvedDomains.push(pending.host);
+      await writePersonalPlans(plans);
+      return true;
+    });
+    if (approved) await syncPersonalPlanNavigationRules();
+    pending.done(approved);
+  } catch {
+    pending.done(false);
+  }
 }
 
 // An approved plan bounds what MCP does for its task: only its sites, only its
 // actions. With "Pedir um plano" on in the popup, nothing runs without one.
-async function enforcePersonalPlan(operation, input) {
+async function enforcePersonalPlan(operation, input, signal) {
   const needs = personalPlanNeeds(operation, input);
   if (needs.length === 0) return;
   const approved = Object.values(await readPersonalPlans()).filter((plan) => plan.status === "approved");
@@ -1486,13 +1611,12 @@ async function enforcePersonalPlan(operation, input) {
     if (typeof tab?.url === "string") targets.push(tab.url);
   }
   for (const url of targets) {
-    if (personalPlanAllowsUrl(plan, url)) continue;
-    let host = String(url).slice(0, 200);
-    try {
-      host = new URL(url).hostname || host;
-    } catch {}
-    throw coded("ACTION_BLOCKED_BY_POLICY", host + " is outside the sites approved in plan " + plan.planId + " (" +
-      plan.approvedDomains.join(", ") + "). Call browser_plan with a new plan to ask the user.");
+    if (personalPlanAllowsUrl(plan, url, needs.every((need) => need === "read"))) continue;
+    const target = assertPersonalNavigationTarget(url);
+    const host = new URL(target).hostname;
+    if (await requestPersonalPlanSite(plan, target, chromeTabId, signal)) continue;
+    throw coded("ACTION_BLOCKED_BY_POLICY",
+      host + " was not added to the approved plan. No navigation or interaction was dispatched.");
   }
 }
 
@@ -1941,6 +2065,9 @@ async function snapshot(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "snapshot", false);
+  // Automatic action observations use compact snapshots. Let panels, dialogs
+  // and asynchronous controls settle before capturing their new state.
+  if (input.compact === true) await settlePersonalDom(input.tabId, signal);
   const generation = crypto.randomUUID().replaceAll("-", "");
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
@@ -1970,7 +2097,10 @@ async function snapshot(input, signal) {
       ? "\\n\\nNative accessibility controls:\\n" +
         nativeRefs.map((r) => "- " + r.role + " " + JSON.stringify(r.name) + " [ref=" + r.ref + "]").join("\\n")
       : ""),
-    refs: [...injection.result.refs, ...nativeRefs],
+    refs: [...injection.result.refs,
+      ...(pointTarget && !injection.result.refs.some((item) => item.ref === pointTarget.ref)
+        ? [pointTarget] : []), ...nativeRefs],
+    ...(injection.result.truncated === true ? { truncated: true } : {}),
     ...(pointTarget ? { pointTarget } : {}),
     ...(native ? { accessibility: native.summary } : {}),
   };
@@ -2425,6 +2555,12 @@ async function scroll(input, signal) {
 // Observe editable content in the isolated world without returning its text.
 // A completed CDP dispatch is not proof that a rich editor changed.
 function observePersonalEditableMutation(stage, ref, expectedText) {
+  const prior = globalThis.__mcpV3EditorMutation;
+  if (stage === "cleanup") {
+    prior?.observer?.disconnect();
+    delete globalThis.__mcpV3EditorMutation;
+    return { ready: false };
+  }
   let element = ref ? globalThis.__mcpV3OwnedRefElements?.get(ref) : document.activeElement;
   if (!ref) {
     for (let depth = 0; depth < 4 && element?.shadowRoot?.activeElement; depth += 1) {
@@ -2433,22 +2569,42 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   }
   const tag = String(element?.tagName || "").toLowerCase();
   const type = String(element?.getAttribute?.("type") || "text").toLowerCase();
+  const role = element?.getAttribute?.("role");
   const editable = element?.isConnected &&
     !element.disabled && !element.readOnly && element.getAttribute?.("aria-readonly") !== "true" &&
-    (element.isContentEditable || tag === "textarea" ||
+    (element.isContentEditable || element.editContext != null || role === "textbox" ||
+     tag === "textarea" ||
      tag === "input" && !["hidden", "file", "button", "submit", "reset", "image", "radio", "checkbox", "range"].includes(type));
   if (!editable) return { ready: false };
-  const value = typeof element.value === "string" ? element.value : String(element.textContent || "");
+  // EditContext-based Monaco focuses a zero-width div without value or
+  // contenteditable. Observe the nearest real editor instead of that div.
+  const host = element.closest?.(".monaco-editor, .cm-editor, [contenteditable='true']") ||
+    (element.editContext != null ? element.parentElement : null) || element;
+  const plain = tag === "input" || tag === "textarea";
+  const value = typeof element.value === "string" ? element.value :
+    String((host === element ? element : host).textContent || "");
   if (stage === "before") {
-    globalThis.__mcpV3EditorMutation = { element, value };
-    return { ready: true, alreadyEqual: value === expectedText };
+    prior?.observer?.disconnect();
+    const record = { element, host, value, mutated: false };
+    if (!plain && typeof MutationObserver !== "undefined") {
+      try {
+        record.observer = new MutationObserver(() => { record.mutated = true; });
+        record.observer.observe(host, { subtree: true, childList: true, characterData: true });
+      } catch { record.observer?.disconnect(); }
+    }
+    globalThis.__mcpV3EditorMutation = record;
+    return { ready: true, alreadyEqual: value === expectedText,
+      ...(element.isContentEditable && host.querySelector?.('[contenteditable="false"]')
+        ? { protectedTokens: true } : {}) };
   }
-  const before = globalThis.__mcpV3EditorMutation;
-  if (!before || before.element !== element) return { ready: false };
-  const changed = value !== before.value;
+  if (!prior || prior.element !== element) return { ready: false };
+  const changed = value !== prior.value || prior.mutated;
   const matches = value === expectedText;
-  if (changed || matches) delete globalThis.__mcpV3EditorMutation;
-  return { ready: true, changed, matches, plain: tag === "input" || tag === "textarea" };
+  if (changed || matches) {
+    prior.observer?.disconnect();
+    delete globalThis.__mcpV3EditorMutation;
+  }
+  return { ready: true, changed, matches, plain };
 }
 
 async function fill(input, signal) {
@@ -2487,9 +2643,26 @@ async function fill(input, signal) {
         args: ["before", input.ref, input.value],
       });
       if (before?.result?.ready !== true) throw coded("STATE_NOT_REACHED", "The requested field is not editable.");
+      if (before.result.protectedTokens === true) {
+        throw coded("ACTION_BLOCKED_BY_POLICY",
+          "This rich editor contains protected tokens. Click the insertion point and use browser_type; browser_fill could delete the tokens.");
+      }
     }
     if (input.ref.startsWith("ax-")) {
       const point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
+      const [tokens] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId },
+        func: (x, y) => {
+          const top = document.elementFromPoint(x, y);
+          const host = top?.closest?.('[contenteditable="true"]');
+          return !!host?.querySelector?.('[contenteditable="false"]');
+        },
+        args: [point.x, point.y],
+      });
+      if (tokens?.result === true) {
+        throw coded("ACTION_BLOCKED_BY_POLICY",
+          "This rich editor contains protected tokens. Click the insertion point and use browser_type.");
+      }
       for (const [type, button] of [["mouseMoved", "none"], ["mousePressed", "left"], ["mouseReleased", "left"]]) {
         await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
           type, x: point.x, y: point.y, button, clickCount: 1,
@@ -2516,7 +2689,11 @@ async function fill(input, signal) {
         if (verified) break;
         await delay(100, signal);
       }
-      if (!verified) throw coded("STATE_NOT_REACHED", "Chrome sent input but the editor did not confirm a change. Inspect the field before retrying.");
+      if (!verified) {
+        await chrome.scripting.executeScript({ target: { tabId: chromeTabId },
+          func: observePersonalEditableMutation, args: ["cleanup", null, null] }).catch(() => undefined);
+        return { tabId: input.tabId, completed: true, unverified: true };
+      }
     }
     return { tabId: input.tabId, completed: true };
   } catch (error) {
@@ -2805,6 +2982,7 @@ async function typeText(input, signal) {
     } else {
       await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.text });
     }
+    let unverified = false;
     if (verifyTypedChange) {
       let changed = false;
       for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -2816,7 +2994,11 @@ async function typeText(input, signal) {
         if (changed) break;
         await delay(100, signal);
       }
-      if (!changed) throw coded("STATE_NOT_REACHED", "Chrome sent keystrokes but the editor did not confirm a change. Inspect focus before retrying.");
+      if (!changed) {
+        unverified = true;
+        await chrome.scripting.executeScript({ target: { tabId: chromeTabId },
+          func: observePersonalEditableMutation, args: ["cleanup", null, null] }).catch(() => undefined);
+      }
     }
     if (input.submit) {
       for (const kind of ["keyDown", "keyUp"]) {
@@ -2825,7 +3007,7 @@ async function typeText(input, signal) {
         });
       }
     }
-    return { tabId: input.tabId, completed: true };
+    return { tabId: input.tabId, completed: true, ...(unverified ? { unverified: true } : {}) };
   } catch (error) {
     if (composing !== undefined) {
       // Never leave a half-typed composition behind in the user's page.
@@ -6160,8 +6342,8 @@ async function notifyPersonalShare(chromeTabId, title, message) {
 }
 
 async function personalDragShareNeedsConfirmation() {
-  const value = await chrome.storage.local.get(PERSONAL_CONFIRM_DRAG_KEY).catch(() => ({}));
-  return value?.[PERSONAL_CONFIRM_DRAG_KEY] === true;
+  // Dragging into the named task group is already an explicit user gesture.
+  return false;
 }
 
 async function mcpGroupTitle(groupId) {
@@ -6427,6 +6609,12 @@ function snapshotPage(generation, compact = false) {
     "[role='slider']",
     "[role='spinbutton']",
     "[contenteditable='true']",
+    "[tabindex]:not([tabindex='-1'])",
+    "[role='gridcell']",
+    "[role='row']",
+    "[role='treeitem']",
+    "[role='menuitemcheckbox']",
+    "[aria-haspopup]",
   ].join(",");
   const refs = [];
   const liveRefs = new Map();
@@ -6434,20 +6622,32 @@ function snapshotPage(generation, compact = false) {
   const refMetadata = new Map();
   globalThis.__mcpV3OwnedRefMetadata = refMetadata;
   const refLines = [];
+  const refPriorities = [];
+  const previousRefs = globalThis.__mcpV3PreviousSnapshotRefs ?? new Set();
+  const focused = document.activeElement;
   const elements = [];
+  const seenElements = new Set();
   let visitedRoots = 0;
   let inspectedNodes = 0;
   const collect = (root, depth) => {
     if (depth > 6 || ++visitedRoots > 128 || inspectedNodes >= 10000 || elements.length >= 2000) return;
     for (const element of root.querySelectorAll(selector)) {
       if (elements.length >= 2000) break;
-      elements.push(element);
+      if (!seenElements.has(element)) { seenElements.add(element); elements.push(element); }
     }
     // Open shadow roots are reachable through their host; closed roots and
     // cross-origin frames are not, and must not be silently claimed.
     for (const element of root.querySelectorAll("*")) {
       if (++inspectedNodes > 10000 || elements.length >= 2000) break;
       if (element.shadowRoot) collect(element.shadowRoot, depth + 1);
+      // Monaco tokens and legacy clickable spans may lack semantic roles.
+      // Only pointer-cursor leaf nodes become click targets; keep the DOM
+      // inspection and ref budgets unchanged.
+      if (elements.length < 2000 && !seenElements.has(element) &&
+          element.childElementCount === 0 && getComputedStyle(element).cursor === "pointer") {
+        seenElements.add(element);
+        elements.push(element);
+      }
     }
   };
   collect(document, 0);
@@ -6462,7 +6662,11 @@ function snapshotPage(generation, compact = false) {
       globalThis.__mcpV3StableElementRefs.set(element, ref);
     }
     liveRefs.set(ref, element);
-    const role = element.getAttribute("role") || defaultRole(element);
+    const role = element.getAttribute("role") ||
+      ((element.getAttribute("tabindex") !== null && element.getAttribute("tabindex") !== "-1") ||
+       element.getAttribute("aria-haspopup") !== null ||
+       (element.childElementCount === 0 && style.cursor === "pointer")
+        ? "button" : defaultRole(element));
     const name = normalizeText(accessibleName(element, role)).slice(0, 500);
     const states = semanticStates(element, role);
     refs.push({ ref, role, name });
@@ -6473,15 +6677,27 @@ function snapshotPage(generation, compact = false) {
       (states.length ? " " + states.map((state) => "[" + state + "]").join(" ") : "") +
       " [ref=" + ref + "]",
     );
+    // Prioritize the control that has focus, an open dialog/panel and newly
+    // materialized controls before old page chrome in compact action states.
+    const activePanel = element.closest?.('[role="dialog"], [aria-modal="true"], [aria-expanded="true"]');
+    refPriorities.push((focused && (element === focused || element.contains?.(focused))) ? 0 :
+      activePanel || element.getAttribute("aria-expanded") === "true" ? 1 :
+      !previousRefs.has(ref) ? 2 : 3);
     if (refs.length >= 2000) break;
   }
-  const pageText = (compact ? "" : document.body?.innerText || "").slice(0, 180000);
-  const refText = refLines.join("\\n");
+  globalThis.__mcpV3PreviousSnapshotRefs = new Set(refs.map((item) => item.ref));
+  const fullText = compact ? "" : String(document.body?.innerText || "");
+  const pageText = fullText.slice(0, 20000);
+  const prioritized = compact ? refLines.map((line, index) => ({ line, index }))
+    .sort((a, b) => refPriorities[a.index] - refPriorities[b.index] || a.index - b.index)
+    .map((entry) => entry.line) : refLines;
+  const refText = prioritized.join("\\n");
   return {
     url: location.href,
     title: document.title || "",
     pageInstanceId: globalThis.__mcpV3PageInstanceId,
     content: compact ? refText : pageText + (refText ? "\\n\\nInteractive elements:\\n" + refText : ""),
+    ...(fullText.length > 20000 ? { truncated: true } : {}),
     refs,
   };
 
@@ -6589,6 +6805,22 @@ function inspectPointInDocument(x, y) {
       if (element === current && element.isConnected) return metadata.get(ref) || null;
     }
   }
+  // Monaco's visual text can be outside its zero-width EditContext element.
+  // Materialize a one-page guarded semantic ref only for a real editor hit,
+  // never for an arbitrary pixel or a label that could submit a form.
+  const editor = top?.closest?.('[role="textbox"],[role="code"],code,[contenteditable="true"],.monaco-editor,.cm-editor');
+  const active = document.activeElement;
+  if (editor?.isConnected && !editor.closest?.('a[href],button,[role="button"]') &&
+      (editor.matches?.('[role="textbox"],[role="code"],code,[contenteditable="true"]') ||
+       active && editor.contains?.(active))) {
+    const ref = "p-editor-" + (globalThis.__mcpV3PageInstanceId || "") + "-" +
+      ((globalThis.__mcpV3PixelEditorCounter = (globalThis.__mcpV3PixelEditorCounter || 0) + 1));
+    const target = { ref, role: "textbox", name: "" };
+    live.set(ref, editor);
+    metadata.set(ref, target);
+    (globalThis.__mcpV3PixelEditorRefs ??= new Set()).add(ref);
+    return target;
+  }
   return null;
 }
 
@@ -6598,13 +6830,17 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   if (!element || !element.isConnected) return { error: "stale_ref" };
   const tag = element.tagName.toLowerCase();
   const type = String(element.getAttribute("type") || "").toLowerCase();
-  const role = element.getAttribute("role") ||
+  const editorPointRef = globalThis.__mcpV3PixelEditorRefs?.has(ref) === true;
+  const role = editorPointRef ? "textbox" : element.getAttribute("role") ||
     (tag === "canvas" || tag === "svg" ? "canvas" : tag === "a" ? "link" : tag === "button" || tag === "summary" ? "button" :
       tag === "textarea" ? "textbox" : tag === "select" ? element.multiple ? "listbox" : "combobox" :
       tag === "input" ? ["button","submit","reset","image","file"].includes(type) ? "button" :
         type === "checkbox" ? "checkbox" : type === "radio" ? "radio" :
         type === "range" ? "slider" : type === "number" ? "spinbutton" : "textbox" :
-        element.isContentEditable ? "textbox" : "generic");
+        element.isContentEditable ? "textbox" :
+        (element.getAttribute("tabindex") !== null && element.getAttribute("tabindex") !== "-1") ||
+         element.getAttribute("aria-haspopup") !== null ||
+         getComputedStyle(element).cursor === "pointer" ? "button" : "generic");
   const labelledBy = element.getAttribute("aria-labelledby");
   const root = element.getRootNode?.() || document;
   const labelledByText = labelledBy ? labelledBy.split(/\\s+/u)
@@ -6612,7 +6848,7 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
     .filter(Boolean).join(" ") : "";
   const labelsText = Array.from(element.labels || []).map((label) => label.innerText || label.textContent || "").filter(Boolean).join(" ");
   const safeButtonValue = tag === "input" && ["button","submit","reset"].includes(type) ? String(element.value || "") : "";
-  const name = String(element.getAttribute("aria-label") || labelledByText || labelsText ||
+  const name = editorPointRef ? "" : String(element.getAttribute("aria-label") || labelledByText || labelsText ||
     element.getAttribute("placeholder") || element.getAttribute("title") || safeButtonValue ||
     (element.isContentEditable && ["textbox", "searchbox"].includes(role) ? "" : element.innerText || element.textContent) || "").replace(/\\s+/gu, " ").trim().slice(0, 500);
   if (guard.role !== role || guard.name !== name) return { error: "target_changed" };
@@ -6848,7 +7084,7 @@ if (chrome.runtime.onMessage?.addListener && chrome.storage?.session) chrome.run
   if (typeof message?.type !== "string" || !message.type.startsWith("mcp-tab-")) return false;
   // Only the extension's own popup, never a page, the bridge or another extension.
   if (sender.id !== chrome.runtime.id ||
-      sender.url !== chrome.runtime.getURL("secret-provision.html")) return false;
+      sender.url !== chrome.runtime.getURL("browser-status.html")) return false;
   void personalTabSharingDispatch(message).then(
     (result) => reply(result),
     () => reply({ ok: false, code: "refused" }),
@@ -6903,11 +7139,23 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void clearPersonalTabApprovals(tabId);
 });
 // A notification button is Chrome UI: only the user can press it.
-chrome.notifications?.onButtonClicked?.addListener((id) => {
+chrome.notifications?.onButtonClicked?.addListener((id, buttonIndex) => {
+  if (id.startsWith("mcp-plan-site:")) {
+    void decidePersonalPlanSiteExtension(id, buttonIndex === 0);
+    return;
+  }
+  if (id.startsWith("mcp-action:")) {
+    void pendingPersonalOneUseConfirmations.get(id)?.(buttonIndex === 0);
+    return;
+  }
   const match = /^mcp-handoff:(\\d+)$/u.exec(id);
   if (match) void resumePersonalHandoff(Number(match[1]));
   const approval = /^mcp-approval:(\\d+)$/u.exec(id);
   if (approval) void grantPersonalSiteApproval(Number(approval[1]));
+});
+chrome.notifications?.onClosed?.addListener((id) => {
+  if (id.startsWith("mcp-plan-site:")) pendingPersonalPlanSiteExtensions.get(id)?.done(false);
+  if (id.startsWith("mcp-action:")) void pendingPersonalOneUseConfirmations.get(id)?.(false);
 });
 chrome.notifications?.onClicked?.addListener((id) => {
   if (id.startsWith("mcp-plan:")) {
@@ -6972,7 +7220,7 @@ void sweepPausedPersonalTasks();
 connect();
 `;
 
-  return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, popupScript: HANDOFF_POPUP_SCRIPT,
+  return { manifest, serviceWorker, popupHtml: HANDOFF_POPUP_HTML, secureChannelHtml: HANDOFF_SECURE_CHANNEL_HTML, popupScript: HANDOFF_POPUP_SCRIPT,
     tabSharingScript: TAB_SHARING_POPUP_SCRIPT, planReviewHtml: PLAN_REVIEW_HTML, planReviewScript: PLAN_REVIEW_SCRIPT,
     taskHomeHtml: TASK_HOME_HTML, taskHomeScript: TASK_HOME_SCRIPT };
 }

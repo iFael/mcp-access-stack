@@ -89,6 +89,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   readonly port: number;
 
   private readonly pending = new Map<string, PendingCall>();
+  private readonly pendingChromeConfirmations = new Map<string, {
+    generation: number; tabId: string; finish(approved: boolean): void;
+  }>();
   private readonly actions = new PersonalBrowserActionPolicy((request) => this.requestSiteApproval(request));
   private readonly snapshots = new PersonalBrowserSnapshotState();
   private readonly inbox = new PersonalBrowserTaskInbox();
@@ -184,6 +187,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.rejectPending(
       new AppError("BROWSER_DISCONNECTED", "The personal browser bridge was closed."),
     );
+    for (const pending of [...this.pendingChromeConfirmations.values()]) pending.finish(false);
     const server = this.server;
     this.server = undefined;
     if (!server) return;
@@ -320,7 +324,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.coordinateClicks.delete(input.tabId);
           throw new AppError("ACTION_BLOCKED_BY_POLICY", "Pixel click requires a screenshot captured in the past minute.");
         }
-        const guard = this.actions.guardPixelClick(input, point.url);
+        const guard = await this.guardWithChromeConfirmation(
+          (confirmationId) => this.actions.guardPixelClick({
+            ...input, confirmationId: confirmationId ?? input.confirmationId,
+          }, point.url), context,
+        );
         try {
           const result = await this.call("click", { ...input, guard }, context);
           this.coordinateClicks.delete(input.tabId);
@@ -334,22 +342,35 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     }
     if (!ref) throw new AppError("LOCATOR_NOT_FOUND", "Missing actionable browser target.");
     const guardedInput = { ...input, ref };
-    const guard = this.actions.guardClick(guardedInput);
+    const previousPageInstanceId = this.snapshots.pageInstanceId(input.tabId);
+    const guard = await this.guardWithChromeConfirmation(
+      (confirmationId) => this.actions.guardClick({
+        ...guardedInput, confirmationId: confirmationId ?? input.confirmationId,
+      }), context,
+    );
     try {
       const result = await this.call("click", { ...guardedInput, guard }, context);
       this.coordinateClicks.delete(input.tabId);
       return result;
     } catch (error) {
       this.coordinateClicks.delete(input.tabId);
-      if (input.ref && error instanceof AppError &&
-          error.code === "BROWSER_CONFIRMATION_INVALID" &&
-          error.message === "Target preflight: target_changed. No click was dispatched.") {
-        // The extension explicitly confirms that no pointer event was sent.
-        // Reuse only the same live DOM ref; a new name must undergo the full
-        // dangerous-action classification and single-use confirmation again.
+      const changedTarget = error instanceof AppError &&
+        error.code === "BROWSER_CONFIRMATION_INVALID" &&
+        (error.message === "Target preflight: target_changed. No click was dispatched." ||
+         error.message === "Target preflight: stale_page. No click was dispatched.");
+      if (changedTarget) {
+        // A client-side pushState keeps the same document and live element.
+        // Only rebound against a verified identical page instance; classify
+        // the now-current URL, label and risk before one retry.
         const fresh = await this.snapshot({ tabId: input.tabId, forceFull: true }, context);
-        if (!fresh.refs.some((reference) => reference.ref === ref)) throw error;
-        const rebound = this.actions.guardClick(guardedInput);
+        if (!fresh.refs.some((reference) => reference.ref === ref) ||
+            (error.message.includes("stale_page") &&
+              (!previousPageInstanceId || fresh.pageInstanceId !== previousPageInstanceId))) throw error;
+        const rebound = await this.guardWithChromeConfirmation(
+          (confirmationId) => this.actions.guardClick({
+            ...guardedInput, confirmationId: confirmationId ?? input.confirmationId,
+          }), context,
+        );
         return this.call("click", { ...guardedInput, guard: rebound }, context);
       }
       throw error;
@@ -408,9 +429,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         this.coordinateDrags.delete(input.tabId);
         throw new AppError("ACTION_BLOCKED_BY_POLICY", "Pixel drag requires a screenshot from the past minute.");
       }
-      guards = this.actions.guardPixelDrag(resolved, evidence.url);
+      guards = await this.guardWithChromeConfirmation(
+        (confirmationId) => this.actions.guardPixelDrag({
+          ...resolved, confirmationId: confirmationId ?? input.confirmationId,
+        }, evidence.url), context,
+      );
     } else {
-      guards = this.actions.guardDrag(resolved);
+      guards = await this.guardWithChromeConfirmation(
+        (confirmationId) => this.actions.guardDrag({
+          ...resolved, confirmationId: confirmationId ?? input.confirmationId,
+        }), context,
+      );
     }
     try {
       const result = await this.call("drag", { ...resolved, ...guards }, context);
@@ -437,19 +466,31 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
 
   async formInput(...args: Parameters<BrowserExecutor["formInput"]>): ReturnType<BrowserExecutor["formInput"]> {
     this.requireGuardedActions();
-    const guard = this.actions.guardFormInput(args[0]);
+    const guard = await this.guardWithChromeConfirmation(
+      (confirmationId) => this.actions.guardFormInput({
+        ...args[0], confirmationId: confirmationId ?? args[0].confirmationId,
+      }), args[1],
+    );
     return this.call("formInput", { ...args[0], guard }, args[1]);
   }
 
   async type(...args: Parameters<BrowserExecutor["type"]>): ReturnType<BrowserExecutor["type"]> {
     this.requireGuardedActions();
-    const guard = this.actions.guardType(args[0]);
+    const guard = await this.guardWithChromeConfirmation(
+      (confirmationId) => this.actions.guardType({
+        ...args[0], confirmationId: confirmationId ?? args[0].confirmationId,
+      }), args[1],
+    );
     return this.call("type", { ...args[0], guard }, args[1]);
   }
 
   async press(...args: Parameters<BrowserExecutor["press"]>): ReturnType<BrowserExecutor["press"]> {
     this.requireGuardedActions();
-    const guard = this.actions.guardPress(args[0]);
+    const guard = await this.guardWithChromeConfirmation(
+      (confirmationId) => this.actions.guardPress({
+        ...args[0], confirmationId: confirmationId ?? args[0].confirmationId,
+      }), args[1],
+    );
     return this.call("press", { ...args[0], guard }, args[1]);
   }
 
@@ -498,7 +539,51 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         resolvedSteps.push(step);
       }
     }
-    const steps = this.actions.guardSequence({ ...input, steps: resolvedSteps });
+    // Guard the entire batch before dispatch, including each Chrome one-use
+    // consent. The legacy peer retains the original native sequence contract.
+    let steps: Array<Record<string, unknown>>;
+    if (!this.peerInfo?.capabilities.includes("chromeConfirmationV1")) {
+      steps = this.actions.guardSequence({ ...input, steps: resolvedSteps });
+    } else {
+      steps = [];
+      let hasNavigated = false;
+      for (const step of resolvedSteps) {
+        if (step.action === "navigate") { hasNavigated = true; steps.push(step); continue; }
+        if (hasNavigated && ["click", "fill", "press", "hover", "scroll", "drag", "formInput", "type"].includes(step.action)) {
+          throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED",
+            "Personal browser sequences require a fresh snapshot after navigation before interacting.");
+        }
+        if (step.action === "click") steps.push({ ...step, guard:
+          await this.guardWithChromeConfirmation((id) => this.actions.guardClick({
+            ...step, tabId: input.tabId, confirmationId: id ?? step.confirmationId,
+          }), context) });
+        else if (step.action === "fill") steps.push({ ...step,
+          guard: this.actions.guardFill({ ...step, tabId: input.tabId }) });
+        else if (step.action === "press") steps.push({ ...step, guard:
+          await this.guardWithChromeConfirmation((id) => this.actions.guardPress({
+            ...step, tabId: input.tabId, confirmationId: id ?? step.confirmationId,
+          }), context) });
+        else if (step.action === "hover") {
+          if (!step.ref) throw new AppError("INVALID_ARGUMENT",
+            "Resolve hover coordinates against a fresh snapshot before sequencing.");
+          steps.push({ ...step, guard: this.actions.guardReference(input.tabId, step.ref) });
+        } else if (step.action === "scroll") steps.push({ ...step, guard: step.ref
+          ? this.actions.guardReference(input.tabId, step.ref) : this.actions.guardPage(input.tabId) });
+        else if (step.action === "drag") steps.push({ ...step,
+          ...await this.guardWithChromeConfirmation((id) => this.actions.guardDrag({
+            ...step, tabId: input.tabId, confirmationId: id ?? step.confirmationId,
+          }), context) });
+        else if (step.action === "formInput") steps.push({ ...step, guard:
+          await this.guardWithChromeConfirmation((id) => this.actions.guardFormInput({
+            ...step, tabId: input.tabId, confirmationId: id ?? step.confirmationId,
+          }), context) });
+        else if (step.action === "type") steps.push({ ...step, guard:
+          await this.guardWithChromeConfirmation((id) => this.actions.guardType({
+            ...step, tabId: input.tabId, confirmationId: id ?? step.confirmationId,
+          }), context) });
+        else steps.push(step);
+      }
+    }
     const result = await this.call("sequence", { ...input, steps }, context);
     if (!input.finalScreenshot) return result;
     const screenshot = await this.screenshot({ tabId: input.tabId }, context);
@@ -569,7 +654,11 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const [input, context] = args;
     this.requireGuardedActions();
     const guard = this.actions.guardPage(input.tabId);
-    const authorized = this.actions.guardNavigatePath(input);
+    const authorized = await this.guardWithChromeConfirmation(
+      (confirmationId) => this.actions.guardNavigatePath({
+        ...input, confirmationId: confirmationId ?? input.confirmationId,
+      }), context,
+    );
     return this.call("navigatePath", { ...input, guard, authorized }, context);
   }
 
@@ -1082,8 +1171,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         { encoding: "utf8", mode: 0o600 },
       ),
       writeFile(
-        path.join(this.extensionDirectory, "secret-provision.html"),
+        path.join(this.extensionDirectory, "browser-status.html"),
         assets.popupHtml,
+        { encoding: "utf8", mode: 0o600 },
+      ),
+      writeFile(
+        path.join(this.extensionDirectory, "secret-provision.html"),
+        assets.secureChannelHtml,
         { encoding: "utf8", mode: 0o600 },
       ),
       writeFile(
@@ -1246,6 +1340,72 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     });
   }
 
+  // One Chrome notification resolves only one sensitive action binding.
+  private async guardWithChromeConfirmation<T>(
+    guard: (confirmationId?: string) => T,
+    context?: OperationContext,
+  ): Promise<T> {
+    try {
+      return guard();
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== "ACTION_REQUIRES_CONFIRMATION" ||
+          !this.peerInfo?.capabilities.includes("chromeConfirmationV1") ||
+          !error.message.startsWith("Confirmation required: ")) throw error;
+      let request: Record<string, unknown>;
+      try {
+        request = JSON.parse(error.message.slice("Confirmation required: ".length)) as Record<string, unknown>;
+      } catch { throw error; }
+      const sensitive = new Set([
+        "purchase-or-payment", "delete-or-cancel", "send-message", "publish-content",
+        "change-credentials", "accept-terms-or-contract",
+      ]);
+      if (!sensitive.has(String(request.category)) ||
+          typeof request.confirmationId !== "string" ||
+          typeof request.tabId !== "string") throw error;
+      // Resolve the exact current page only inside the authenticated bridge;
+      // never copy potentially sensitive URL query parameters into errors.
+      const page = this.actions.guardPage(request.tabId);
+      if (!/^https?:\/\//u.test(page.url)) throw error;
+      if (!await this.requestChromeOneUseDecision({ ...request, url: page.url }, context)) {
+        throw new AppError("ACTION_BLOCKED_BY_POLICY", "The sensitive browser action was not approved in Chrome. No input was dispatched.");
+      }
+      return guard(request.confirmationId);
+    }
+  }
+
+  private requestChromeOneUseDecision(
+    request: Record<string, unknown>,
+    context?: OperationContext,
+  ): Promise<boolean> {
+    const socket = this.socket;
+    const generation = this.socketGeneration;
+    if (!socket || socket.readyState !== WebSocket.OPEN || generation === 0) return Promise.resolve(false);
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      let finished = false;
+      const finish = (approved: boolean) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        context?.signal?.removeEventListener("abort", onAbort);
+        this.pendingChromeConfirmations.delete(id);
+        resolve(approved);
+      };
+      const onAbort = () => finish(false);
+      const timer = setTimeout(() => finish(false), 50_000);
+      if (context?.signal?.aborted) { finish(false); return; }
+      context?.signal?.addEventListener("abort", onAbort, { once: true });
+      this.pendingChromeConfirmations.set(id, { generation, tabId: String(request.tabId), finish });
+      try {
+        socket.send(JSON.stringify({
+          type: "one-use-confirmation-request", id, tabId: request.tabId,
+          url: request.url, category: request.category, action: request.action,
+          target: typeof request.target === "string" ? request.target.slice(0, 160) : "",
+        }));
+      } catch { finish(false); }
+    });
+  }
+
   // Asks Chrome to offer the user a site approval; the user decides there.
   private requestSiteApproval(request: PersonalSiteApprovalRequest): void {
     const socket = this.socket;
@@ -1283,6 +1443,13 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     if (message.type === "heartbeat") {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "heartbeat-ack" }));
+      }
+      return;
+    }
+    if (message.type === "one-use-confirmation-result" && typeof message.id === "string") {
+      const pending = this.pendingChromeConfirmations.get(message.id);
+      if (pending && pending.generation === generation && pending.tabId === message.tabId) {
+        pending.finish(message.approved === true);
       }
       return;
     }
@@ -1510,6 +1677,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   private rejectPendingForGeneration(generation: number, error: Error): void {
+    for (const pending of [...this.pendingChromeConfirmations.values()])
+      if (pending.generation === generation) pending.finish(false);
     for (const [id, pending] of this.pending) {
       if (pending.generation !== generation) continue;
       this.pending.delete(id);
@@ -1520,6 +1689,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   }
 
   private rejectPending(error: Error): void {
+    for (const pending of [...this.pendingChromeConfirmations.values()]) pending.finish(false);
     for (const [id, pending] of this.pending) {
       this.pending.delete(id);
       clearTimeout(pending.timeout);

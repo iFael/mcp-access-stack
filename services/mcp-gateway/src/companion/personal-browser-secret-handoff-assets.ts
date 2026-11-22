@@ -4,64 +4,36 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.16.0";
+export const HANDOFF_EXTENSION_VERSION = "1.17.0";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
-<html lang="pt-BR">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MCP V3</title>
-<style>
-:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101114; color: #f5f5f5; }
-body { width: 330px; margin: 0; padding: 16px; font-size: 13px; line-height: 1.5; }
-h1 { font-size: 16px; margin: 0 0 8px; } p { color: #bdbdbd; }
-button { width: 100%; padding: 10px 12px; margin: 5px 0; border: 1px solid #555; border-radius: 8px; background: #27282d; color: white; cursor: pointer; }
-button:disabled { opacity: .55; } #status { min-height: 24px; padding-top: 8px; }
-.warning { color: #f2ce81; } code { user-select: all; }
-textarea { box-sizing: border-box; width: 100%; min-height: 64px; padding: 8px; border: 1px solid #555; border-radius: 8px; background: #1b1c20; color: #f5f5f5; font: inherit; resize: vertical; }
-#task-recent { margin: 4px 0 0; padding-left: 18px; color: #bdbdbd; } #task-recent li { margin: 2px 0; }
-label { display: flex; gap: 8px; align-items: flex-start; color: #bdbdbd; margin: 6px 0; }
-hr { border: 0; border-top: 1px solid #333; margin: 14px 0; }
-[hidden] { display: none !important; }
-</style></head>
-<body>
-<h1>MCP V3 · Esta aba</h1>
-<p id="tab-status" role="status" aria-live="polite">Carregando…</p>
-<button id="tab-resume" type="button" hidden>Pronto, pode continuar</button>
-<button id="tab-share" type="button" hidden>Compartilhar esta aba com o MCP</button>
-<button id="tab-unshare" type="button" hidden>Parar de compartilhar esta aba</button>
-<p id="tab-approval" class="warning" hidden></p>
-<button id="tab-approve" type="button" hidden>Permitir neste site</button>
-<p id="tab-grants" hidden></p>
-<button id="tab-revoke" type="button" hidden>Revogar as permissões deste site</button>
-<label><input id="tab-context" type="checkbox"> Deixar o MCP ver títulos e endereços das abas abertas até o Chrome fechar</label>
-<label><input id="tab-notify" type="checkbox"> Avisar quando o MCP terminar uma tarefa</label>
-<label><input id="tab-require-plan" type="checkbox"> Pedir minha aprovação de um plano antes de o MCP agir</label>
-<label><input id="tab-confirm-drag" type="checkbox"> Perguntar antes de compartilhar uma aba que eu arrastar para um grupo do MCP</label>
-<label id="tab-auto-row" hidden><input id="tab-auto" type="checkbox"> Aprovar automaticamente neste site. Excluir, pagar, enviar, publicar, senhas e contratos continuam pedindo confirmação.</label>
-<p id="tab-auto-sites" hidden></p>
-<hr>
-<h1>MCP V3 · Mensagem para a tarefa</h1>
-<p id="task-question" class="warning" role="status" aria-live="polite" hidden></p>
-<p id="task-target">Carregando…</p>
-<textarea id="task-text" maxlength="2000" aria-label="Mensagem para a tarefa" placeholder="Ex.: a barra ficou visível durante todas as ações, sem piscar."></textarea>
-<button id="task-send" type="button">Enviar para a tarefa</button>
-<button id="task-send-resume" type="button" hidden>Enviar e devolver a aba</button>
-<ul id="task-recent" hidden></ul>
-<hr>
-<h1>MCP V3 · Acordar o ChatGPT</h1>
-<label><input id="wake-enabled" type="checkbox"> Deixar o MCP acordar o ChatGPT quando a conversa estiver parada</label>
-<p id="wake-status" role="status" aria-live="polite"></p>
-<hr>
-<h1>MCP V3 · Canal seguro</h1>
-<p>Use somente para <code>MCP_CONTRACT_PREPARE_TOKEN</code> no GitHub public-release e no Worker Cloudflare de produção.</p>
-<button id="generate" type="button">Gerar novo segredo temporário</button>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MCP V3</title><style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101114;color:#f5f5f5}
+body{width:290px;margin:0;padding:16px;font-size:13px;line-height:1.5}
+h1{font-size:16px;margin:0 0 10px}p{color:#bdbdbd}
+button{width:100%;padding:12px;border:1px solid #a74949;border-radius:8px;background:#3b2024;color:white;cursor:pointer}
+button:disabled{opacity:.55}
+</style></head><body>
+<h1>MCP V3</h1><p id="tab-status" role="status" aria-live="polite">Verificando conexão…</p>
+<button id="tab-stop" type="button">Parar o MCP</button>
+<script src="tab-sharing.js"></script></body></html>`;
+
+export const HANDOFF_SECURE_CHANNEL_HTML = `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MCP V3 · Canal seguro</title><style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101114;color:#f5f5f5}
+body{max-width:640px;margin:0 auto;padding:24px;font-size:14px;line-height:1.5}
+h1{font-size:20px}p{color:#bdbdbd}button{padding:10px 14px;margin:4px;border:1px solid #555;border-radius:8px;background:#27282d;color:white;cursor:pointer}
+button:disabled{opacity:.55}.warning{color:#f2ce81}
+</style></head><body>
+<h1>Canal seguro MCP V3</h1>
+<p>Uso exclusivo do <code>MCP_CONTRACT_PREPARE_TOKEN</code> em formulários de produção autorizados do GitHub e Cloudflare.</p>
+<button id="generate" type="button">Gerar segredo temporário</button>
 <button id="fill" type="button">Preencher campo selecionado</button>
 <button id="clear" type="button">Descartar segredo</button>
-<p class="warning">O valor nunca será exibido ou copiado. Prepare o formulário, insira o nome exato e selecione o campo Valor. Preencha com este botão ou com Ctrl+Shift+8 (atalho da extensão). Para trocar o valor, descarte-o antes. Salvar no Cloudflare realiza um deploy: precisa de autorização separada.</p>
-<div id="status" role="status" aria-live="polite">Carregando…</div>
-<script src="tab-sharing.js"></script>
-<script src="secret-provision.js"></script>
-</body></html>`;
-
+<p class="warning">O valor nunca é exibido ou copiado. Selecione o campo Valor no site autorizado antes de preencher. Salvar o formulário ou realizar deploy exige autorização independente.</p>
+<p id="status" role="status" aria-live="polite">Verificando canal…</p>
+<script src="secret-provision.js"></script></body></html>`;
 export const HANDOFF_POPUP_SCRIPT = `"use strict";
 const status = document.getElementById("status");
 const controls = ["generate", "fill", "clear"];

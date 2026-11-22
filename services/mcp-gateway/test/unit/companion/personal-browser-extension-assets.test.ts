@@ -6,6 +6,24 @@ import { summarizeCdpAccessibility } from "../../../src/companion/personal-brows
 type FakeElement = ReturnType<typeof fakeElement>;
 
 describe("personal browser extension assets", () => {
+  it("keeps the popup status-only, with secure handoff on the extension options page", () => {
+    const assets = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const manifest = JSON.parse(assets.manifest) as {
+      action: { default_popup: string }; options_page: string; version: string;
+    };
+    expect(manifest.version).toBe("1.17.0");
+    expect(manifest.action.default_popup).toBe("browser-status.html");
+    expect(manifest.options_page).toBe("secret-provision.html");
+    expect(assets.popupHtml).toContain("Parar o MCP");
+    expect(assets.popupHtml).toContain("tab-sharing.js");
+    expect(assets.popupHtml).not.toContain('id="generate"');
+    expect(assets.popupHtml).not.toContain("aprovação automática");
+    expect(assets.tabSharingScript).toContain("mcp-tab-stop");
+    expect(assets.secureChannelHtml).toContain("secret-provision.js");
+    expect(assets.secureChannelHtml).toContain('id="generate"');
+    expect(assets.secureChannelHtml).not.toContain("Parar o MCP");
+  });
+
   it("reads an owned top-level document to bounded completeness and fails closed on navigation", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const invoked: string[] = [];
@@ -1352,6 +1370,35 @@ describe("personal browser extension assets", () => {
       .resolves.toMatchObject({ tabId: "personal:7", refs: [] });
   });
 
+  it("settles personal DOM before each automatic compact action snapshot", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const order: string[] = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7,
+      requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      settlePersonalDom: async () => { order.push("settle"); },
+      crypto: { randomUUID: () => "11111111-1111-4111-8111-111111111111" },
+      axTargetsByTab: new Map(),
+      chrome: { scripting: { executeScript: async () => {
+        order.push("snapshot");
+        return [{ result: { url: "https://example.test/", pageInstanceId: "page1",
+          content: '- button "Opened dialog" [ref=p-7]',
+          refs: [{ ref: "p-7", role: "button", name: "Opened dialog" }] } }];
+      } } },
+    });
+    vm.runInContext("function snapshotPage(){}", context);
+    vm.runInContext(extractFunction(serviceWorker, "snapshot"), context);
+    const snapshot = vm.runInContext("snapshot", context) as (input: unknown) => Promise<unknown>;
+    await expect(snapshot({ tabId: "personal:7", compact: true })).resolves.toMatchObject({
+      content: expect.stringContaining("Opened dialog"), refs: [{ ref: "p-7" }],
+    });
+    expect(order).toEqual(["settle", "snapshot"]);
+    order.length = 0;
+    await snapshot({ tabId: "personal:7" });
+    expect(order).toEqual(["snapshot"]);
+  });
+
   it("retains authoritative refs in compact snapshots without unrelated page text", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const dom = createDom([fakeElement({ tagName: "BUTTON", text: "Open" })]);
@@ -1362,6 +1409,44 @@ describe("personal browser extension assets", () => {
     expect(concise.content).not.toContain("Login page");
     expect(concise.content).toContain("button");
     expect(concise.refs).toHaveLength(1);
+  });
+
+  it("puts an expanded panel ahead of page chrome and limits full page text", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const ordinary = fakeElement({ tagName: "BUTTON", text: "Global menu" });
+    const expanded = fakeElement({ tagName: "BUTTON", text: "Panel action", attributes: { "aria-expanded": "true" } });
+    const withoutRole = fakeElement({ tagName: "DIV", text: "json(...)", attributes: { tabindex: "0" } });
+    const dom = createDom([ordinary, expanded, withoutRole]);
+    const capture = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context) as
+      (generation: string, compact?: boolean) => { content: string; truncated?: boolean;
+        refs: Array<{ role: string; name: string }> };
+    const compact = capture("priority", true);
+    expect(compact.content.indexOf("Panel action")).toBeLessThan(compact.content.indexOf("Global menu"));
+    expect(compact.refs).toContainEqual(expect.objectContaining({ name: "json(...)", role: "button" }));
+    const document = vm.runInContext("document", dom.context) as { body: { innerText: string } };
+    document.body.innerText = "X".repeat(30000);
+    const full = capture("priority");
+    expect(full.truncated).toBe(true);
+    expect(full.content).toContain("X".repeat(20000));
+    expect(full.content).not.toContain("X".repeat(20001));
+  });
+
+  it("resolves editor pixels to an empty-name textbox rather than a generic submit control", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const dom = createDom([]);
+    const editor = fakeElement({ tagName: "DIV", text: "expression", attributes: { role: "textbox" } });
+    Object.assign(editor, { isConnected: true, matches: () => true, closest: () => null });
+    const token = fakeElement({ tagName: "SPAN", text: "json(...)" });
+    Object.assign(token, { closest: () => editor, parentElement: null });
+    const document = vm.runInContext("document", dom.context) as { elementFromPoint: () => unknown };
+    document.elementFromPoint = () => token;
+    Object.assign(dom.context, { innerWidth: 800, innerHeight: 600,
+      __mcpV3OwnedRefElements: new Map(), __mcpV3OwnedRefMetadata: new Map(),
+      __mcpV3PageInstanceId: "test",
+    });
+    const point = vm.runInContext(`(${extractFunction(serviceWorker, "inspectPointInDocument")})`, dom.context) as
+      (x: number, y: number) => { ref: string; role: string; name: string } | null;
+    expect(point(25, 25)).toMatchObject({ ref: expect.stringMatching(/^p-editor-/u), role: "textbox", name: "" });
   });
 
   it("waits for DOM quiescence before a requested final sequence snapshot", async () => {
@@ -1716,6 +1801,51 @@ describe("personal browser extension assets", () => {
     expect(check("before", null, "private")).toEqual({ ready: false });
   });
 
+  it("observes EditContext Monaco mutations on the editor ancestor, not the zero-width input", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const host = { textContent: "json(old)", querySelector: () => null };
+    const editor = {
+      tagName: "DIV", textContent: "", isConnected: true, isContentEditable: false,
+      editContext: { text: "json(old)" }, disabled: false, readOnly: false,
+      getAttribute: (name: string) => name === "role" ? "textbox" : null,
+      closest: () => host,
+    };
+    let mutation: (() => void) | undefined;
+    const context = vm.createContext({
+      document: { activeElement: editor },
+      MutationObserver: class {
+        constructor(callback: () => void) { mutation = callback; }
+        observe() {}
+        disconnect() {}
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "observePersonalEditableMutation"), context);
+    const observe = vm.runInContext("observePersonalEditableMutation", context) as
+      (stage: string, ref: null, expected: string | null) => Record<string, unknown>;
+    expect(observe("before", null, "json(new)")).toMatchObject({ ready: true, alreadyEqual: false });
+    mutation?.();
+    expect(observe("after", null, "json(new)")).toMatchObject({ ready: true, changed: true, plain: false });
+  });
+
+  it("detects protected rich-editor tokens before a destructive fill", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const editor = {
+      tagName: "DIV", textContent: "json(token)", isConnected: true,
+      isContentEditable: true, disabled: false, readOnly: false,
+      getAttribute: () => null,
+      querySelector: (selector: string) => selector === '[contenteditable="false"]' ? {} : null,
+    };
+    const context = vm.createContext({
+      document: { activeElement: editor },
+      __mcpV3OwnedRefElements: new Map([["editor", editor]]),
+    });
+    vm.runInContext(extractFunction(serviceWorker, "observePersonalEditableMutation"), context);
+    const observe = vm.runInContext("observePersonalEditableMutation", context) as
+      (stage: string, ref: string, expected: string) => Record<string, unknown>;
+    expect(observe("before", "editor", "replacement"))
+      .toMatchObject({ ready: true, protectedTokens: true });
+  });
+
   it("refuses to report success when typing has no focused editor or visible text change", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const sent: string[] = [];
@@ -1747,7 +1877,7 @@ describe("personal browser extension assets", () => {
     await expect(typeText(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
     expect(sent).toHaveLength(0);
     focused = true;
-    await expect(typeText(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(typeText(input)).resolves.toMatchObject({ completed: true, unverified: true });
     expect(sent).toEqual(["Input.insertText"]);
     changed = true;
     await expect(typeText(input)).resolves.toMatchObject({ completed: true });
@@ -3208,7 +3338,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.16.0");
+    expect(parsedManifest.version).toBe("1.17.0");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3615,7 +3745,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       },
     });
     vm.runInContext(listenerSource, context);
-    const popup = { id: "ext", url: "chrome-extension://ext/secret-provision.html" };
+    const popup = { id: "ext", url: "chrome-extension://ext/browser-status.html" };
     const replies: unknown[] = [];
     expect(handler!({ type: "mcp-secret-status" }, popup, (value) => replies.push(value))).toBe(false);
     expect(handler!({ type: "mcp-tab-share", tabId: 5 }, { ...popup, url: "https://evil.example/" }, () => undefined)).toBe(false);
@@ -3649,6 +3779,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const removedWindows: number[] = [];
     const notifications: Array<[string, string, Record<string, unknown>?]> = [];
     let onTick: (() => Promise<void>) | undefined;
+    let onSiteRequest: ((id: string) => Promise<void>) | undefined;
     let uuid = 0;
     const coded = (code: string, message: string) => Object.assign(new Error(message), { code });
     type Rule = Record<string, unknown> & { id: number };
@@ -3689,6 +3820,16 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
         },
       },
     });
+    Object.assign(context, { setTimeout, clearTimeout,
+      assertPersonalNavigationTarget: (url: string) => url });
+    const notificationsMock = (context as unknown as { chrome: { notifications: {
+      create(id: string, options: Record<string, unknown>): Promise<void>,
+    } } }).chrome.notifications;
+    const originallyCreate = notificationsMock.create;
+    notificationsMock.create = async (id, options) => {
+      await originallyCreate(id, options);
+      if (id.startsWith("mcp-plan-site:")) queueMicrotask(() => void onSiteRequest?.(id));
+    };
     vm.runInContext(serviceWorker.slice(start, end), context);
     loadGroupSupport(context, serviceWorker);
     vm.runInContext("const withOwnershipLock = (work) => work();", context);
@@ -3708,6 +3849,9 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const closeWindow = vm.runInContext("rejectPersonalPlanWindow", context) as (windowId: number) => Promise<void>;
     const clear = vm.runInContext("clearPersonalPlans", context) as (taskId?: string) => Promise<void>;
     const blocked = (text: string) => ({ code: "ACTION_BLOCKED_BY_POLICY", message: expect.stringContaining(text) });
+    const decideSite = vm.runInContext("decidePersonalPlanSiteExtension", context) as
+      (id: string, allow: boolean) => Promise<void>;
+    onSiteRequest = (id) => decideSite(id, false);
 
     // Without a plan or the popup setting, nothing changes.
     await expect(enforce("evaluate", { tabId: "personal:7" })).resolves.toBeUndefined();
@@ -3751,7 +3895,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
 
     // Chrome itself blocks the task's MCP tabs from loading any other site. The shared tab stays the
     // user's to browse, another task's tab is untouched, and rules that are not the plan's are kept.
-    await expect(planRules()).resolves.toEqual([blockOutside([7], ["shop.example"])]);
+    await expect(planRules()).resolves.toEqual([blockOutside([7], ["shop.example",
+      "login.microsoftonline.com", "login.live.com", "accounts.google.com", "auth.atlassian.com"])]);
     expect(sessionRules[0]).toMatchObject({ id: 1 });
 
     // The task's tabs and the listed shared tab work on the approved site and its subdomains.
@@ -3761,27 +3906,28 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await expect(enforce("frameSequence", { tabId: "personal:7", steps: [{ action: "index" }, { action: "select" }] }))
       .resolves.toBeUndefined();
     await expect(enforce("open", { taskId: "t1", url: "https://pay.example/" })).rejects.toMatchObject(
-      blocked("pay.example is outside the sites approved in plan " + planId + " (shop.example)"));
-    await expect(enforce("open", { taskId: "t1", url: "https://notshop.example/" })).rejects.toMatchObject(blocked("outside"));
+      blocked("pay.example was not added to the approved plan"));
+    await expect(enforce("open", { taskId: "t1", url: "https://notshop.example/" })).rejects.toMatchObject(blocked("not added"));
     await expect(enforce("evaluate", { tabId: "personal:7" })).rejects.toMatchObject(blocked("does not allow evaluate"));
     await expect(enforce("upload", { tabId: "personal:8" })).rejects.toMatchObject(blocked("does not allow upload"));
     await expect(enforce("sequence", { tabId: "personal:7",
       steps: [{ action: "click" }, { action: "navigate", url: "https://evil.example/" }] })).rejects.toMatchObject(blocked("evil.example"));
     // A link or redirect that left the plan blocks the next action, but MCP may still go back.
     urls[7] = "https://evil.example/";
-    await expect(enforce("snapshot", { tabId: "personal:7" })).rejects.toMatchObject(blocked("evil.example is outside"));
+    await expect(enforce("snapshot", { tabId: "personal:7" })).rejects.toMatchObject(blocked("evil.example was not added"));
     await expect(enforce("goBack", { tabId: "personal:7" })).resolves.toBeUndefined();
     urls[7] = "https://www.shop.example/cart";
     // Other tasks and housekeeping are untouched.
     await expect(enforce("evaluate", { tabId: "personal:9" })).resolves.toBeUndefined();
     await expect(enforce("closeTab", { tabId: "personal:7" })).resolves.toBeUndefined();
 
-    // With "Pedir um plano" on, nothing outside an approved plan runs.
+    // The removed popup's old require-plan preference cannot silently
+    // re-enable an invisible mandatory approval on future tasks.
     local.set("mcpV3RequirePlan", true);
-    await expect(enforce("evaluate", { tabId: "personal:9" })).rejects.toMatchObject(blocked("requires an approved plan"));
-    await expect(enforce("open", { url: "https://shop.example/" })).rejects.toMatchObject(blocked("open its tabs with that taskId"));
+    await expect(enforce("evaluate", { tabId: "personal:9" })).resolves.toBeUndefined();
+    await expect(enforce("open", { url: "https://shop.example/" })).resolves.toBeUndefined();
     await expect(enforce("open", { taskId: "t1", url: "https://shop.example/" })).resolves.toBeUndefined();
-    await expect(enforce("dialog", { tabId: "personal:9", action: "respond" })).rejects.toMatchObject(blocked("requires"));
+    await expect(enforce("dialog", { tabId: "personal:9", action: "respond" })).resolves.toBeUndefined();
     for (const [operation, input] of [["tabs", {}], ["wait", { tabId: "personal:9", timeoutMs: 1 }],
       ["dialog", { tabId: "personal:9", action: "inspect" }], ["viewport", { tabId: "personal:9" }],
       ["finishTask", { taskId: "t2" }]] as const) {
@@ -3803,8 +3949,21 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await review({ type: "mcp-plan-decide", planId: fourth.planId, approve: true, domains: ["pay.example"], actions: ["navigate"] });
     await expect(plan({ planId, timeoutMs: 1 })).resolves.toMatchObject({ status: "superseded" });
     await expect(enforce("open", { taskId: "t1", url: "https://pay.example/" })).resolves.toBeUndefined();
-    await expect(planRules()).resolves.toEqual([blockOutside([7], ["pay.example"])]);
-    await expect(enforce("snapshot", { tabId: "personal:8" })).rejects.toMatchObject(blocked("requires"));
+    await expect(planRules()).resolves.toEqual([blockOutside([7], ["pay.example",
+      "login.microsoftonline.com", "login.live.com", "accounts.google.com", "auth.atlassian.com"])]);
+    // A user can extend only this approved task by a single Chrome click,
+    // without opening or replacing another plan.
+    onSiteRequest = (id) => decideSite(id, true);
+    await expect(enforce("navigate", { tabId: "personal:7",
+      url: "https://docs.vendor.example/start" })).resolves.toBeUndefined();
+    expect((await planRules())[0]?.condition).toMatchObject({
+      excludedRequestDomains: expect.arrayContaining(["pay.example", "docs.vendor.example"]),
+    });
+    onSiteRequest = (id) => decideSite(id, false);
+    urls[7] = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+    await expect(enforce("snapshot", { tabId: "personal:7" })).resolves.toBeUndefined();
+    urls[7] = "https://www.shop.example/cart";
+    await expect(enforce("snapshot", { tabId: "personal:8" })).resolves.toBeUndefined();
 
     // Only owned or shared tabs can be listed, and finishing the task ends its plans.
     await expect(plan({ ...proposal, tabIds: ["personal:12"] })).rejects.toMatchObject({ code: "TAB_NOT_OWNED" });
@@ -3812,7 +3971,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await expect(planRules()).resolves.toEqual([]);
     expect(sessionRules).toEqual([expect.objectContaining({ id: 1 })]);
     await expect(plan({ planId: fourth.planId })).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
-    await expect(enforce("click", { tabId: "personal:7" })).rejects.toMatchObject(blocked("requires"));
+    await expect(enforce("click", { tabId: "personal:7" })).resolves.toBeUndefined();
   });
 
   it("offers site approvals only in Chrome, grants them only from the user's click and reports them to the bridge", async () => {
@@ -3942,14 +4101,11 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(session.get("mcpV3SiteGrants")).toEqual([]);
     expect((sent.at(-1) as typeof report).grants).toEqual([]);
 
-    // Automatic approval is set per public host from the popup and reported to the bridge.
-    await expect(dispatch({ type: "mcp-tab-auto", tabId: 9, enabled: true })).rejects.toMatchObject({ code: "NAVIGATION_BLOCKED" });
-    await expect(dispatch({ type: "mcp-tab-auto", tabId: 7, enabled: true })).resolves.toMatchObject({
-      auto: true, autoSites: ["shop.example"] });
-    await dispatch({ type: "mcp-tab-auto", tabId: 8, enabled: true });
-    expect(sent.at(-1)).toEqual({ type: "site-approvals", grants: [], autoSites: ["docs.example", "shop.example"] });
-    await dispatch({ type: "mcp-tab-auto", tabId: 7, enabled: false });
-    expect(local.get("mcpV3AutoApproveSites")).toEqual(["docs.example"]);
+    // The removed popup's persistent auto-approval switch cannot silently
+    // grant actions after the UI has been simplified.
+    await expect(dispatch({ type: "mcp-tab-auto", tabId: 7, enabled: true })).rejects.toThrow("unsupported");
+    expect(local.has("mcpV3AutoApproveSites")).toBe(false);
+    expect((sent.at(-1) as typeof report).autoSites).toEqual([]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 9 })).resolves.toMatchObject({ autoEligible: false, auto: false });
   });
 
@@ -4387,22 +4543,20 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     await follow(7, 5);
     expect(owned()["7"]).toBeUndefined();
 
-    // With "Perguntar antes" on, a dragged tab waits for the user's answer in the popup.
+    // A retired "ask on drag" preference no longer hides approval inside
+    // the removed popup: dragging into the task's group shares immediately.
     harness.local.set("mcpV3ConfirmDragShare", true);
     chromeTabs.set(8, { id: 8, url: "https://shop.example/e", groupId: 5, title: "Pedido" });
     await follow(8, 5);
-    expect(owned()["8"]).toBeUndefined();
-    expect(harness.badges).toContainEqual([8, "?"]);
-    expect(notifications.at(-1)).toEqual(["mcp-share:8", expect.objectContaining({
-      title: "Compartilhar esta aba com MCP · t1?", message: "Abra o MCP V3 nesta aba para confirmar." })]);
-    expect(notifications.at(-1)?.[1]).not.toHaveProperty("buttons");
-    await harness.answer(8, true);
     expect(owned()["8"]).toMatchObject({ taskId: "t1", ownership: "user" });
+    expect(harness.badges).toContainEqual([8, "MCP"]);
     chromeTabs.set(9, { id: 9, url: "https://shop.example/f", groupId: 5 });
     await follow(9, 5);
-    await harness.answer(9, false);
+    expect(owned()["9"]).toMatchObject({ taskId: "t1", ownership: "user" });
+    chromeTabs.get(9)!.groupId = -1;
+    await follow(9, -1);
     expect(owned()["9"]).toBeUndefined();
-    expect(harness.ungrouped).toContain(9);
+    expect(harness.ungrouped).not.toContain(9);
   });
 
   it("shares tabs dragged into a popup share's group without a task and gives them back when dragged out", async () => {
