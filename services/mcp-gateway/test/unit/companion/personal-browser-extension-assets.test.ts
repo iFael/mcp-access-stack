@@ -11,10 +11,12 @@ describe("personal browser extension assets", () => {
     const manifest = JSON.parse(assets.manifest) as {
       action: { default_popup: string }; options_page: string; version: string;
     };
-    expect(manifest.version).toBe("1.17.2");
+    expect(manifest.version).toBe("1.17.3");
     expect(manifest.action.default_popup).toBe("browser-status.html");
     expect(manifest.options_page).toBe("secret-provision.html");
     expect(assets.popupHtml).toContain("Parar o MCP");
+    expect(assets.popupHtml).toContain("Revogar permissões deste site");
+    expect(assets.tabSharingScript).toContain("mcp-tab-revoke");
     expect(assets.popupHtml).toContain("tab-sharing.js");
     expect(assets.popupHtml).not.toContain('id="generate"');
     expect(assets.popupHtml).not.toContain("aprovação automática");
@@ -3455,7 +3457,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.2");
+    expect(parsedManifest.version).toBe("1.17.3");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3591,12 +3593,13 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext";', context);
     vm.runInContext('const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
       'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
-      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
+      'const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants"; const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; ' +
+      'const PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY = "mcpV3RememberedJavaScriptOrigins"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
       'const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
       "personalTabContextEnabled", "personalPlanRequired", "listPersonalOpenTabs", "personalTabSharingDispatch",
       "personalApprovalStatus", "readPersonalApprovalRequest", "readPersonalSiteGrants", "readPersonalAutoSites",
-      "clearPersonalApprovalRequest",
+      "readPersonalPermanentScriptOrigins", "clearPersonalApprovalRequest",
       "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask",
       "readPersonalHandoff", "resumePersonalHandoff", "clearPersonalHandoff", "settlePersonalHandoffSignals",
       "notifyPersonalTaskFinished"]) {
@@ -3612,7 +3615,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
       ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
-      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], inbox: expect.objectContaining({ recent: [] }),
+      confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], permanentScript: false,
+      inbox: expect.objectContaining({ recent: [] }),
       wake: { enabled: true, waiting: 0, recent: [] },
     });
     expect((await listTabs({})).openTabs).toBeUndefined();
@@ -4138,7 +4142,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     }
     loadGroupSupport(context, serviceWorker);
     const record = vm.runInContext("recordPersonalApprovalRequest", context) as (message: Record<string, unknown>) => Promise<void>;
-    const grant = vm.runInContext("grantPersonalSiteApproval", context) as (chromeTabId: number) => Promise<boolean>;
+    const grant = vm.runInContext("grantPersonalSiteApproval", context) as
+      (chromeTabId: number, rememberScript?: boolean) => Promise<boolean>;
     const clearTask = vm.runInContext("clearPersonalTaskApprovals", context) as
       (taskId: string | undefined, chromeTabIds: number[]) => Promise<void>;
     const clearTab = vm.runInContext("clearPersonalTabApprovals", context) as (chromeTabId: number) => Promise<void>;
@@ -4168,7 +4173,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await ask("personal:7", "https://shop.example");
     await expect(grant(7)).resolves.toBe(true);
     const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown>>; autoSites: string[] };
-    expect(report).toEqual({ type: "site-approvals", autoSites: [],
+    expect(report).toEqual({ type: "site-approvals", autoSites: [], permanentScriptOrigins: [],
       grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1" }] });
     // No time limit: the grant is held until its task ends.
     expect(session.get("mcpV3SiteGrants")).toEqual([{ origin: "https://shop.example", category: "upload-file",
@@ -4182,7 +4187,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     // A shared tab has no task: its grant is bound to that tab, granted from the popup.
     await ask("personal:8", "https://docs.example", "execute-script");
     expect(notifications.at(-1)).toEqual(["create", "mcp-approval:8", expect.objectContaining({
-      message: "Executar JavaScript. Permitir libera isso neste site enquanto esta aba estiver com o MCP." })]);
+      message: "JavaScript pode ler e alterar esta página. Permita somente nesta tarefa ou lembre a escolha para esta origem HTTPS." })]);
     await expect(dispatch({ type: "mcp-tab-approve", tabId: 8 })).resolves.toMatchObject({
       grants: [{ category: "execute-script", until: "tab" }] });
     expect(session.has("mcpV3ApprovalRequest:8")).toBe(false);
@@ -4224,6 +4229,23 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(local.has("mcpV3AutoApproveSites")).toBe(false);
     expect((sent.at(-1) as typeof report).autoSites).toEqual([]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 9 })).resolves.toMatchObject({ autoEligible: false, auto: false });
+
+    // Remembering JavaScript requires the explicit second button on a Chrome notification.
+    await ask("personal:7", "https://shop.example", "execute-script");
+    expect(notifications.at(-1)).toEqual(["create", "mcp-approval:7", expect.objectContaining({
+      buttons: [{ title: "Permitir nesta tarefa" }, { title: "Lembrar neste site" }],
+    })]);
+    await expect(grant(7, true)).resolves.toBe(true);
+    expect(local.get("mcpV3RememberedJavaScriptOrigins")).toEqual(["https://shop.example"]);
+    await clearTask("t1", [7]);
+    expect((sent.at(-1) as typeof report & { permanentScriptOrigins: string[] }).permanentScriptOrigins)
+      .toEqual(["https://shop.example"]);
+    await expect(dispatch({ type: "mcp-tab-status", tabId: 7 }))
+      .resolves.toMatchObject({ permanentScript: true });
+    await dispatch({ type: "mcp-tab-revoke", tabId: 7 });
+    expect(local.get("mcpV3RememberedJavaScriptOrigins")).toEqual([]);
+    expect((sent.at(-1) as typeof report & { permanentScriptOrigins: string[] }).permanentScriptOrigins)
+      .toEqual([]);
   });
 
   it("answers plan window messages only from the extension's plan page", async () => {

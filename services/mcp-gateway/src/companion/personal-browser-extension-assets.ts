@@ -630,7 +630,14 @@ async function personalTabSharingDispatch(message) {
     if (!(await grantPersonalSiteApproval(tab.id))) throw Error("not-requested");
   } else if (message.type === "mcp-tab-revoke") {
     const origin = new URL(tab.url).origin;
-    await withPersonalSiteGrants(() => changePersonalSiteGrants((grants) => grants.filter((grant) => grant.origin !== origin)));
+    await withPersonalSiteGrants(async () => {
+      await changePersonalSiteGrants((grants) => grants.filter((grant) => grant.origin !== origin));
+      const permanent = await readPersonalPermanentScriptOrigins();
+      if (permanent.includes(origin)) {
+        await chrome.storage.local.set({ [PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY]: permanent.filter((site) => site !== origin) });
+        await pushPersonalSiteApprovals();
+      }
+    });
   } else if (message.type === "mcp-tab-auto") {
     // The old popup setting is retired; hidden persistent approvals are
     // neither read nor created in autonomous mode.
@@ -674,11 +681,13 @@ async function personalApprovalStatus(tab) {
     grants: [...new Set((await readPersonalSiteGrants()).filter((grant) => grant.origin === url.origin)
       .map((grant) => grant.category + " " + (typeof grant.taskId === "string" ? "task" : "tab")))]
       .map((key) => ({ category: key.split(" ")[0], until: key.split(" ")[1] })),
+    permanentScript: (await readPersonalPermanentScriptOrigins()).includes(url.origin),
     ...(request?.origin === url.origin ? { approval: request.category } : {}),
   };
 }
 
 const PERSONAL_SITE_GRANTS_KEY = "mcpV3SiteGrants";
+const PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY = "mcpV3RememberedJavaScriptOrigins";
 const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites";
 const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";
 // Deleting, paying, sending, publishing, credentials and contracts are never
@@ -723,6 +732,16 @@ async function readPersonalAutoSites() {
   return [];
 }
 
+// Only an explicit Chrome notification choice remembers JavaScript on one exact HTTPS origin.
+async function readPersonalPermanentScriptOrigins() {
+  const value = await chrome.storage.local.get(PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY).catch(() => ({}));
+  const origins = value?.[PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY];
+  return Array.isArray(origins) ? [...new Set(origins.filter((origin) => {
+    if (typeof origin !== "string" || !origin.startsWith("https://")) return false;
+    try { return new URL(origin).origin === origin; } catch { return false; }
+  }))].slice(0, 100) : [];
+}
+
 // The bridge learns approvals only from here and never grants one itself.
 async function pushPersonalSiteApprovals() {
   const grants = await readPersonalSiteGrants();
@@ -731,6 +750,7 @@ async function pushPersonalSiteApprovals() {
     grants: grants.map((grant) => ({ origin: grant.origin, category: grant.category,
       ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : { tabId: grant.tabId }) })),
     autoSites: await readPersonalAutoSites(),
+    permanentScriptOrigins: await readPersonalPermanentScriptOrigins(),
   });
 }
 
@@ -765,14 +785,18 @@ function recordPersonalApprovalRequest(message) {
     } });
     await Promise.resolve(chrome.notifications?.create?.("mcp-approval:" + chromeTabId, {
       type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP pede permissão em " + new URL(origin).host,
-      message: PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site " +
-        (taskId ? "até o fim da tarefa." : "enquanto esta aba estiver com o MCP."),
-      buttons: [{ title: "Permitir neste site" }], requireInteraction: true, priority: 1,
+      message: message.category === "execute-script"
+        ? "JavaScript pode ler e alterar esta página. Permita somente nesta tarefa ou lembre a escolha para esta origem HTTPS."
+        : PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site " +
+          (taskId ? "até o fim da tarefa." : "enquanto esta aba estiver com o MCP."),
+      buttons: message.category === "execute-script"
+        ? [{ title: "Permitir nesta tarefa" }, { title: "Lembrar neste site" }]
+        : [{ title: "Permitir neste site" }], requireInteraction: true, priority: 1,
     })).catch(() => undefined);
   });
 }
 
-function grantPersonalSiteApproval(chromeTabId) {
+function grantPersonalSiteApproval(chromeTabId, rememberScript = false) {
   return withPersonalSiteGrants(async () => {
     const request = await readPersonalApprovalRequest(chromeTabId);
     await clearPersonalApprovalRequest(chromeTabId);
@@ -787,6 +811,14 @@ function grantPersonalSiteApproval(chromeTabId) {
     // The tab left that site, or MCP no longer holds it in that task: nothing is granted.
     const metadata = (await readOwnedTabs())[String(chromeTabId)];
     if (origin !== request.origin || !metadata || metadata.taskId !== request.taskId) return false;
+    if (rememberScript) {
+      if (request.category !== "execute-script" || !origin.startsWith("https://")) return false;
+      const existing = await readPersonalPermanentScriptOrigins();
+      if (!existing.includes(origin) && existing.length >= 100) return false;
+      await chrome.storage.local.set({ [PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY]: [...new Set([...existing, origin])] });
+      await pushPersonalSiteApprovals();
+      return true;
+    }
     const grant = { origin, category: request.category, tabId: PERSONAL_PREFIX + chromeTabId,
       ...(request.taskId ? { taskId: request.taskId } : {}), grantedAt: Date.now() };
     const owner = (candidate) => typeof candidate.taskId === "string" ? "task:" + candidate.taskId : "tab:" + candidate.tabId;
@@ -1410,6 +1442,7 @@ const PERSONAL_ONE_USE_LABELS = {
   "purchase-or-payment": "Pagar ou contratar", "delete-or-cancel": "Excluir ou cancelar",
   "send-message": "Enviar mensagem", "publish-content": "Publicar conteúdo",
   "change-credentials": "Alterar credenciais", "accept-terms-or-contract": "Aceitar contrato ou termos",
+  "unverified-pointer-action": "Arrastar entre pontos sem alvo semântico confiável",
 };
 
 async function requestPersonalOneUseConfirmation(message) {
@@ -7176,7 +7209,7 @@ chrome.notifications?.onButtonClicked?.addListener((id, buttonIndex) => {
   const match = /^mcp-handoff:(\\d+)$/u.exec(id);
   if (match) void resumePersonalHandoff(Number(match[1]));
   const approval = /^mcp-approval:(\\d+)$/u.exec(id);
-  if (approval) void grantPersonalSiteApproval(Number(approval[1]));
+  if (approval) void grantPersonalSiteApproval(Number(approval[1]), buttonIndex === 1);
 });
 chrome.notifications?.onClosed?.addListener((id) => {
   if (id.startsWith("mcp-plan-site:")) pendingPersonalPlanSiteExtensions.get(id)?.done(false);

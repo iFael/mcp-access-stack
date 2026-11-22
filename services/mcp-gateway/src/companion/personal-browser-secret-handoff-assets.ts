@@ -4,18 +4,19 @@
  * Saving either form remains a separate human/production gate.
  */
 export const HANDOFF_SECRET_NAME = "MCP_CONTRACT_PREPARE_TOKEN";
-export const HANDOFF_EXTENSION_VERSION = "1.17.2";
+export const HANDOFF_EXTENSION_VERSION = "1.17.3";
 export const HANDOFF_POPUP_HTML = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MCP V3</title><style>
 :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101114;color:#f5f5f5}
-body{width:290px;margin:0;padding:16px;font-size:13px;line-height:1.5}
+body{width:290px;margin:0;padding:16px;font-size:13px;line-height:1.5}button[hidden]{display:none}#tab-revoke{margin-top:8px;background:#27282d;border-color:#777}
 h1{font-size:16px;margin:0 0 10px}p{color:#bdbdbd}
 button{width:100%;padding:12px;border:1px solid #a74949;border-radius:8px;background:#3b2024;color:white;cursor:pointer}
 button:disabled{opacity:.55}
 </style></head><body>
 <h1>MCP V3</h1><p id="tab-status" role="status" aria-live="polite">Verificando conexão…</p>
 <button id="tab-stop" type="button">Parar o MCP</button>
+<button id="tab-revoke" type="button" hidden>Revogar permissões deste site</button>
 <script src="tab-sharing.js"></script></body></html>`;
 
 export const HANDOFF_SECURE_CHANNEL_HTML = `<!doctype html>

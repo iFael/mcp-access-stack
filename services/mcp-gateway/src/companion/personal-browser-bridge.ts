@@ -1357,7 +1357,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       } catch { throw error; }
       const sensitive = new Set([
         "purchase-or-payment", "delete-or-cancel", "send-message", "publish-content",
-        "change-credentials", "accept-terms-or-contract",
+        "change-credentials", "accept-terms-or-contract", "unverified-pointer-action",
       ]);
       if (!sensitive.has(String(request.category)) ||
           typeof request.confirmationId !== "string" ||
@@ -1874,8 +1874,9 @@ async function sweepStaleStagedUploads(root: string): Promise<void> {
 }
 
 function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalSiteApprovals | undefined {
-  const { grants, autoSites } = message;
-  if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200) return undefined;
+  const { grants, autoSites, permanentScriptOrigins = [] } = message;
+  if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200 ||
+      !Array.isArray(permanentScriptOrigins) || permanentScriptOrigins.length > 100) return undefined;
   const parsedGrants: PersonalSiteGrant[] = [];
   for (const grant of grants) {
     if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
@@ -1895,7 +1896,10 @@ function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalS
     }
   }
   if (autoSites.some((site) => typeof site !== "string" || !/^[a-z0-9.-]{1,253}$/u.test(site))) return undefined;
-  return { grants: parsedGrants, autoSites: [...autoSites] as string[] };
+  if (permanentScriptOrigins.some((origin) => typeof origin !== "string" ||
+      !/^https:\/\/[^/\s]{1,260}$/u.test(origin) || new URL(origin).origin !== origin)) return undefined;
+  return { grants: parsedGrants, autoSites: [...autoSites] as string[],
+    permanentScriptOrigins: [...permanentScriptOrigins] as string[] };
 }
 
 function sendCancel(socket: WebSocket, id: string): void {

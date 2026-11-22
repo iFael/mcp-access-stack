@@ -97,6 +97,40 @@ describe("personal browser authorization", () => {
       .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
   });
 
+  it("identifies unverified pixel drags without mislabeling them as form submissions", () => {
+    const policy = prepare();
+    const drag = { tabId: sample.tabId, from: { x: 40, y: 50 }, to: { x: 240, y: 250 }, steps: 15 };
+    const confirmation = (action: () => unknown) => {
+      try {
+        action();
+        throw new Error("Expected a confirmation");
+      } catch (error) {
+        const typed = error as { code: string; message: string };
+        if (typed.code !== "ACTION_REQUIRES_CONFIRMATION") throw error;
+        return JSON.parse(typed.message.slice(typed.message.indexOf("{"))) as {
+          confirmationId: string; category: string; action: string;
+        };
+      }
+    };
+    const first = confirmation(() => policy.guardPixelDrag(drag, sample.url));
+    expect(first).toMatchObject({ category: "unverified-pointer-action", action: "pixel-drag" });
+    expect(() => policy.guardPixelDrag({ ...drag, to: { x: 241, y: 250 },
+      confirmationId: first.confirmationId }, sample.url))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+    expect(policy.guardPixelDrag({ ...drag, confirmationId: first.confirmationId }, sample.url))
+      .toMatchObject({
+        fromGuard: { pixel: true, x: 40, y: 50 },
+        toGuard: { pixel: true, x: 240, y: 250 },
+      });
+    expect(() => policy.guardPixelDrag({ ...drag, confirmationId: first.confirmationId }, sample.url))
+      .toThrow(expect.objectContaining({ code: "BROWSER_CONFIRMATION_INVALID" }));
+
+    policy.observeTab({ tabId: sample.tabId, url: "https://shop.example/checkout" });
+    policy.observeSnapshot({ ...sample, url: "https://shop.example/checkout", title: "Checkout" });
+    expect(confirmation(() => policy.guardPixelDrag(drag, "https://shop.example/checkout")))
+      .toMatchObject({ category: "purchase-or-payment", action: "pixel-drag" });
+  });
+
   it("guards both drag endpoints and binds destructive confirmation to exact target pair", () => {
     const policy = prepare();
     const from = { ref: "p-2" };
@@ -279,6 +313,24 @@ describe("personal browser authorization", () => {
     policy.observeTab({ tabId: sample.tabId, url: sample.url, taskId: "task-1" });
     policy.observeSnapshot(sample);
     expect(outcome(() => policy.guardUpload(upload))).toBe("ACTION_REQUIRES_CONFIRMATION");
+  });
+
+  it("honors remembered JavaScript permission only on its exact HTTPS origin", () => {
+    const policy = prepare();
+    const script = { tabId: sample.tabId, function: "() => document.title" };
+    policy.setSiteApprovals({ grants: [], autoSites: [], permanentScriptOrigins: ["https://example.com"] });
+    expect(policy.guardEvaluate(script)).toEqual({ url: sample.url });
+    expect(() => policy.guardUpload({ tabId: sample.tabId, selector: "input[type=file]",
+      files: [{ name: "x.txt", contentBase64: "eA==" }] }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    expect(() => policy.guardClick({ tabId: sample.tabId, ref: "p-1" }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    policy.observeTab({ tabId: sample.tabId, url: "https://example.com:8443/" });
+    policy.observeSnapshot({ ...sample, url: "https://example.com:8443/" });
+    expect(() => policy.guardEvaluate(script)).toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    policy.observeTab({ tabId: sample.tabId, url: "https://other.example.com/" });
+    policy.observeSnapshot({ ...sample, url: "https://other.example.com/" });
+    expect(() => policy.guardEvaluate(script)).toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
   });
 
   it("treats saving or going on as the page's own risk on checkout pages, even on automatic sites", () => {

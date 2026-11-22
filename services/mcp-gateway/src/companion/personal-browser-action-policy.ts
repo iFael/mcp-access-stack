@@ -45,6 +45,7 @@ export type PersonalSiteGrant = { origin: string; category: string } & ({ taskId
 export interface PersonalSiteApprovals {
   grants: readonly PersonalSiteGrant[];
   autoSites: readonly string[];
+  permanentScriptOrigins?: readonly string[];
 }
 
 export interface PersonalSiteApprovalRequest {
@@ -253,7 +254,7 @@ export class PersonalBrowserActionPolicy {
     ])).digest("hex");
     this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
       { tabId: input.tabId, url: page.url },
-      this.interactions.pageRiskCategory(page) ?? "submit-form", "pixel-drag", "sha256:" + target,
+      this.interactions.pageRiskCategory(page) ?? "unverified-pointer-action", "pixel-drag", "sha256:" + target,
     ));
     return { fromGuard, toGuard };
   }
@@ -464,6 +465,9 @@ export class PersonalBrowserActionPolicy {
     const taskId = this.pages.get(binding.tabId)?.taskId;
     if (approvals.grants.some((grant) => grant.origin === binding.origin && grant.category === binding.category &&
         ("taskId" in grant ? grant.taskId === taskId : grant.tabId === binding.tabId))) return true;
+    // Only an explicitly approved exact HTTPS origin may retain JavaScript permission across tasks.
+    if (binding.category === "execute-script" && binding.action === "evaluate" &&
+        approvals.permanentScriptOrigins?.includes(binding.origin)) return true;
     return approvals.autoSites.includes(new URL(binding.origin).hostname);
   }
 
