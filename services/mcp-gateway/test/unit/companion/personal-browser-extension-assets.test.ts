@@ -79,9 +79,9 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.6");
+    expect(manifest.version).toBe("1.17.7");
     expect(manifest.action).not.toHaveProperty("default_popup");
-    expect(manifest.action.default_title).toContain("Parar");
+    expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
     expect(manifest.options_page).toBe("secret-provision.html");
     expect(assets).not.toHaveProperty("popupHtml");
@@ -93,41 +93,61 @@ describe("personal browser extension assets", () => {
     expect(assets.secureChannelScript).toContain("mcp-secret-fill");
   });
 
-  it("uses trusted Chrome gestures for stop and exact-site revocation, not page messages", async () => {
+  it("toggles sharing only the clicked tab and never closes it", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const owned: Record<string, { ownership: string; mcpGroupId?: number }> = {
+      "7": { ownership: "mcp", mcpGroupId: 23 },
+      "8": { ownership: "user", mcpGroupId: 23 },
+    };
     const events: Array<Record<string, unknown>> = [];
     const context = vm.createContext({
-      URL, Number, Object, PERSONAL_REVOKE_MENU_ID: "mcp-revoke-site",
-      readOwnedTabs: async () => ({ 7: { ownership: "mcp" } }),
-      finishTask: async (input: Record<string, unknown>) => { events.push({ action: "stop", ...input }); },
-      personalTabSharingDispatch: async (input: Record<string, unknown>) => { events.push(input); },
+      URL, Number, Object, String, PERSONAL_REVOKE_MENU_ID: "mcp-revoke-site",
+      enqueueMutation: async (_key: string, job: () => Promise<unknown>) => job(),
+      readOwnedTabs: async () => owned,
+      releasePersonalGroupTab: async (id: number) => {
+        events.push({ action: "release", id }); delete owned[String(id)];
+      },
+      setPersonalSharedBadge: async (id: number, value: boolean) => { events.push({ action: "badge", id, value }); },
+      personalTabSharingDispatch: async (input: { type: string; tabId: number }) => {
+        events.push(input);
+        if (input.type === "mcp-tab-share") owned[String(input.tabId)] = { ownership: "user", mcpGroupId: 23 };
+        if (input.type === "mcp-tab-unshare") delete owned[String(input.tabId)];
+      },
       assertPersonalNavigationTarget: (url: string) => {
         if (!url.startsWith("https://")) throw new Error("private");
         return url;
       },
+      chrome: {
+        tabs: {
+          get: async (id: number) => ({ id, groupId: 23 }),
+          ungroup: async (id: number) => { events.push({ action: "ungroup", id }); },
+        },
+      },
     });
-    const stop = vm.runInContext(`(${extractFunction(serviceWorker, "personalBrowserToolbarClick")})`, context) as
+    const toggle = vm.runInContext(`(${extractFunction(serviceWorker, "personalBrowserToolbarClick")})`, context) as
       (tab: { id?: number | string }) => Promise<boolean>;
     const revoke = vm.runInContext(`(${extractFunction(serviceWorker, "personalBrowserRevokeMenuClick")})`, context) as
       (info: { menuItemId: string }, tab: { id: number; url: string }) => Promise<boolean>;
-
-    await expect(stop({ id: 7 })).resolves.toBe(true);
-    await expect(stop({ id: "7" })).resolves.toBe(false);
-    await expect(revoke({ menuItemId: "unknown" }, { id: 7, url: "https://example.com/" })).resolves.toBe(false);
-    await expect(revoke({ menuItemId: "mcp-revoke-site" }, { id: 7, url: "chrome://settings/" })).resolves.toBe(false);
+    await expect(toggle({ id: 7 })).resolves.toBe(true);
+    await expect(toggle({ id: 8 })).resolves.toBe(true);
+    await expect(toggle({ id: 9 })).resolves.toBe(true);
+    await expect(toggle({ id: 9 })).resolves.toBe(true);
+    await expect(toggle({ id: "9" })).resolves.toBe(false);
     await expect(revoke({ menuItemId: "mcp-revoke-site" }, { id: 7, url: "https://example.com/a" }))
       .resolves.toBe(true);
-    expect(events).toEqual([
-      { action: "stop", keepOpen: true },
-      { type: "mcp-tab-revoke", tabId: 7, expectedOrigin: "https://example.com" },
+    expect(events.filter((x) => x.action === "release")).toEqual([{ action: "release", id: 7 }]);
+    expect(events.filter((x) => x.type === "mcp-tab-share")).toEqual([{ type: "mcp-tab-share", tabId: 9 }]);
+    expect(events.filter((x) => x.type === "mcp-tab-unshare")).toEqual([
+      { type: "mcp-tab-unshare", tabId: 8 }, { type: "mcp-tab-unshare", tabId: 9 },
     ]);
+    expect(events).not.toContainEqual(expect.objectContaining({ action: "close" }));
     expect(serviceWorker).toContain('contexts: ["action"]');
   });
 
   it("registers native toolbar and context-menu actions without a popup", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const start = serviceWorker.indexOf("chrome.action?.onClicked?.addListener");
-    const end = serviceWorker.indexOf("// Plans and MCP tabs change", start);
+    const end = serviceWorker.indexOf("// Remove plan approvals and navigation restrictions", start);
     const events: string[] = [];
     let toolbar: ((tab: { id: number }) => void) | undefined;
     let contextMenu: ((info: { menuItemId: string }, tab: { id: number }) => void) | undefined;
@@ -3596,7 +3616,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.6");
+    expect(parsedManifest.version).toBe("1.17.7");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -3736,7 +3756,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       'const PERSONAL_PERMANENT_SCRIPT_ORIGINS_KEY = "mcpV3RememberedJavaScriptOrigins"; ' + // gitleaks:allow -- fixed browser storage slot names, not credentials
       'const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "toBrowserTab",
-      "personalTabContextEnabled", "personalPlanRequired", "listPersonalOpenTabs", "personalTabSharingDispatch",
+      "personalTabContextEnabled", "listPersonalOpenTabs", "personalTabSharingDispatch",
       "personalApprovalStatus", "readPersonalApprovalRequest", "readPersonalSiteGrants", "readPersonalAutoSites",
       "readPersonalPermanentScriptOrigins", "clearPersonalApprovalRequest",
       "releasePersonalSharedTab", "setPersonalSharedBadge", "tabs", "finishTask",
@@ -3753,7 +3773,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
     await expect(dispatch({ type: "mcp-tab-status", tabId: 5 })).resolves.toEqual({
-      ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false, requirePlan: false,
+      ok: true, shared: false, mcp: false, shareable: true, context: false, notify: false,
       confirmDrag: false, autoEligible: true, auto: false, autoSites: [], grants: [], permanentScript: false,
       inbox: expect.objectContaining({ recent: [] }),
       wake: { enabled: true, waiting: 0, recent: [] },
@@ -3854,7 +3874,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       'const PERSONAL_AUTO_SITES_KEY = "mcpV3AutoApproveSites"; const PERSONAL_APPROVAL_REQUEST_PREFIX = "mcpV3ApprovalRequest:";', context);
     for (const fn of ["readPersonalHandoff", "refuseDuringPersonalHandoff", "waitForUser", "resumePersonalHandoff",
       "clearPersonalHandoff", "settlePersonalHandoffSignals", "setPersonalSharedBadge", "notifyPersonalTaskFinished",
-      "personalTabContextEnabled", "personalPlanRequired", "personalTabSharingDispatch",
+      "personalTabContextEnabled", "personalTabSharingDispatch",
       "personalApprovalStatus", "readPersonalApprovalRequest", "readPersonalSiteGrants", "readPersonalAutoSites",
       "isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
@@ -4022,232 +4042,37 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(replies).toEqual([{ ok: true }]);
   });
 
-  it("shows a plan in its own window, lets the user trim it, and holds MCP to the approved sites and actions", async () => {
+  it("clears retired plan metadata and navigation rules without affecting other Chrome policies", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
-    const start = serviceWorker.indexOf("const PERSONAL_PLANS_KEY");
-    const end = serviceWorker.indexOf("async function finalizePersonalDialog");
-    const session = new Map<string, unknown>();
-    const local = new Map<string, unknown>();
-    const storageArea = (map: Map<string, unknown>) => ({
-      get: async (key: string) => ({ [key]: map.get(key) }),
-      set: async (entries: Record<string, unknown>) => { for (const [key, value] of Object.entries(entries)) map.set(key, value); },
-      remove: async (key: string) => { map.delete(key); },
-    });
-    const owned: Record<string, Record<string, unknown>> = {
-      "7": { tabId: "personal:7", ownership: "mcp", taskId: "t1" },
-      "8": { tabId: "personal:8", ownership: "user" },
-      "9": { tabId: "personal:9", ownership: "mcp", taskId: "t2" },
-    };
-    const urls: Record<number, string> = {
-      7: "https://www.shop.example/cart", 8: "https://help.shop.example/", 9: "https://other.example/",
-    };
-    const windows: Array<Record<string, unknown>> = [];
-    const removedWindows: number[] = [];
-    const taskScopeReports: Array<Record<string, unknown>> = [];
-    const notifications: Array<[string, string, Record<string, unknown>?]> = [];
-    let onTick: (() => Promise<void>) | undefined;
-    let onSiteRequest: ((id: string) => Promise<void>) | undefined;
-    let uuid = 0;
-    const coded = (code: string, message: string) => Object.assign(new Error(message), { code });
-    type Rule = Record<string, unknown> & { id: number };
-    let sessionRules: Rule[] = [{ id: 1, priority: 1, action: { type: "allow" }, condition: { urlFilter: "other" } }];
+    expect(serviceWorker).not.toContain('type: "popup"');
+    expect(serviceWorker).not.toContain('plan-review.html');
+    expect(serviceWorker).not.toContain('mcp-plan-decide');
+    expect(serviceWorker).not.toContain("enforcePersonalPlan");
+    const removed: string[] = [];
+    let rules = [{ id: 7000 }, { id: 7001 }, { id: 3 }];
     const context = vm.createContext({
-      URL, Date, Number, String, Math, Promise, Array, Object, Set, coded,
-      PERSONAL_NOTIFICATION_ICON: "data:image/png;base64,AA==",
-      send: (message: Record<string, unknown>) => { taskScopeReports.push(message); },
-      readPersonalSiteGrants: async () => [],
-      readPersonalAutoSites: async () => [],
-      readPersonalPermanentScriptOrigins: async () => [],
-      crypto: { randomUUID: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd` },
-      chromeTabIdFrom: (id: string) => {
-        const match = /^personal:(\d+)$/u.exec(String(id));
-        if (!match) throw coded("INVALID_ARGUMENT", "bad tab id");
-        return Number(match[1]);
-      },
-      requireOwnedMetadata: async (id: number) => {
-        if (!owned[String(id)]) throw coded("TAB_NOT_OWNED", "not owned");
-        return owned[String(id)];
-      },
-      readOwnedTabs: async () => owned,
-      releasePersonalTaskDebugger: async () => undefined,
-      delay: async () => { await onTick?.(); },
+      RETIRED_PLANS_KEY: "mcpV3PersonalPlans",
+      RETIRED_REQUIRE_PLAN_KEY: "mcpV3RequirePlan",
+      RETIRED_PLAN_RULE_BASE: 7000,
+      RETIRED_PLAN_RULE_LIMIT: 1000,
       chrome: {
-        runtime: { getURL: (file: string) => "chrome-extension://ext/" + file },
-        tabs: { get: async (id: number) => ({ id, url: urls[id], title: "Aba " + id }) },
-        windows: {
-          create: async (options: Record<string, unknown>) => { windows.push(options); return { id: 100 + windows.length }; },
-          remove: async (id: number) => { removedWindows.push(id); },
-        },
-        storage: { session: storageArea(session), local: storageArea(local) },
-        notifications: {
-          create: async (id: string, options: Record<string, unknown>) => { notifications.push(["create", id, options]); },
-          clear: async (id: string) => { notifications.push(["clear", id]); },
+        storage: {
+          session: { remove: async (key: string) => { removed.push(key); } },
+          local: { remove: async (key: string) => { removed.push(key); } },
         },
         declarativeNetRequest: {
-          getSessionRules: async () => sessionRules,
-          updateSessionRules: async ({ removeRuleIds, addRules }: { removeRuleIds: number[]; addRules: Rule[] }) => {
-            sessionRules = [...sessionRules.filter((rule) => !removeRuleIds.includes(rule.id)), ...addRules];
+          getSessionRules: async () => rules,
+          updateSessionRules: async ({ removeRuleIds }: { removeRuleIds: number[] }) => {
+            rules = rules.filter((rule) => !removeRuleIds.includes(rule.id));
           },
         },
       },
     });
-    Object.assign(context, { setTimeout, clearTimeout,
-      assertPersonalNavigationTarget: (url: string) => url });
-    const notificationsMock = (context as unknown as { chrome: { notifications: {
-      create(id: string, options: Record<string, unknown>): Promise<void>,
-    } } }).chrome.notifications;
-    const originallyCreate = notificationsMock.create;
-    notificationsMock.create = async (id, options) => {
-      await originallyCreate(id, options);
-      if (id.startsWith("mcp-plan-site:")) queueMicrotask(() => void onSiteRequest?.(id));
-    };
-    vm.runInContext(serviceWorker.slice(start, end), context);
-    vm.runInContext(extractFunction(serviceWorker, "pushPersonalSiteApprovals"), context);
-    loadGroupSupport(context, serviceWorker);
-    vm.runInContext("const withOwnershipLock = (work) => work();", context);
-    const syncRules = vm.runInContext("syncPersonalPlanNavigationRules", context) as () => Promise<void>;
-    const planRules = async () => {
-      await syncRules();
-      return sessionRules.filter((rule) => rule.id !== 1);
-    };
-    const blockOutside = (tabIds: number[], domains: string[], id = 7000) => ({ id, priority: 1, action: { type: "block" },
-      condition: { tabIds, resourceTypes: ["main_frame"], excludedRequestDomains: domains } });
-    type Plan = Record<string, unknown> & { planId: string };
-    const plan = vm.runInContext("personalPlan", context) as (input: Record<string, unknown>) => Promise<Plan>;
-    const review = vm.runInContext("personalPlanReviewDispatch", context) as
-      (message: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    const enforce = vm.runInContext("enforcePersonalPlan", context) as
-      (operation: string, input: Record<string, unknown>) => Promise<void>;
-    const closeWindow = vm.runInContext("rejectPersonalPlanWindow", context) as (windowId: number) => Promise<void>;
-    const clear = vm.runInContext("clearPersonalPlans", context) as (taskId?: string) => Promise<void>;
-    const blocked = (text: string) => ({ code: "ACTION_BLOCKED_BY_POLICY", message: expect.stringContaining(text) });
-    const decideSite = vm.runInContext("decidePersonalPlanSiteExtension", context) as
-      (id: string, allow: boolean) => Promise<void>;
-    onSiteRequest = (id) => decideSite(id, false);
-
-    // Without a plan or the popup setting, nothing changes.
-    await expect(enforce("evaluate", { tabId: "personal:7" })).resolves.toBeUndefined();
-    await expect(planRules()).resolves.toEqual([]);
-
-    // Nobody decides yet: MCP gets "pending", and the window and the notification wait for the user.
-    const proposal = {
-      taskId: "t1", summary: "Comprar o livro", steps: ["Abrir a loja", "Pagar"],
-      domains: ["shop.example", "pay.example"], actions: ["navigate", "interact", "fill", "evaluate"],
-      tabIds: ["personal:8"], timeoutMs: 1,
-    };
-    const first = await plan(proposal);
-    const { planId } = first;
-    expect(first).toEqual({ planId: expect.stringMatching(/^plan_0+1-/u), taskId: "t1", status: "pending",
-      domains: ["shop.example", "pay.example"], actions: ["navigate", "interact", "fill", "evaluate"], tabIds: ["personal:8"] });
-    expect(windows).toEqual([{ url: "chrome-extension://ext/plan-review.html#" + planId, type: "popup",
-      width: 480, height: 840, focused: true }]);
-    expect(notifications).toEqual([["create", "mcp-plan:" + planId, expect.objectContaining({
-      title: "O MCP propõe um plano", message: "Comprar o livro Sites: shop.example, pay.example", requireInteraction: true,
-    })]]);
-    await expect(review({ type: "mcp-plan-get", planId })).resolves.toEqual({ ok: true, plan: {
-      planId, taskId: "t1", summary: "Comprar o livro", steps: ["Abrir a loja", "Pagar"],
-      domains: ["shop.example", "pay.example"], actions: ["navigate", "interact", "fill", "evaluate"],
-      tabs: ["Aba 8"], status: "pending",
-    } });
-    await expect(review({ type: "mcp-plan-decide", planId, approve: true, domains: [], actions: [] }))
-      .rejects.toThrow("no-domains");
-
-    // While MCP waits again, the user keeps one site and drops JavaScript; extras are ignored.
-    onTick = async () => {
-      onTick = undefined;
-      await review({ type: "mcp-plan-decide", planId, approve: true, domains: ["shop.example", "evil.example"],
-        actions: ["navigate", "interact", "fill", "upload"], feedback: "  Sem JavaScript, por favor  " });
-    };
-    await expect(plan({ planId, timeoutMs: 60_000 })).resolves.toEqual({ planId, taskId: "t1", status: "approved",
-      domains: ["shop.example"], actions: ["navigate", "interact", "fill"], tabIds: ["personal:8"],
-      feedback: "Sem JavaScript, por favor" });
-    expect(notifications.at(-1)).toEqual(["clear", "mcp-plan:" + planId]);
-    expect(taskScopeReports.at(-1)).toMatchObject({ type: "site-approvals", taskScopes: [
-      { taskId: "t1", domains: ["shop.example"], actions: ["navigate", "interact", "fill"] },
-    ] });
-    expect(removedWindows).toEqual([]);
-    await expect(review({ type: "mcp-plan-decide", planId, approve: false })).rejects.toThrow("not-pending");
-
-    // Chrome itself blocks the task's MCP tabs from loading any other site. The shared tab stays the
-    // user's to browse, another task's tab is untouched, and rules that are not the plan's are kept.
-    await expect(planRules()).resolves.toEqual([blockOutside([7], ["shop.example",
-      "login.microsoftonline.com", "login.live.com", "accounts.google.com", "auth.atlassian.com"])]);
-    expect(sessionRules[0]).toMatchObject({ id: 1 });
-
-    // The task's tabs and the listed shared tab work on the approved site and its subdomains.
-    await expect(enforce("click", { tabId: "personal:7" })).resolves.toBeUndefined();
-    await expect(enforce("snapshot", { tabId: "personal:8" })).resolves.toBeUndefined();
-    await expect(enforce("navigate", { tabId: "personal:7", url: "https://shop.example/checkout" })).resolves.toBeUndefined();
-    await expect(enforce("frameSequence", { tabId: "personal:7", steps: [{ action: "index" }, { action: "select" }] }))
-      .resolves.toBeUndefined();
-    await expect(enforce("open", { taskId: "t1", url: "https://pay.example/" })).rejects.toMatchObject(
-      blocked("pay.example was not added to the approved plan"));
-    await expect(enforce("open", { taskId: "t1", url: "https://notshop.example/" })).rejects.toMatchObject(blocked("not added"));
-    await expect(enforce("evaluate", { tabId: "personal:7" })).rejects.toMatchObject(blocked("does not allow evaluate"));
-    await expect(enforce("upload", { tabId: "personal:8" })).rejects.toMatchObject(blocked("does not allow upload"));
-    await expect(enforce("sequence", { tabId: "personal:7",
-      steps: [{ action: "click" }, { action: "navigate", url: "https://evil.example/" }] })).rejects.toMatchObject(blocked("evil.example"));
-    // A link or redirect that left the plan blocks the next action, but MCP may still go back.
-    urls[7] = "https://evil.example/";
-    await expect(enforce("snapshot", { tabId: "personal:7" })).rejects.toMatchObject(blocked("evil.example was not added"));
-    await expect(enforce("goBack", { tabId: "personal:7" })).resolves.toBeUndefined();
-    urls[7] = "https://www.shop.example/cart";
-    // Other tasks and housekeeping are untouched.
-    await expect(enforce("evaluate", { tabId: "personal:9" })).resolves.toBeUndefined();
-    await expect(enforce("closeTab", { tabId: "personal:7" })).resolves.toBeUndefined();
-
-    // The removed popup's old require-plan preference cannot silently
-    // re-enable an invisible mandatory approval on future tasks.
-    local.set("mcpV3RequirePlan", true);
-    await expect(enforce("evaluate", { tabId: "personal:9" })).resolves.toBeUndefined();
-    await expect(enforce("open", { url: "https://shop.example/" })).resolves.toBeUndefined();
-    await expect(enforce("open", { taskId: "t1", url: "https://shop.example/" })).resolves.toBeUndefined();
-    await expect(enforce("dialog", { tabId: "personal:9", action: "respond" })).resolves.toBeUndefined();
-    for (const [operation, input] of [["tabs", {}], ["wait", { tabId: "personal:9", timeoutMs: 1 }],
-      ["dialog", { tabId: "personal:9", action: "inspect" }], ["viewport", { tabId: "personal:9" }],
-      ["finishTask", { taskId: "t2" }]] as const) {
-      await expect(enforce(operation, input)).resolves.toBeUndefined();
-    }
-
-    // A newer proposal supersedes a pending one and closes its window; closing a window rejects its plan.
-    const second = await plan({ ...proposal, tabIds: undefined, domains: ["pay.example"], actions: [] });
-    const third = await plan({ ...proposal, tabIds: undefined, domains: ["pay.example"], actions: ["navigate"] });
-    expect(removedWindows).toEqual([102]);
-    await expect(plan({ planId: second.planId, timeoutMs: 1 })).resolves.toMatchObject({ status: "superseded" });
-    await expect(enforce("click", { tabId: "personal:7" })).resolves.toBeUndefined();
-    await closeWindow(103);
-    await expect(plan({ planId: third.planId, timeoutMs: 1 })).resolves.toMatchObject({
-      status: "rejected", domains: ["pay.example"], feedback: "The user closed the plan window without approving it." });
-
-    // Approving a newer plan for the task replaces the previous one.
-    const fourth = await plan({ ...proposal, tabIds: undefined, domains: ["pay.example"], actions: ["navigate"] });
-    await review({ type: "mcp-plan-decide", planId: fourth.planId, approve: true, domains: ["pay.example"], actions: ["navigate"] });
-    await expect(plan({ planId, timeoutMs: 1 })).resolves.toMatchObject({ status: "superseded" });
-    await expect(enforce("open", { taskId: "t1", url: "https://pay.example/" })).resolves.toBeUndefined();
-    await expect(planRules()).resolves.toEqual([blockOutside([7], ["pay.example",
-      "login.microsoftonline.com", "login.live.com", "accounts.google.com", "auth.atlassian.com"])]);
-    // A user can extend only this approved task by a single Chrome click,
-    // without opening or replacing another plan.
-    onSiteRequest = (id) => decideSite(id, true);
-    await expect(enforce("navigate", { tabId: "personal:7",
-      url: "https://docs.vendor.example/start" })).resolves.toBeUndefined();
-    expect((await planRules())[0]?.condition).toMatchObject({
-      excludedRequestDomains: expect.arrayContaining(["pay.example", "docs.vendor.example"]),
-    });
-    onSiteRequest = (id) => decideSite(id, false);
-    urls[7] = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-    await expect(enforce("snapshot", { tabId: "personal:7" })).resolves.toBeUndefined();
-    urls[7] = "https://www.shop.example/cart";
-    await expect(enforce("snapshot", { tabId: "personal:8" })).resolves.toBeUndefined();
-
-    // Only owned or shared tabs can be listed, and finishing the task ends its plans.
-    await expect(plan({ ...proposal, tabIds: ["personal:12"] })).rejects.toMatchObject({ code: "TAB_NOT_OWNED" });
-    await clear("t1");
-    expect(taskScopeReports.at(-1)).toMatchObject({ type: "site-approvals", taskScopes: [] });
-    await expect(planRules()).resolves.toEqual([]);
-    expect(sessionRules).toEqual([expect.objectContaining({ id: 1 })]);
-    await expect(plan({ planId: fourth.planId })).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
-    await expect(enforce("click", { tabId: "personal:7" })).resolves.toBeUndefined();
+    const clear = vm.runInContext(
+      `(${extractFunction(serviceWorker, "clearRetiredBrowserPlans")})`, context) as () => Promise<void>;
+    await clear();
+    expect(removed).toEqual(["mcpV3PersonalPlans", "mcpV3RequirePlan"]);
+    expect(rules).toEqual([{ id: 3 }]);
   });
 
   it("offers site approvals only in Chrome, grants them only from the user's click and reports them to the bridge", async () => {
@@ -4293,7 +4118,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       'const PERSONAL_TAB_CONTEXT_KEY = "mcpV3PersonalTabContext"; const PERSONAL_HANDOFF_PREFIX = "mcpV3PersonalHandoff:"; ' +
       'const PERSONAL_NOTIFY_ON_FINISH_KEY = "mcpV3NotifyOnFinish"; const PERSONAL_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";', context); // gitleaks:allow -- fixed browser storage slot names, not credentials
     for (const fn of ["isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget", "readPersonalHandoff",
-      "personalTabContextEnabled", "personalPlanRequired", "personalApprovalStatus", "personalTabSharingDispatch"]) {
+      "personalTabContextEnabled", "personalApprovalStatus", "personalTabSharingDispatch"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
     }
     loadGroupSupport(context, serviceWorker);
@@ -4329,7 +4154,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await ask("personal:7", "https://shop.example");
     await expect(grant(7)).resolves.toBe(true);
     const report = sent.at(-1) as { type: string; grants: Array<Record<string, unknown>>; autoSites: string[] };
-    expect(report).toEqual({ type: "site-approvals", autoSites: [], permanentScriptOrigins: [], taskScopes: [],
+    expect(report).toEqual({ type: "site-approvals", autoSites: [], permanentScriptOrigins: [],
       grants: [{ origin: "https://shop.example", category: "upload-file", taskId: "t1" }] });
     // No time limit: the grant is held until its task ends.
     expect(session.get("mcpV3SiteGrants")).toEqual([{ origin: "https://shop.example", category: "upload-file",
@@ -4407,38 +4232,12 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       .toEqual([]);
   });
 
-  it("answers plan window messages only from the extension's plan page", async () => {
-    const { serviceWorker, planReviewHtml, planReviewScript } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
-    const marker = 'message.type.startsWith("mcp-plan-")';
-    const start = serviceWorker.lastIndexOf("if (chrome.runtime.onMessage", serviceWorker.indexOf(marker));
-    const listenerSource = serviceWorker.slice(start, serviceWorker.indexOf("\n});\n", start) + 4);
-    let handler: ((message: unknown, sender: Record<string, unknown>, reply: (value: unknown) => void) => boolean) | undefined;
-    const dispatched: unknown[] = [];
-    const context = vm.createContext({
-      String,
-      personalPlanReviewDispatch: async (message: unknown) => { dispatched.push(message); return { ok: true }; },
-      chrome: {
-        runtime: {
-          id: "ext", getURL: (file: string) => "chrome-extension://ext/" + file,
-          onMessage: { addListener: (fn: typeof handler) => { handler = fn; } },
-        },
-        storage: { session: {} },
-      },
-    });
-    vm.runInContext(listenerSource, context);
-    const page = { id: "ext", url: "chrome-extension://ext/plan-review.html#plan_00000001" };
-    const decide = { type: "mcp-plan-decide", planId: "plan_00000001", approve: true };
-    expect(handler!({ type: "mcp-tab-share" }, page, () => undefined)).toBe(false);
-    expect(handler!(decide, { ...page, url: "chrome-extension://ext/secret-provision.html" }, () => undefined)).toBe(false);
-    expect(handler!(decide, { ...page, url: "https://evil.example/plan-review.html" }, () => undefined)).toBe(false);
-    expect(handler!(decide, { ...page, id: "other" }, () => undefined)).toBe(false);
-    const replies: unknown[] = [];
-    expect(handler!(decide, page, (value) => replies.push(value))).toBe(true);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(dispatched).toEqual([decide]);
-    expect(replies).toEqual([{ ok: true }]);
-    expect(planReviewHtml).toContain('<script src="plan-review.js"></script>');
-    expect(() => new vm.Script(planReviewScript)).not.toThrow();
+  it("does not register a plan window listener or publish plan assets", () => {
+    const assets = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    expect(assets).not.toHaveProperty("planReviewHtml");
+    expect(assets).not.toHaveProperty("planReviewScript");
+    expect(assets).not.toHaveProperty("taskHomeHtml");
+    expect(assets.serviceWorker).not.toContain('message.type.startsWith("mcp-plan-")');
   });
 
   it("keeps private ownership metadata out of public tab responses", () => {
@@ -4937,7 +4736,7 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     ])).resolves.toEqual({ completed: true, taskId: "t1", closedTabs: 0, closedTabIds: [], pausedTabs: 2,
       pausedTabIds: ["personal:1", "personal:2"], browserClosed: false });
     expect(harness.groups.get(5)).toEqual({ title: "MCP · Loja (em espera)", collapsed: true });
-    expect(harness.clearedPlans).toEqual(["t1"]);
+    expect(harness.clearedPlans).toEqual([]);
     await expect(harness.refuse("click", { tabId: "personal:1" })).rejects.toMatchObject({
       code: "ACTION_BLOCKED_BY_POLICY", message: expect.stringContaining("Task t1 is paused") });
     await expect(harness.refuse("tabs", { tabId: "personal:1" })).resolves.toBeUndefined();
@@ -4955,28 +4754,21 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     expect(harness.finished).toEqual([{ taskId: "t1" }]);
   });
 
-  it("starts a task's group with its first tab when the plan is approved and opens the first site there", async () => {
+  it("enforces a per-task tab limit without requiring a plan", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
-    const harness = groupHarness(serviceWorker);
-    await harness.prepare({ taskId: "t2", summary: "Comparar preços", approvedDomains: ["shop.example"] });
-    expect(harness.created).toEqual([{ url: "chrome-extension://ext/task-home.html#t2", active: true, windowId: 1 }]);
-    const homeId = harness.created.length + 99;
-    expect(harness.grouped).toEqual([{ tabId: homeId, taskId: "t2", label: "Comparar preços" }]);
-    // The home tab's own grouping is not a share.
-    await harness.follow(homeId, 5);
-    expect(harness.owned()[String(homeId)]).toBeUndefined();
-    // Approving again does not open a second one.
-    await harness.prepare({ taskId: "t2", summary: "Comparar preços", approvedDomains: ["shop.example"] });
-    expect(harness.created).toHaveLength(1);
-
-    await expect(harness.takeHome("t2", "https://shop.example/")).resolves.toMatchObject({ id: homeId });
-    expect(harness.chromeTabs.get(homeId)?.url).toBe("https://shop.example/");
-    await expect(harness.takeHome("t2", "https://shop.example/")).resolves.toBeUndefined();
-
-    // Too many tabs for one task: the next open is refused.
-    const many = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [String(200 + index), { taskId: "t3" }]));
-    expect(() => harness.limit(many, "t3")).toThrow("Task t3 already has 20 tabs.");
-    expect(() => harness.limit(many, "t4")).not.toThrow();
+    const context = vm.createContext({ Object, Number,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+    });
+    vm.runInContext('const MAX_PERSONAL_TASK_TABS = 20;', context);
+    vm.runInContext(extractFunction(serviceWorker, "countPersonalTaskTabs"), context);
+    const limit = vm.runInContext(
+      `(${extractFunction(serviceWorker, "enforcePersonalTaskTabLimit")})`, context) as
+      (owned: Record<string, unknown>, taskId: string) => void;
+    const many = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [
+      String(200 + index), { taskId: "t3" },
+    ]));
+    expect(() => limit(many, "t3")).toThrow("already has 20 tabs");
+    expect(() => limit(many, "t4")).not.toThrow();
   });
 
   it("serializes mutations that share the same queue key", async () => {
@@ -5208,15 +5000,15 @@ const TASK_MESSAGE_FUNCTIONS = ["withPersonalTaskMessages", "readPersonalTaskMes
   "readPersonalTaskQuestions", "pushPersonalTaskMessages", "markPersonalTaskMessagesDelivered",
   "recordPersonalTaskQuestion", "clearPersonalTaskQuestion", "personalTaskMessageTarget", "sendPersonalTaskMessage",
   "recordPersonalExternalTaskMessage", "personalTaskInboxStatus", ...WAKE_FUNCTIONS];
-const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_TASK_HOMES_KEY", "PERSONAL_PENDING_SHARES_KEY",
+const GROUP_SUPPORT_CONSTANTS = ["PERSONAL_GROUP_TASKS_KEY", "PERSONAL_PENDING_SHARES_KEY",
   "PERSONAL_CONFIRM_DRAG_KEY", "MAX_PERSONAL_TASK_TABS", "PERSONAL_PAUSE_LIMIT_MS", "PERSONAL_PAUSED_SUFFIX",
   "PERSONAL_POPUP_SHARE_PREFIX", "pendingMcpTabs", ...TASK_MESSAGE_CONSTANTS];
 const GROUP_SUPPORT_FUNCTIONS = ["readSessionMap", "changeSessionMap", "rememberMcpGroup", "mcpGroupTask",
   "forgetMcpTaskGroups", "countPersonalTaskTabs", "enforcePersonalTaskTabLimit", "followPersonalTabGroup", "isPopupShareGroup",
   "attachSharedTabToTask", "releasePersonalGroupTab", "joinPersonalTaskGroup", "sharePersonalTabWithTask",
   "readPendingPersonalShare", "answerPersonalShare", "refusePersonalGroupShare", "notifyPersonalShare", "personalDragShareNeedsConfirmation",
-  "mcpGroupTitle", "preparePersonalTaskGroup", "takePersonalTaskHome", "closePersonalTaskHomes",
-  "personalTaskHomeDispatch", "pausePersonalTask", "resumePersonalTask", "stylePersonalTaskGroups",
+  "mcpGroupTitle",
+  "pausePersonalTask", "resumePersonalTask", "stylePersonalTaskGroups",
   "refusePausedPersonalTab", "sweepPausedPersonalTasks", ...TASK_MESSAGE_FUNCTIONS];
 
 // The task group helpers (sharing by group, the task's first tab, pausing) for a
@@ -5340,8 +5132,6 @@ ${extractConst(serviceWorker, "MAX_MCP_GROUP_LABEL_CHARS")}`, context);
     resume: run<(taskId: string) => Promise<number>>("resumePersonalTask"),
     refuse: run<(operation: string, input: Record<string, unknown>) => Promise<void>>("refusePausedPersonalTab"),
     sweep: run<() => Promise<void>>("sweepPausedPersonalTasks"),
-    prepare: run<(plan: Record<string, unknown>) => Promise<void>>("preparePersonalTaskGroup"),
-    takeHome: run<(taskId: string, url: string) => Promise<FakeTab | undefined>>("takePersonalTaskHome"),
     limit: run<(owned: Record<string, unknown>, taskId: string) => void>("enforcePersonalTaskTabLimit"),
     regroup: run<(tabId: number, previousGroupId: number, windowId: number) => Promise<void>>("regroupMovedPersonalTab"),
   };

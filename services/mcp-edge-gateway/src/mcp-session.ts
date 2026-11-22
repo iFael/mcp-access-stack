@@ -1178,13 +1178,17 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.activeMcpCatalog,
       {
         handle: async (body, principal, request) => {
-          try {
+          // Release-plan binding remains fail-closed. Progress on ordinary
+          // tools is presentation-only, so its failure must not block execution.
+          if (isRecord(body) && isRecord(body.params) && body.params.name === "mcp_update") {
             await this.progressPlans.startTool(body, principal.userId);
-          } catch {
-            // Progress is presentation state, not a prerequisite to execute a tool.
-            console.warn(JSON.stringify({ event: "mcp_auto_progress_start_failed" }));
+          } else {
+            try {
+              await this.progressPlans.startTool(body, principal.userId);
+            } catch {
+              console.warn(JSON.stringify({ event: "mcp_auto_progress_start_failed" }));
+            }
           }
-          await this.progressPlans.openForUpdate(body, principal.userId);
           const progress = await this.progressPlans.handle(body, principal.userId);
           if (progress) return progress;
           const cloudResponse = await this.repositoryControlPlane.handle(body, principal);

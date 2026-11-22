@@ -156,7 +156,6 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   browser_finish_task: "",
 
   // Talking to the user
-  browser_plan: "status=pending: call it again with the planId alone; approved: browser_open with the task's taskId.",
   browser_user_messages: "with options: end your answer, the choice is written into this conversation; otherwise keep working.",
   browser_user_reply: "",
   browser_progress: "browser_progress_update with the planId when a step changes.",

@@ -83,14 +83,14 @@ describe("embedded gateway HTTP surface", () => {
         tool._meta = meta;
         if (["browser_user_messages", "browser_user_reply", "browser_progress_read", "browser_user_card"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }], "openai/widgetAccessible": true });
-        } else if (["browser_progress", "github_get_pull_request", "mcp_update"].includes(String(tool.name))) {
+        } else if (["browser_progress", "mcp_update"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }],
             "openai/outputTemplate": expect.stringMatching(/^ui:\/\/mcp-v3\//u) });
         } else if (tool.name === "browser_progress_update") {
           // Internal progress mutations do not create their own visible cards.
           expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
         } else {
-          // One card belongs to the explicit progress tool, not every MCP call.
+          // Ordinary tools, including github_get_pull_request, must not mount cards.
           expect(tool._meta).toEqual({ securitySchemes: [{ type: "noauth" }] });
         }
       }

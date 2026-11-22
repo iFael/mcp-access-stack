@@ -46,11 +46,6 @@ export interface PersonalSiteApprovals {
   grants: readonly PersonalSiteGrant[];
   autoSites: readonly string[];
   permanentScriptOrigins?: readonly string[];
-  taskScopes?: readonly {
-    taskId: string;
-    domains: readonly string[];
-    actions: readonly string[];
-  }[];
 }
 
 export interface PersonalSiteApprovalRequest {
@@ -473,14 +468,7 @@ export class PersonalBrowserActionPolicy {
     // Only an explicitly approved exact HTTPS origin may retain JavaScript permission across tasks.
     if (binding.category === "execute-script" && binding.action === "evaluate" &&
         approvals.permanentScriptOrigins?.includes(binding.origin)) return true;
-    // An explicitly approved task plan already authorizes these routine operations.
-    // Both the site and action must be inside this exact task's approved scope.
-    const action = binding.category === "upload-file" ? "upload" :
-      binding.category === "execute-script" ? "evaluate" : "interact";
     const host = new URL(binding.origin).hostname.toLowerCase();
-    if (taskId && approvals.taskScopes?.some((scope) =>
-      scope.taskId === taskId && scope.actions.includes(action) &&
-      scope.domains.some((domain) => host === domain || host.endsWith("." + domain)))) return true;
     return approvals.autoSites.includes(host);
   }
 

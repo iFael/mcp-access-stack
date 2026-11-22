@@ -348,6 +348,8 @@ export class ProgressPlans {
   /** A normal MCP tool starts or advances a phase without an agent-side card call. */
   async startTool(body: unknown, userId: string | undefined): Promise<void> {
     const name = progressToolName(body);
+    // One native entry point handles ordinary tool progress and update-plan binding.
+    if (name === "mcp_update") await this.bindUpdateToPlan(body, userId);
     const session = progressSession(body);
     if (!name || !session || !userId) return;
     const phase = phaseForTool(name);
@@ -476,7 +478,7 @@ export class ProgressPlans {
    * the call goes on to the execution node: its answer shows the card, and
    * the agent never has to remember to open one.
    */
-  async openForUpdate(body: unknown, userId: string | undefined): Promise<void> {
+  private async bindUpdateToPlan(body: unknown, userId: string | undefined): Promise<void> {
     if (!userId || !isRecord(body) || body.method !== "tools/call" || !isRecord(body.params) || body.params.name !== "mcp_update") return;
     const args = body.params.arguments;
     if (!isRecord(args) || args.action !== "start" || args.planId !== undefined) return;

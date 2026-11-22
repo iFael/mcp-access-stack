@@ -353,21 +353,23 @@ describe("BrowserModeRouter", () => {
     expect(managed.finishTask).not.toHaveBeenCalled();
   });
 
-  it("sends plans to personal Chrome and refuses them for managed tasks", async () => {
+  it("opens ordinary personal-browser tasks directly without a plan approval", async () => {
     const managed = managedExecutor();
     const personal = personalExecutor();
-    const result = { planId: "plan_00000001", taskId: "task-plan", status: "pending" as const,
-      domains: ["shop.example"], actions: [] };
-    personal.plan = jest.fn(async () => result);
     const router = new BrowserModeRouter(managed, personal);
-    const proposal = { taskId: "task-plan", summary: "Ler", steps: ["Ler a página"], domains: ["shop.example"], actions: [] };
-
-    await expect(router.plan(proposal)).resolves.toEqual(result);
-    await router.open({ taskId: "task-managed", url: "https://example.test/" });
-    await expect(router.plan({ ...proposal, taskId: "task-managed" })).rejects.toMatchObject({
-      code: "BROWSER_OPERATION_MODE_UNSUPPORTED",
+    const opened = await router.open({
+      taskId: "task-direct", browserMode: "personal", url: "https://example.test/",
     });
-    expect(personal.plan).toHaveBeenCalledTimes(1);
+    expect(opened.tab).toMatchObject({
+      tabId: "personal:42", taskId: "task-direct", url: "https://example.test/",
+    });
+    expect(personal.open).toHaveBeenCalledTimes(1);
+    expect(managed.open).not.toHaveBeenCalled();
+    const managedOpened = await router.open({
+      taskId: "task-managed", browserMode: "managed", url: "https://example.test/",
+    });
+    expect(managedOpened.tab.tabId).toBe("managed:1");
+    expect(managed.open).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when personal mode is requested without a connected extension", async () => {
