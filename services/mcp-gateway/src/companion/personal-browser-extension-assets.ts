@@ -621,12 +621,14 @@ async function personalTabSharingDispatch(message) {
       const owned = await readOwnedTabs();
       if (owned[String(tab.id)]) throw Error("already-owned");
       const current = await chrome.tabs.get(tab.id);
-      const sharedUrl = assertPersonalNavigationTarget(current.url);
+      // A fresh Chrome New Tab may be grouped, but never inspected until it
+      // navigates to a permitted http(s) page.
+      const sharedUrl = personalShareTarget(current.url);
       const now = new Date().toISOString();
       owned[String(tab.id)] = {
         tabId: PERSONAL_PREFIX + tab.id, lifecycle: "external", ownership: "user",
         purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
-        createdAt: now, lastUsedAt: now, requestedUrl: sharedUrl,
+        createdAt: now, lastUsedAt: now, ...(sharedUrl ? { requestedUrl: sharedUrl } : {}),
       };
       await writeOwnedTabs(owned);
       return sharedUrl;
@@ -5968,7 +5970,7 @@ async function joinPersonalTaskGroup(chromeTabId, taskId, groupId) {
     return;
   }
   try {
-    assertPersonalNavigationTarget(tab.url);
+    personalShareTarget(tab.url);
   } catch {
     await refusePersonalGroupShare(chromeTabId, "Endereço privado, local ou página interna do Chrome.");
     return;
@@ -5995,7 +5997,7 @@ async function sharePersonalTabWithTask(chromeTabId, taskId, groupId) {
   if (!tab || tab.groupId !== groupId) return false;
   let url;
   try {
-    url = assertPersonalNavigationTarget(tab.url);
+    url = personalShareTarget(tab.url);
   } catch {
     return false;
   }
@@ -6007,7 +6009,7 @@ async function sharePersonalTabWithTask(chromeTabId, taskId, groupId) {
       tabId: PERSONAL_PREFIX + chromeTabId, ...(isPopupShareGroup(taskId) ? {} : { taskId }),
       lifecycle: "external", ownership: "user",
       purpose: "Aba compartilhada pelo usuário", reusable: false, protected: true, sticky: false,
-      mcpGroupId: groupId, createdAt: now, lastUsedAt: now, requestedUrl: url,
+      mcpGroupId: groupId, createdAt: now, lastUsedAt: now, ...(url ? { requestedUrl: url } : {}),
     };
     await writeOwnedTabs(owned);
     return true;
@@ -6621,6 +6623,15 @@ function extractPage(ref, selector, format, expectedUrl) {
     };
   }
   return { found: true, value: target.innerText || target.textContent || "" };
+}
+
+function personalShareTarget(rawUrl) {
+  // Grouping is not permission to read Chrome-internal content. Page commands
+  // still call assertPersonalNavigationTarget and fail closed until navigation.
+  if (["chrome://newtab", "chrome://newtab/", "chrome://new-tab-page", "chrome://new-tab-page/"].includes(rawUrl)) {
+    return undefined;
+  }
+  return assertPersonalNavigationTarget(rawUrl);
 }
 
 function assertPersonalNavigationTarget(rawUrl) {
