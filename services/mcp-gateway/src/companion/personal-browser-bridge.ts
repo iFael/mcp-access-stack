@@ -1577,7 +1577,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       );
     }
 
-    const deadlineAt = new Date(Date.now() + timeoutMs).toISOString();
+    const localDeadline = Date.now() + timeoutMs;
+    const upstreamDeadline = Date.parse(context?.deadline?.deadlineAt ?? "");
+    const deadlineAt = new Date(Number.isFinite(upstreamDeadline)
+      ? Math.min(localDeadline, upstreamDeadline) : localDeadline).toISOString();
     return new Promise((resolve, reject) => {
       const rejectWithTiming = (error: Error, outcome?: "cancelled" | "timeout") => reject(fail(error, outcome));
       const rejectAfterDispatch = (reason: "cancelled" | "timeout") => {
