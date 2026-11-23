@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import { EdgeAccountStore } from "../src/control-plane/account-store.js";
 import { EdgeOwnerOAuth, type OwnerOAuthStorage } from "../src/control-plane/owner-oauth.js";
 
@@ -131,6 +131,109 @@ describe("Edge Owner OAuth durable state", () => {
     expect(persisted).not.toContain(tokens.refresh_token);
     expect(persisted).not.toContain(secondTokens.access_token);
     expect(persisted).not.toContain(secondTokens.refresh_token);
+  });
+
+  it("recovers one rotated refresh within a bounded window without persisting credentials", async () => {
+    const storage = new MemoryStorage();
+    const oauth = new EdgeOwnerOAuth(storage, {
+      ownerSecret: "x".repeat(32),
+      publicBaseUrl: new URL("https://edge.example/"),
+      mcpPath: "/mcp",
+      scopes: ["mcp:tools"],
+      accessTokenTtlSeconds: 3600,
+      refreshTokenTtlSeconds: 2592000,
+      resourceName: "MCP Access Stack",
+    });
+    await new EdgeAccountStore(storage).createSingleUserIdentity("Owner");
+    await oauth.recoverAccess("owner-password");
+
+    const clientResponse = await oauth.handle(jsonRequest("https://edge.example/register", {
+      redirect_uris: ["https://chatgpt.com/connector/oauth/refresh-recovery"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }));
+    const { client_id } = await clientResponse!.json() as { client_id: string };
+    const verifier = "refresh-recovery-pkce-verifier-abcdefghijklmnopqrstuvwxyz";
+    const authorize = await oauth.handle(formRequest("https://edge.example/authorize", {
+      response_type: "code",
+      client_id,
+      redirect_uri: "https://chatgpt.com/connector/oauth/refresh-recovery",
+      code_challenge: await sha256Base64Url(verifier),
+      code_challenge_method: "S256",
+      scope: "mcp:tools",
+      resource: "https://edge.example/mcp",
+      owner_password: "owner-password",
+    }));
+    const code = new URL(authorize!.headers.get("location")!).searchParams.get("code")!;
+    const initial = await oauth.handle(formRequest("https://edge.example/token", {
+      grant_type: "authorization_code",
+      client_id,
+      code,
+      redirect_uri: "https://chatgpt.com/connector/oauth/refresh-recovery",
+      code_verifier: verifier,
+      resource: "https://edge.example/mcp",
+    }));
+    const first = await initial!.json() as { refresh_token: string };
+    const refresh = (token: string, overrides: Record<string, string> = {}) => oauth.handle(
+      formRequest("https://edge.example/token", {
+        grant_type: "refresh_token", client_id, refresh_token: token,
+        resource: "https://edge.example/mcp", ...overrides,
+      }),
+    );
+    const [rotated, overlapping] = await Promise.all([
+      refresh(first.refresh_token), refresh(first.refresh_token),
+    ]);
+    expect(rotated!.status).toBe(200);
+    expect(overlapping!.status).toBe(200);
+    const second = await rotated!.json() as { refresh_token: string };
+    const overlappingTokens = await overlapping!.json() as { refresh_token: string };
+    expect(overlappingTokens.refresh_token).toBe(second.refresh_token);
+    expect(second.refresh_token).not.toBe(first.refresh_token);
+
+    const retries = await Promise.all([refresh(first.refresh_token), refresh(first.refresh_token)]);
+    expect(retries.map((response) => response!.status)).toEqual([200, 200]);
+    for (const response of retries) {
+      const recovered = await response!.json() as { refresh_token: string };
+      expect(recovered.refresh_token).toBe(second.refresh_token);
+    }
+    const wrongClient = await refresh(first.refresh_token, { client_id: "unknown-client" });
+    expect(wrongClient!.status).toBe(400);
+
+    const thirdResponse = await refresh(second.refresh_token);
+    expect(thirdResponse!.status).toBe(200);
+    const third = await thirdResponse!.json() as { refresh_token: string };
+    expect((await refresh(first.refresh_token))!.status).toBe(400);
+    expect((await refresh(second.refresh_token))!.status).toBe(200);
+
+    const clock = Date.now();
+    const now = jest.spyOn(Date, "now").mockReturnValue(clock);
+    try {
+      const fourthResponse = await refresh(third.refresh_token);
+      expect(fourthResponse!.status).toBe(200);
+      const fourth = await fourthResponse!.json() as { refresh_token: string };
+      expect((await refresh(third.refresh_token))!.status).toBe(200);
+
+      now.mockReturnValue(clock + 61_000);
+      expect((await refresh(third.refresh_token))!.status).toBe(400);
+      const fifthResponse = await refresh(fourth.refresh_token);
+      expect(fifthResponse!.status).toBe(200);
+      const fifth = await fifthResponse!.json() as { refresh_token: string };
+      expect((await refresh(fourth.refresh_token, { resource: "https://edge.example/wrong" }))!.status).toBe(400);
+      await oauth.handle(formRequest("https://edge.example/revoke", {
+        token: fifth.refresh_token, client_id,
+      }));
+      expect((await refresh(fourth.refresh_token))!.status).toBe(400);
+      await oauth.rotateOwnerPassword("new-password");
+      expect((await refresh(third.refresh_token))!.status).toBe(400);
+    } finally {
+      now.mockRestore();
+    }
+
+    const serialized = JSON.stringify([...storage.data.entries()]);
+    expect(serialized).not.toContain(first.refresh_token);
+    expect(serialized).not.toContain(second.refresh_token);
+    expect(serialized).not.toContain(third.refresh_token);
   });
 
   it("rejects an Owner access token immediately after migrating to the historical Rafael identity", async () => {
