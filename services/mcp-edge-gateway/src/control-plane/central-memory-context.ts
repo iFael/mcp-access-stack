@@ -43,11 +43,16 @@ export async function appendMemoryContextText(response:Response,note:string,prep
   let body:unknown;
   try{body=await response.clone().json();}catch{return response;}
   if(!body||typeof body!=="object"||!('result' in body))return response;
-  const envelope=body as {result?:{isError?:boolean;content?:unknown}};
+  const envelope=body as {result?:{isError?:boolean;content?:unknown;structuredContent?:unknown}};
   if(!envelope.result||envelope.result.isError===true||
     !Array.isArray(envelope.result.content))return response;
-  if(prepend)envelope.result.content.unshift({type:"text",text:note});
-  else envelope.result.content.push({type:"text",text:note});
+  if(prepend){
+    const structured=envelope.result.structuredContent;
+    if(structured&&typeof structured==="object"&&!Array.isArray(structured)){
+      envelope.result.structuredContent={...structured,operationalBriefing:note};
+    }
+    envelope.result.content.unshift({type:"text",text:note});
+  } else envelope.result.content.push({type:"text",text:note});
   const headers=new Headers(response.headers);
   headers.delete("content-length");
   headers.set("content-type","application/json; charset=utf-8");
