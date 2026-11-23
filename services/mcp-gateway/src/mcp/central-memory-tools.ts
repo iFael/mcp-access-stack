@@ -20,6 +20,8 @@ const contextInput = z.object({
   workspaceId:authorityWorkspace, repositoryId,
   query:z.string().max(200).optional(),
   limit:z.number().int().min(1).max(12).optional(),
+  // Edge-only recovery pagination; normal agent queries need neither field.
+  monitorAfterSeq:z.number().int().nonnegative().optional(),
   historyRecordId:recordId.optional(),
   legacySource:z.object({
     surface:z.enum(["oracle","windows"]),
@@ -32,6 +34,13 @@ const contextOutput = z.object({
   repositoryId,totalActive:z.number().int().nonnegative(),
   legacyStatus:z.enum(["none","imported","active"]),
   records:z.array(recordSchema),history:z.array(recordSchema).optional(),
+  monitorRecovery:z.object({
+    events:z.array(z.object({
+      seq:z.number().int().positive(),operationId:z.string(),
+      expectedRevision:z.number().int().nonnegative(),record:recordSchema,
+    }).strict()).max(32),
+    hasMore:z.boolean(),nextAfterSeq:z.number().int().nonnegative(),
+  }).strict().optional(),
   archiveMatches:z.array(z.object({
     surface:z.enum(["oracle","windows"]),filename:z.enum(LEGACY_CODEX_FILES),
     contentSha256:z.string().regex(/^[a-f0-9]{64}$/u),excerpt:z.string().max(600),
@@ -136,6 +145,10 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
         const summary=options.store.context(owner,parsed.repositoryId,parsed.query,parsed.limit??8);
         return contextOutput.parse({
           ...summary,
+          ...(parsed.monitorAfterSeq===undefined?{}:{
+            monitorRecovery:options.store.monitorRecoveryEvents(owner,parsed.repositoryId,
+              parsed.monitorAfterSeq,24),
+          }),
           ...(parsed.historyRecordId===undefined?{}:{
             history:options.store.history(owner,parsed.repositoryId,parsed.historyRecordId).slice(-10),
           }),
