@@ -674,6 +674,8 @@ export const getWorkspaceContextResultSchema = z
     availableInstructionFiles: z.array(z.string()),
     skills: z.array(skillSummarySchema),
     git: gitWorktreeHintSchema,
+    /** Untrusted operational observations injected by the authenticated Edge. */
+    operationalBriefing: z.string().max(10_000).optional(),
   })
   .strict();
 

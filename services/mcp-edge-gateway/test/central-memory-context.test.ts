@@ -59,6 +59,10 @@ describe("automatic workspace memory context",()=>{
     const firstBody=await first.json() as typeof base;
     expect(firstBody.result.content[0]).toEqual({type:"text",text:"Priority briefing"});
     expect(firstBody.result.content[1]).toEqual(base.result.content[0]);
+    expect((firstBody.result.structuredContent as typeof base.result.structuredContent &
+      {operationalBriefing?:string}).operationalBriefing).toBe("Priority briefing");
+    expect((firstBody.result.structuredContent as typeof base.result.structuredContent).git)
+      .toEqual(base.result.structuredContent.git);
     const error=new Response(JSON.stringify({...base,result:{...base.result,isError:true}}));
     const unchanged=await appendMemoryContextText(error,"Memory note");
     expect((await unchanged.json() as {result:{content:unknown[]}}).result.content).toHaveLength(1);
