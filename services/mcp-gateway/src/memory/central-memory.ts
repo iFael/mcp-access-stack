@@ -230,7 +230,8 @@ export class CentralMemoryStore {
     const escaped = query.replace(/[\\%_]/gu, ch => "\\" + ch);
     const match = "%" + escaped + "%";
     const records = this.db.prepare(
-      "SELECT * FROM records WHERE owner_scope=? AND repository_id=? AND status='active' " +
+      "SELECT * FROM records WHERE owner_scope=? AND repository_id=? " +
+      "AND (status='active'" + (query ? " OR (status='resolved' AND kind='issue')" : "") + ") " +
       "AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') " +
       "ORDER BY updated_at DESC,record_id ASC LIMIT ?",
     ).all(ownerScope,repositoryId,match,match,limit) as Array<Record<string,unknown>>;

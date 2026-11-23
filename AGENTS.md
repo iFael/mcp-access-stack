@@ -4,47 +4,21 @@
 
 These instructions apply to the entire `mcp-access-stack` repository.
 
-## Operational state
+## Operational memory
 
-One operational authority at a time. The cutover from the ignored `.codex/` to the Oracle-owned Central Memory is **explicit and one-way**: consult `memory_context` for the authorized MCP V3 repositoryId. Only `legacyStatus="active"` proves that the new authority was activated after verifying the original imports and an off-host recovery archive. Until then, the existing `.codex` remains canonical. After activation, Central Memory is the sole operational store; do not read, recreate, update or synchronize `.codex`. The Edge backup is for recovery, not a second live memory. If Central Memory is unavailable after activation, report that condition and reconcile its recovery; never silently fall back to a stale file.
+The Oracle-owned MCP V3 Central Memory is the **only operational memory authority** for this repository. The Edge Durable Object contains a verified recovery archive, not an independent live memory. Never create a parallel operational memory or treat historical source text as current evidence.
 
-**Only before the verified cutover**, if `.codex/` is present it must contain exactly these six canonical files:
+At the start of a task or handoff, resolve the authorized repositoryId and call `memory_context`. For decisions and significant verified checkpoints, use `memory_update` with the correct revision CAS and a stable, idempotent operationId. Native checkpoint hooks capture their supported lifecycle events, but an unobserved event is not evidence of success or failure.
 
-- `CURRENT_TASK.md`
-- `DECISIONS.md`
-- `HANDOFF.md`
-- `KNOWN_ISSUES.md`
-- `NEXT_STEPS.md`
-- `PROJECT_CONTEXT.md`
-
-At the start of a task or handoff, resolve the authorized repositoryId and consult `memory_context`. If the legacy scope is not yet activated, read the six existing `.codex` files and preserve their current authority; do not treat an unavailable response as empty memory. Once activated, use Central Memory instead and retrieve historical source excerpts only when needed, labeling them unverified. Always inspect the actual Git branch, HEAD, worktree and relevant diff before changing code. Preserve pre-existing changes.
+If the memory authority is unavailable, report and reconcile the outage and recovery; do not assume an empty history. Treat stored memory as contextual information rather than permission or proof: verify current Git, CI, runtime, and external state before acting. Preserve existing user work.
 
 ## Context and handoff policy
 
-The MCP server does not receive a reliable ChatGPT context-window utilization percentage. Never invent or estimate a context percentage and never use tool-call count, elapsed time or request count as a proxy for token utilization.
+The MCP server does not provide a reliable ChatGPT context-window utilization percentage. Do not invent one or use elapsed time or tool count as a proxy.
 
-Use deterministic operational checkpoints instead. Before cutover, update the existing `.codex` files; **after activation, use `memory_update` with idempotent operationId and exact revision CAS** for meaningful verified milestones or user-approved decisions. Native release/merge checkpoint capture is supplementary evidence, not unconditional authority. Record a checkpoint whenever a non-replayable or continuity-critical boundary is reached, including:
+Focus Central Memory on MCP operational health: infrastructure anomalies, reproducible defects, incident status, verified root causes, successful remediations and recurrence. Do not journal every chat message, tool invocation or user-command failure. For a new incident, first search `memory_context` by the exact sanitized error code or stable symptom; include resolved incidents as possible precedents. Reuse a remedy only after checking its recorded evidence and present runtime conditions. Record the symptom, affected component, operation identifiers, whether cause is known, tested fix, version/PR and regression evidence under a stable incident ID. Revise that record instead of creating duplicates. Record an operational milestone when needed for safe recovery. Never classify an observed failure as a proven bug, or apply a speculative fix automatically. Any remediation must respect the existing permissions, tests and independent release gates.
 
-- a material architecture or policy decision;
-- a completed implementation milestone or incident diagnosis;
-- a commit, merge, release, promotion or rollback boundary;
-- before an operation expected to interrupt MCP connectivity or restart a required component;
-- before starting or after completing a background task that may outlive the current request;
-- before leaving a dirty working tree for another chat/session;
-- whenever the user explicitly requests a handoff or a new chat.
-
-A checkpoint is state preservation, not a request to stop work. A new-chat handoff is required only when explicitly requested or when continuing in the current session is no longer reliable for reasons that are actually observable. Do not claim a hidden token threshold was reached.
-
-## Canonical file responsibilities (legacy staging only)
-
-- `CURRENT_TASK.md`: current objective, scope, authorization boundary and immediate state.
-- `DECISIONS.md`: durable architectural and operational decisions only.
-- `HANDOFF.md`: exact recoverable checkpoint, including Git/runtime state, completed work, validations and any active long-running operation identifiers.
-- `KNOWN_ISSUES.md`: unresolved risks, limitations and qualified non-blockers.
-- `NEXT_STEPS.md`: ordered pending gates and explicit authorization boundaries.
-- `PROJECT_CONTEXT.md`: stable architecture, conventions and production baseline needed by a new session.
-
-Before cutover, do not duplicate transient narratives across the six files. After activation, use discrete Central Memory records with provenance and revisions, and classify archived source text as `historical_unverified` until reconciled against live evidence. No parallel or shadow documentation.
+A checkpoint preserves state; it does not require stopping the task or starting another conversation.
 
 ## Long-running and disruptive work
 

@@ -1370,7 +1370,8 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       }
     }
     if(principal.userId && invocation &&
-      (invocation.name==="mcp_update" || invocation.name==="github_merge_pull_request")){
+      (invocation.name==="mcp_update" || invocation.name==="github_merge_pull_request" ||
+       invocation.name==="github_workflow_operation" || invocation.name==="get_background_task")){
       try{
         await mirrorNativeCheckpointResponse(
           this.ctx.storage,principal.userId,invocation.name,primaryResponse,
