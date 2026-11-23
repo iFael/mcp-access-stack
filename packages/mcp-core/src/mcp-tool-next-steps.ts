@@ -132,7 +132,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   browser_download: "",
 
   // Browser: acting
-  browser_click: "act on the returned state; browser_sequence for several known steps.",
+  browser_click: "on ACTION_REQUIRES_CONFIRMATION, get approval and repeat the exact click with confirmationId; otherwise act on returned state. See get_operation_guide topic=browser.",
   browser_hover: "act on the returned state.",
   browser_drag: "browser_snapshot to check the result.",
   browser_scroll: "act on the returned state.",

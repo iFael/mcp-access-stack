@@ -63,6 +63,20 @@ describe("operation guide", () => {
     expect(instructions).not.toContain("end each answer with browser_progress");
   });
 
+  it("explains browser deletions, platform refusals and frame recovery without bypassing safety", () => {
+    const browser = getOperationGuide("browser").steps.join(" ");
+    const refusals = getOperationGuide("refusals").steps.join(" ");
+    expect(browser).toContain("Delete authorized UI items with browser_click");
+    expect(browser).toContain("delete-or-cancel");
+    expect(refusals).toContain("confirmationId");
+    expect(refusals).toContain("OpenAI platform");
+    expect(refusals).toContain("FRAME_NOT_READY");
+    expect(refusals).toContain("LOCATOR_NOT_FOUND");
+    expect(refusals).toContain("point_outside_target");
+    expect(refusals).toContain("AGENT_UNAVAILABLE for personal browser");
+    expect(refusals).toContain("Do not bypass");
+  });
+
   it("points server instructions at the guide", () => {
     expect(MCP_AGENT_INSTRUCTIONS).toContain("get_operation_guide");
   });
