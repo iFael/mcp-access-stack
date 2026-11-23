@@ -20,6 +20,11 @@ describe("the next step of every tool", () => {
     }
   });
 
+  it("tells agents that browser_click supports a bound destructive confirmation", () => {
+    expect(MCP_TOOL_NEXT_STEPS.browser_click).toContain("ACTION_REQUIRES_CONFIRMATION");
+    expect(MCP_TOOL_NEXT_STEPS.browser_click).toContain("confirmationId");
+  });
+
   it("ends the description, and stays out of a tool that ends its job", () => {
     expect(withMcpToolNextStep("git_commit", "Commits.")).toBe("Commits. Next: git_push_branch.");
     expect(withMcpToolNextStep("browser_finish_task", "Finishes.")).toBe("Finishes.");

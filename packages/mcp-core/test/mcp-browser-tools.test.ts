@@ -436,6 +436,13 @@ async function callTool(
 }
 
 describe("registerBrowserTools", () => {
+  it("advertises authorized deletions and their one-use confirmation in browser_click", () => {
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerBrowserTools(server, mockExecutor());
+    const click = registeredTools(server).browser_click as RegisteredTool & { description?: string };
+    expect(click.description).toContain("Supports authorized deletions");
+    expect(click.description).toContain("confirmationId");
+  });
 
   it("does not probe managed-browser ownership sessions after open or wait", async () => {
     const executor = mockExecutor();

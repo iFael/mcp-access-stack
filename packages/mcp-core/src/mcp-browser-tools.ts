@@ -507,7 +507,7 @@ function definitions(
       () => e.evaluate(assumeParsed(v)),
       (activeContext) => e.evaluate(assumeParsed(v), activeContext),
     )),
-    d("browser_click", "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserClickInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_click", "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Supports authorized deletions: ACTION_REQUIRES_CONFIRMATION supplies a one-use confirmationId; after the user approves the exact action, repeat the same click with that ID. Site-wide grants do not authorize deletions. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserClickInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.click(assumeParsed(v)),
       (activeContext) => e.click(assumeParsed(v), activeContext),
