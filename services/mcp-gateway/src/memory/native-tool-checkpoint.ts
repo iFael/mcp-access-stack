@@ -51,6 +51,12 @@ function object(value:unknown):Record<string,unknown>|null{
 function sha(value:string):string{return createHash("sha256").update(value).digest("hex");}
 const UPDATE_ID=/^upd_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const SHA=/^[0-9a-f]{40}$/u;
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const WORKFLOWS=new Set(["release.yml","release-tag-bootstrap.yml","edge-cas-candidate-stage.yml",
+  "edge-catalog-activate.yml","edge-catalog-recover-prepare.yml",
+  "companion-only-distribution.yml","cloudflare-version-inventory.yml","edge-f09-guarded-rollout.yml"]);
+const WORKFLOW_FAILURES=new Set(["failure","timed_out","startup_failure"]);
+const TASK_REASONS=new Set(["timeout","client_disconnected","upstream_timeout"]);
 const TAG=/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/u;
 const REPOSITORY=/^repo_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
@@ -82,7 +88,7 @@ export function checkpointFromNativeTool(
       repositoryId,
       recordId:"mcp-update:"+update.updateId,
       operationId:"native:mcp_update:"+update.updateId+":"+digest.slice(0,12),
-      kind:"note",confidence:"inferred",
+      kind:status==="failed"?"issue":"note",confidence:"inferred",
       title:"MCP V3 update "+update.updateId+" — "+status,
       content:"Tool-observed update lifecycle result. Reconcile with the native ledger before further operations: "+
         evidence,
@@ -105,6 +111,49 @@ export function checkpointFromNativeTool(
       content:"Tool-observed GitHub merge completed: PR #"+number+", merge SHA "+shaValue+
         ". Verify current main and post-merge CI separately.",
       evidenceRefs:["github:pr:"+number,"merge:"+shaValue],
+    };
+  }
+  if(tool==="github_workflow_operation"){
+    if(args.workspaceId!=="mcp-access-stack"||args.repository!=="mcp-access-stack"||
+      args.mode!=="reconcile"||data.status!=="observed"||data.state!=="completed"||
+      typeof args.operationId!=="string"||!UUID.test(args.operationId)||
+      data.operationId!==args.operationId||
+      typeof args.expectedMainSha!=="string"||!SHA.test(args.expectedMainSha)||
+      typeof args.workflow!=="string"||!WORKFLOWS.has(args.workflow)||
+      typeof data.runId!=="number"||!Number.isSafeInteger(data.runId)||data.runId<1||
+      typeof data.conclusion!=="string"||!WORKFLOW_FAILURES.has(data.conclusion))return null;
+    const evidence=JSON.stringify({workflow:args.workflow,runId:data.runId,
+      mainSha:args.expectedMainSha,conclusion:data.conclusion});
+    return {
+      repositoryId,recordId:"mcp-workflow:"+args.operationId,
+      operationId:"native:github_workflow:"+args.operationId+":"+sha(evidence).slice(0,12),
+      kind:"issue",confidence:"inferred",
+      title:"MCP workflow "+args.workflow+" — "+data.conclusion,
+      content:"Tool-observed terminal workflow failure (root cause not established): "+evidence,
+      evidenceRefs:["github:run:"+data.runId],
+    };
+  }
+  if(tool==="get_background_task"){
+    const task=object(data.task);
+    if(args.workspaceId!=="mcp-access-stack"||typeof args.id!=="string"||
+      !UUID.test(args.id)||!task||task.id!==args.id||
+      task.workspaceId!==args.workspaceId||
+      (task.state!=="failed"&&task.state!=="cancelled"))return null;
+    const result=object(task.result);
+    const lifecycle=object(task.lifecycle)??object(result?.lifecycle);
+    const reason=typeof lifecycle?.reason==="string"&&TASK_REASONS.has(lifecycle.reason)
+      ?lifecycle.reason:null;
+    if(!reason)return null; // User commands failing are not MCP infrastructure incidents.
+    const exitCode=typeof result?.exitCode==="number"&&Number.isSafeInteger(result.exitCode)
+      ?result.exitCode:null;
+    const evidence=JSON.stringify({state:task.state,exitCode,reason});
+    return {
+      repositoryId,recordId:"mcp-task:"+args.id,
+      operationId:"native:background_task:"+args.id+":"+sha(evidence).slice(0,12),
+      kind:"issue",confidence:"inferred",
+      title:"MCP background task "+args.id+" — "+task.state,
+      content:"Tool-observed terminal background task failure (root cause not established): "+evidence,
+      evidenceRefs:["mcp:background_task:"+args.id],
     };
   }
   return null;

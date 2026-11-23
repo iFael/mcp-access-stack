@@ -197,6 +197,29 @@ describe("Oracle Central Memory store", () => {
     reopened.close();
   });
 
+  it("retrieves solved incidents by symptom without bringing them into active context",()=>{
+    const {db}=create();
+    const issue=mutation({recordId:"incident:relay-timeout",operationId:"incident:first",
+      kind:"issue",confidence:"inferred",title:"BROWSER_RELAY_TIMEOUT",
+      content:"Observed timeout; cause unknown",evidenceRefs:["mcp:task:123"]});
+    db.update(owner,issue);
+    db.update(owner,{...issue,action:"revise",expectedRevision:1,
+      operationId:"incident:verified-fix",
+      content:"BROWSER_RELAY_TIMEOUT; verified cause: relay expiry; fix: bounded reconnect test passed",
+      evidenceRefs:["github:pr:300","test:relay:passed"]});
+    db.update(owner,{repositoryId:repo,operationId:"incident:resolved",
+      action:"resolve",recordId:"incident:relay-timeout",expectedRevision:2});
+    expect(db.context(owner,repo).records).toEqual([]);
+    expect(db.context(owner,repo).totalActive).toBe(0);
+    const matches=db.context(owner,repo,"BROWSER_RELAY_TIMEOUT").records;
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({status:"resolved",kind:"issue",revision:3});
+    expect(matches[0]?.content).toContain("verified cause");
+    expect(db.context("user:bob",repo,"BROWSER_RELAY_TIMEOUT").records).toEqual([]);
+    expect(db.context(owner,secondRepo,"BROWSER_RELAY_TIMEOUT").records).toEqual([]);
+    db.close();
+  });
+
   it("isolates users and repositories, and treats wildcard text literally", () => {
     const {db}=create();
     db.update(owner,mutation({title:"100% complete"}));

@@ -308,6 +308,10 @@ export const MCP_AGENT_INSTRUCTIONS =
   "for relevant operational context when the central-memory authority is available. Record user-approved decisions " +
   "and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of " +
   "Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. " +
+  "For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, " +
+  "before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. " +
+  "Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. " +
+  "Automated remediation must remain within authorized safe gates; do not infer root cause from one error. " +
   "Before a multi-step job (publishing or installing a release, operating the execution node, " +
   "Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic " +
   "and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell " +

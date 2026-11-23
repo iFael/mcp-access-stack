@@ -85,6 +85,57 @@ describe("deterministic tool-result checkpoints",()=>{
     expect(checkpointFromNativeTool("github_merge_pull_request",
       {repository:"another",pullNumber:300},{merged:true,mergeSha:mainSha},repo)).toBeNull();
   });
+
+  it("captures a failed workflow exactly by its reconciled operation ID without logging secrets",()=>{
+    const operationId="43737484-ba20-4c3b-92ba-958cb856a21d";
+    const input={workspaceId:"mcp-access-stack",repository:"mcp-access-stack",
+      workflow:"edge-catalog-activate.yml",operationId,mode:"reconcile",expectedMainSha:mainSha};
+    const result={status:"observed",state:"completed",conclusion:"failure",operationId,
+      runId:45083739015,rawToken:"secret-not-to-persist"};
+    const checkpoint=checkpointFromNativeTool("github_workflow_operation",input,result,repo);
+    expect(checkpoint).toMatchObject({kind:"issue",recordId:"mcp-workflow:"+operationId,
+      confidence:"inferred",evidenceRefs:["github:run:45083739015"]});
+    expect(checkpoint!.content).toContain("failure");
+    expect(checkpoint!.content).not.toContain("secret-not-to-persist");
+    expect(checkpointFromNativeTool("github_workflow_operation",input,result,repo)).toEqual(checkpoint);
+    expect(checkpointFromNativeTool("github_workflow_operation",input,
+      {...result,state:"in_progress"},repo)).toBeNull();
+    expect(checkpointFromNativeTool("github_workflow_operation",input,
+      {...result,conclusion:"success"},repo)).toBeNull();
+    expect(checkpointFromNativeTool("github_workflow_operation",input,
+      {...result,conclusion:"cancelled"},repo)).toBeNull();
+    expect(checkpointFromNativeTool("github_workflow_operation",input,
+      {...result,conclusion:"action_required"},repo)).toBeNull();
+    expect(checkpointFromNativeTool("github_workflow_operation",
+      {...input,repository:"another"},result,repo)).toBeNull();
+    expect(checkpointFromNativeTool("github_workflow_operation",input,
+      {...result,operationId:"other"},repo)).toBeNull();
+  });
+
+  it("captures failed background tasks while excluding commands, logs and error messages",()=>{
+    const id="fbed08b4-1b74-4848-a2c3-b716a8cdbed3";
+    const input={workspaceId:"mcp-access-stack",id};
+    const result={task:{id,workspaceId:"mcp-access-stack",state:"failed",operation:"run_command",
+      command:"SECRET=hidden",error:"credential private-data",
+      result:{exitCode:1,stdout:"sensitive-output",stderr:"private-stacktrace"},
+      lifecycle:{reason:"upstream_timeout",diagnostic:"password"}}};
+    const cp=checkpointFromNativeTool("get_background_task",input,result,repo);
+    expect(cp).toMatchObject({kind:"issue",recordId:"mcp-task:"+id});
+    expect(cp!.content).toContain("failed");
+    for(const secret of ["hidden","credential","sensitive","private","password"]){
+      expect(cp!.content).not.toContain(secret);
+    }
+    expect(checkpointFromNativeTool("get_background_task",input,
+      {task:{...result.task,state:"running"}},repo)).toBeNull();
+    expect(checkpointFromNativeTool("get_background_task",input,
+      {task:{...result.task,lifecycle:{reason:"process_failed"}}},repo)).toBeNull();
+    expect(checkpointFromNativeTool("get_background_task",input,
+      {task:{...result.task,lifecycle:undefined}},repo)).toBeNull();
+    expect(checkpointFromNativeTool("get_background_task",input,
+      {task:{...result.task,id:"another"}},repo)).toBeNull();
+    expect(checkpointFromNativeTool("get_background_task",
+      {...input,workspaceId:"other"},result,repo)).toBeNull();
+  });
   it("rejects malformed or untrusted results",()=>{
     expect(checkpointFromNativeTool("mcp_update",{workspaceId:"mcp-access-stack"},
       {update:{...result.update,mainSha:"invalid",token:"secret"}},repo)).toBeNull();
