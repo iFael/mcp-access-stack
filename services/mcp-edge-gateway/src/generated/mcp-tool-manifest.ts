@@ -19016,7 +19016,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "act on the returned state; browser_sequence for several known steps.",
+      "io.github.ifael/next-step": "on ACTION_REQUIRES_CONFIRMATION, get approval and repeat the exact click with confirmationId; otherwise act on returned state. See get_operation_guide topic=browser.",
       "securitySchemes": [
         {
           "scopes": [
@@ -19032,7 +19032,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence. Next: act on the returned state; browser_sequence for several known steps.",
+    "description": "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Supports authorized deletions: ACTION_REQUIRES_CONFIRMATION supplies a one-use confirmationId; after the user approves the exact action, repeat the same click with that ID. Site-wide grants do not authorize deletions. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence. Next: on ACTION_REQUIRES_CONFIRMATION, get approval and repeat the exact click with confirmationId; otherwise act on returned state. See get_operation_guide topic=browser.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -29249,15 +29249,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "98342f8e42e9df23fd2fce4198f41a22763917d5ecbf8a4fc451288fb70f5952",
-  "serverVersion": "0.4.0-catalog.c98342f8e42e9.s65e543617746",
+  "contractRevision": "6cb0993d6d142cda3cc664d790144d4474eabbb9628f898f0e57fabc55c5f583",
+  "serverVersion": "0.4.0-catalog.c6cb0993d6d14.s65e543617746",
   "toolCount": 133,
   "toolSetRevision": "65e5436177469676568b42f9b6fcca7928eddabdf392f5bff782986f0aa0ab1c"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c98342f8e42e9.s65e543617746"
+  "version": "0.4.0-catalog.c6cb0993d6d14.s65e543617746"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";
