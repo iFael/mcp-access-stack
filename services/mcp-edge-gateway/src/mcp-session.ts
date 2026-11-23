@@ -43,7 +43,7 @@ import {
   type BrowserRuntimeAffinity,
 } from "./control-plane/browser-routing.js";
 import { EdgeRepositoryControlPlane } from "./control-plane/repository-control-plane.js";
-import { mirrorMemoryUpdateResponse, mirrorLegacyActivationResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, exportCentralMemoryRecovery, verifyLegacyCutoverRecovery } from "./control-plane/central-memory-recovery.js";
+import { mirrorMemoryUpdateResponse, mirrorLegacyActivationResponse, mirrorNativeCheckpointResponse, mirrorMonitorRecoveryPage, markNativeCheckpointDeferred, exportCentralMemoryRecovery, verifyLegacyCutoverRecovery } from "./control-plane/central-memory-recovery.js";
 import { mirrorLegacyImportResponse } from "./control-plane/central-memory-legacy-archive.js";
 import { findMemoryRepositoryId, memoryContextMessage, appendMemoryContextText } from "./control-plane/central-memory-context.js";
 import { authorizeCentralMemory } from "./control-plane/central-memory-access.js";
@@ -1416,25 +1416,63 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         id=>this.accountStore.listMaterializations(principal.userId!,id),
       );
       if(!repositoryId)return response;
-      const memoryBody=JSON.stringify({
-        jsonrpc:"2.0",id:"edge-memory-context-"+crypto.randomUUID(),
-        method:"tools/call",params:{name:"memory_context",arguments:{
-          workspaceId:"mcp-access-stack",repositoryId,limit:8,
-        }},
-      });
-      const memoryResponse=await this.relayAuthenticatedRequest(
-        request,memoryBody,principal,
-      );
-      const data=await readMcpStructuredContent(memoryResponse);
-      if(data?.legacyStatus!=="active"){
-        if(data?.legacyStatus==="none"||data?.legacyStatus==="imported")return response;
-        return appendMemoryContextText(response,
-          "MCP V3 Central Memory unavailable: authority cannot be verified. "+
-          "Reconcile memory_context and off-host recovery before treating any "+
-          "stored context as current; do not silently fall back to .codex.");
+      // The Oracle monitor writes independently of conversations. On the first
+      // authenticated workspace read, catch up its off-host recovery receipts.
+      // A cursor is recovery bookkeeping only; Oracle remains the authority.
+      const cursorKey="central-memory-monitor-cursor:v1:"+principal.userId+":"+repositoryId;
+      const activeConnector=this.getPreferredExecutionReadyConnector();
+      const instanceId=activeConnector
+        ?this.readConnectorAttachment(activeConnector)?.runtime?.connectorInstanceId
+        :undefined;
+      const previousCursor=await this.ctx.storage.get<{instanceId:string;seq:number}>(cursorKey);
+      // Reset after Oracle process replacement: a verified disaster restore may
+      // reconstruct SQLite event sequence numbers in a different order.
+      let cursor=instanceId!==undefined && previousCursor?.instanceId===instanceId &&
+        Number.isSafeInteger(previousCursor.seq) && previousCursor.seq>=0
+        ?previousCursor.seq:0;
+      const authorized=await this.accountStore.getRepositoryForUser(principal.userId,repositoryId);
+      const canMirror=!!authorized && authorized.role!=="viewer" && instanceId!==undefined;
+      let briefingData:Record<string,unknown>|null=null;
+      let backupPending=false;
+      for(let page=0;page<8;page++){
+        const memoryBody=JSON.stringify({
+          jsonrpc:"2.0",id:"edge-memory-context-"+crypto.randomUUID(),
+          method:"tools/call",params:{name:"memory_context",arguments:{
+            workspaceId:"mcp-access-stack",repositoryId,limit:8,
+            ...(canMirror?{monitorAfterSeq:cursor}:{}),
+          }},
+        });
+        const memoryResponse=await this.relayAuthenticatedRequest(
+          request,memoryBody,principal,
+        );
+        const data=await readMcpStructuredContent(memoryResponse);
+        if(!data||data.legacyStatus!=="active"){
+          if(data?.legacyStatus==="none"||data?.legacyStatus==="imported")return response;
+          return appendMemoryContextText(response,
+            "MCP V3 Central Memory unavailable: verify the Oracle authority and its recovery archive.");
+        }
+        briefingData??=data;
+        if(!canMirror)break;
+        if(data.monitorRecovery===undefined)break; // Older connector; no independent observations.
+        try {
+          const synced=await mirrorMonitorRecoveryPage(this.ctx.storage,
+            principal.userId,repositoryId,cursor,data.monitorRecovery);
+          cursor=synced.nextAfterSeq;
+          await this.ctx.storage.transaction(async txn=>{
+            const previous=await txn.get<{instanceId:string;seq:number}>(cursorKey);
+            if(previous?.instanceId!==instanceId || (previous?.seq??-1)<cursor)
+              await txn.put(cursorKey,{instanceId,seq:cursor});
+          });
+          if(!synced.hasMore)break;
+          if(page===7)backupPending=true;
+        }catch {
+          backupPending=true;break; // Never claim the off-host mirror succeeded.
+        }
       }
-      const note=memoryContextMessage(repositoryId,data?.records);
-      return note?appendMemoryContextText(response,note):response;
+      const note=memoryContextMessage(repositoryId,briefingData?.records);
+      const warning=backupPending
+        ?"\nOperational-monitor recovery copy pending; Oracle data remains authoritative. Retry workspace context to reconcile.":"";
+      return note||warning?appendMemoryContextText(response,(note??"")+warning,true):response;
     }catch{
       // Workspace diagnostics remain accessible, but authority is unknown.
       if(repositoryId)return appendMemoryContextText(response,

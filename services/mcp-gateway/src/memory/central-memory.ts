@@ -233,7 +233,10 @@ export class CentralMemoryStore {
       "SELECT * FROM records WHERE owner_scope=? AND repository_id=? " +
       "AND (status='active'" + (query ? " OR (status='resolved' AND kind='issue')" : "") + ") " +
       "AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') " +
-      "ORDER BY updated_at DESC,record_id ASC LIMIT ?",
+      "ORDER BY CASE WHEN record_id LIKE 'mcp-monitor:%' THEN 0 " +
+      "WHEN record_id LIKE 'mcp-improvement:%' THEN 1 " +
+      "WHEN kind='issue' THEN 2 WHEN kind='task' THEN 3 ELSE 4 END, " +
+      "updated_at DESC,record_id ASC LIMIT ?",
     ).all(ownerScope,repositoryId,match,match,limit) as Array<Record<string,unknown>>;
     const total = this.db.prepare(
       "SELECT COUNT(*) AS n FROM records WHERE owner_scope=? AND repository_id=? AND status='active'",
@@ -472,6 +475,51 @@ export class CentralMemoryStore {
       return {repositoryId,importHash:expectedImportHash,
         archiveDigest:verifiedArchiveDigest,activatedAt,replayed:false};
     }catch(error){this.db.exec("ROLLBACK");throw error;}
+  }
+
+  /** Enumerates only previously activated Oracle owner/repository scopes. */
+  activatedScopes(): Array<{ownerScope: string; repositoryId: string}> {
+    const rows = this.db.prepare(
+      "SELECT owner_scope, repository_id FROM legacy_activation ORDER BY owner_scope, repository_id LIMIT 101",
+    ).all() as Array<{owner_scope: string; repository_id: string}>;
+    if (rows.length > 100) invalid("MONITOR_SCOPE_LIMIT");
+    return rows.map(row => ({ownerScope: row.owner_scope, repositoryId: row.repository_id}));
+  }
+
+  activeMonitorIssue(ownerScope: string, repositoryId: string, signal: string): MemoryRecord | null {
+    ownerValid(ownerScope); repoValid(repositoryId);
+    if (!/^[a-z_]{2,40}$/u.test(signal)) invalid("MONITOR_SIGNAL_INVALID");
+    const row = this.db.prepare(
+      "SELECT * FROM records WHERE owner_scope=? AND repository_id=? AND kind='issue' " +
+      "AND status='active' AND record_id GLOB ? ORDER BY updated_at DESC LIMIT 1",
+    ).get(ownerScope, repositoryId, "mcp-monitor:" + signal + ":*") as Record<string,unknown> | undefined;
+    return row ? asRecord(row) : null;
+  }
+
+  /** Bounded, ordered Oracle receipts for eventual off-host mirroring on the first agent contact. */
+  monitorRecoveryEvents(ownerScope: string, repositoryId: string, afterSeq: number, limit = 24): {
+    events: Array<{seq: number; operationId: string; expectedRevision: number; record: MemoryRecord}>;
+    hasMore: boolean; nextAfterSeq: number;
+  } {
+    ownerValid(ownerScope); repoValid(repositoryId);
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 32) invalid("MONITOR_CURSOR_INVALID");
+    const rows = this.db.prepare(
+      "SELECT seq, operation_id, snapshot_json FROM events " +
+      "WHERE owner_scope=? AND repository_id=? AND record_id LIKE 'mcp-monitor:%' AND seq>? " +
+      "ORDER BY seq ASC LIMIT ?",
+    ).all(ownerScope,repositoryId,afterSeq,limit+1) as Array<{
+      seq: number; operation_id: string; snapshot_json: string
+    }>;
+    const page = rows.slice(0,limit).map(row => {
+      const record = JSON.parse(row.snapshot_json) as MemoryRecord;
+      if (!record.recordId.startsWith("mcp-monitor:") || record.repositoryId !== repositoryId ||
+          !Number.isSafeInteger(record.revision) || record.revision < 1) invalid("MONITOR_EVENT_CORRUPT");
+      return {seq: row.seq, operationId: row.operation_id,
+        expectedRevision: record.revision - 1, record};
+    });
+    return {events:page,hasMore:rows.length>limit,
+      nextAfterSeq:page.at(-1)?.seq??afterSeq};
   }
 
   /** Only a fully imported, Edge-ACL-validated MCP V3 legacy scope can be

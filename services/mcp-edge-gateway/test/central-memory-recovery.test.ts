@@ -1,5 +1,5 @@
 import { describe,expect,it } from "@jest/globals";
-import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorLegacyActivationResponse, mirrorNativeCheckpointResponse, markNativeCheckpointDeferred, verifyLegacyCutoverRecovery, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
+import { CentralMemoryRecovery, exportCentralMemoryRecovery, mirrorMemoryUpdateResponse, mirrorLegacyActivationResponse, mirrorNativeCheckpointResponse, mirrorMonitorRecoveryPage, markNativeCheckpointDeferred, verifyLegacyCutoverRecovery, type RecoveryRecord } from "../src/control-plane/central-memory-recovery.js";
 import { CentralMemoryLegacyArchive } from "../src/control-plane/central-memory-legacy-archive.js";
 import type { CloudAuditStorage, CloudAuditTransaction } from "../src/control-plane/cloud-audit-store.js";
 
@@ -42,6 +42,34 @@ const record=(changes:Partial<RecoveryRecord>={}):RecoveryRecord=>({
 });
 
 describe("Cloudflare off-host central memory recovery",()=>{
+  it("mirrors monitor observations with ordered CAS and no duplicate recovery entries",async()=>{
+    const storage=new MemoryStorage();
+    const first=record({recordId:"mcp-monitor:edge_connector:incident-1",
+      kind:"issue",confidence:"inferred",content:"observed unhealthy"});
+    const second=record({...first,revision:2,content:"observed recovered",
+      updatedAt:"2026-11-12T18:00:00.000Z"});
+    const page1={events:[{seq:7,operationId:"monitor:0000001",expectedRevision:0,record:first}],
+      nextAfterSeq:7,hasMore:true};
+    const page2={events:[{seq:9,operationId:"monitor:0000002",expectedRevision:1,record:second}],
+      nextAfterSeq:9,hasMore:false};
+    expect(await mirrorMonitorRecoveryPage(storage,user,repo,0,page1))
+      .toEqual({nextAfterSeq:7,hasMore:true});
+    expect(await mirrorMonitorRecoveryPage(storage,user,repo,7,page2))
+      .toEqual({nextAfterSeq:9,hasMore:false});
+    expect(await mirrorMonitorRecoveryPage(storage,user,repo,0,page1))
+      .toEqual({nextAfterSeq:7,hasMore:true}); // exact replay
+    const recovered=await new CentralMemoryRecovery(storage)
+      .verifyRecord(user,repo,first.recordId);
+    expect(recovered.map(e=>e.record.revision)).toEqual([1,2]);
+    await expect(mirrorMonitorRecoveryPage(storage,user,otherRepo,0,page1))
+      .rejects.toThrow("MEMORY_RECOVERY_MONITOR_PAGE_INVALID");
+    await expect(mirrorMonitorRecoveryPage(storage,user,repo,7,
+      {...page2,nextAfterSeq:10})).rejects.toThrow("MEMORY_RECOVERY_MONITOR_PAGE_INVALID");
+    await expect(mirrorMonitorRecoveryPage(storage,user,repo,7,
+      {...page2,events:[{...page2.events[0]!,seq:7}]}))
+      .rejects.toThrow("MEMORY_RECOVERY_MONITOR_PAGE_INVALID");
+  });
+
   it("blocks cutover until the off-host legacy copy and curated event ledger both verify",async()=>{
     const storage=new MemoryStorage();
     const hash=async(value:string)=>{

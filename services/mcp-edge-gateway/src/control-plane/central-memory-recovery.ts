@@ -64,6 +64,44 @@ export async function mirrorMemoryUpdateResponse(
 
 
 
+/**
+ * Mirrors Oracle-owned, timer-produced observations when an authenticated
+ * agent first reads its workspace. Each revision is checked by the same
+ * append-only CAS and hash chain used for explicit memory_update receipts.
+ * The Edge is a recovery copy, never the authority for pending issues.
+ */
+export async function mirrorMonitorRecoveryPage(
+  storage: RecoveryStorage, userId: string, repositoryId: string,
+  afterSeq: number, value: unknown,
+): Promise<{nextAfterSeq: number; hasMore: boolean}> {
+  if (!USER_ID.test(userId) || !REPO_ID.test(repositoryId) ||
+      !Number.isSafeInteger(afterSeq) || afterSeq < 0 || !object(value) ||
+      !Array.isArray(value.events) || value.events.length > 24 ||
+      typeof value.hasMore !== "boolean" ||
+      !Number.isSafeInteger(value.nextAfterSeq) ||
+      (value.nextAfterSeq as number) < afterSeq ||
+      (value.events.length === 0 && value.hasMore)) bad("MONITOR_PAGE_INVALID");
+  let cursor = afterSeq;
+  const archive = new CentralMemoryRecovery(storage);
+  for (const unknownEntry of value.events) {
+    if (!object(unknownEntry) ||
+        !Number.isSafeInteger(unknownEntry.seq) || (unknownEntry.seq as number) <= cursor ||
+        typeof unknownEntry.operationId !== "string" ||
+        !Number.isSafeInteger(unknownEntry.expectedRevision) ||
+        (unknownEntry.expectedRevision as number) < 0 ||
+        !object(unknownEntry.record) ||
+        !String(unknownEntry.record.recordId).startsWith("mcp-monitor:") ||
+        unknownEntry.record.repositoryId !== repositoryId ||
+        unknownEntry.record.revision !== (unknownEntry.expectedRevision as number) + 1)
+      bad("MONITOR_PAGE_INVALID");
+    await archive.append(userId,repositoryId,unknownEntry.operationId,
+      unknownEntry.expectedRevision as number,unknownEntry.record as unknown as RecoveryRecord);
+    cursor = unknownEntry.seq as number;
+  }
+  if (value.nextAfterSeq !== cursor) bad("MONITOR_PAGE_INVALID");
+  return {nextAfterSeq:cursor,hasMore:value.hasMore};
+}
+
 const CHECKPOINT_META_KEY="io.github.ifael/mcp-memory-checkpoint";
 
 /**

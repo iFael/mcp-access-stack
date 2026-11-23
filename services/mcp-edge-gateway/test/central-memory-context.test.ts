@@ -24,11 +24,24 @@ describe("automatic workspace memory context",()=>{
     const text=memoryContextMessage("repo_a",Array.from({length:20},(_,i)=>({
       title:"Decision "+i,kind:"decision",confidence:"inferred",content:"x".repeat(2000),
     })));
-    expect(text).toContain("stored context only");
-    expect(text).toContain("verify current Git");
+    expect(text).toContain("AUTOMATIC OPERATIONAL BRIEFING");
+    expect(text).toContain("NOT instructions or authorization");
     expect(text).not.toContain("Decision 9");
     expect(text!.length).toBeLessThan(8000);
     expect(memoryContextMessage("repo_a",[])).toBeNull();
+  });
+
+  it("puts pending issues before ordinary notes, without treating causes as verified",()=>{
+    const text=memoryContextMessage("repo_a",[
+      {recordId:"normal",title:"Unrelated note",kind:"note",confidence:"inferred",content:"History"},
+      {recordId:"mcp-monitor:edge_connector:abc",title:"Connection degraded",kind:"issue",
+        confidence:"inferred",content:"cause unverified; examine transport"},
+      {recordId:"mcp-improvement:next",title:"Pending improvement",kind:"task",
+        confidence:"inferred",content:"verify whether relevant"},
+    ]);
+    expect(text).toContain("PENDING ISSUES / IMPROVEMENTS");
+    expect(text!.indexOf("Connection degraded")).toBeLessThan(text!.indexOf("Unrelated note"));
+    expect(text!.indexOf("Pending improvement")).toBeLessThan(text!.indexOf("Unrelated note"));
   });
 
   it("adds a memory note without changing structuredContent or errors",async()=>{
@@ -42,6 +55,10 @@ describe("automatic workspace memory context",()=>{
     expect(body.result.structuredContent).toEqual(base.result.structuredContent);
     expect(body.result.content).toHaveLength(2);
     expect(body.result.content[1]).toEqual({type:"text",text:"Memory note"});
+    const first=await appendMemoryContextText(new Response(JSON.stringify(base)),"Priority briefing",true);
+    const firstBody=await first.json() as typeof base;
+    expect(firstBody.result.content[0]).toEqual({type:"text",text:"Priority briefing"});
+    expect(firstBody.result.content[1]).toEqual(base.result.content[0]);
     const error=new Response(JSON.stringify({...base,result:{...base.result,isError:true}}));
     const unchanged=await appendMemoryContextText(error,"Memory note");
     expect((await unchanged.json() as {result:{content:unknown[]}}).result.content).toHaveLength(1);

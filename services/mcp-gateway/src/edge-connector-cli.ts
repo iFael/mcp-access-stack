@@ -12,6 +12,7 @@ import {
 } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
 import { CentralMemoryStore } from "./memory/central-memory.js";
+import { CentralMemoryOperationalMonitor } from "./memory/operational-monitor.js";
 import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
@@ -180,6 +181,9 @@ async function main(): Promise<void> {
   });
   const loopback = await startLoopbackGateway(gateway.app);
   const localBaseUrl = loopback.baseUrl;
+  // A timer in the Oracle process observes runtime signals even without MCP calls.
+  // It does not execute autonomous code changes or infer an unverified cause.
+  let edgeConnectorReady = false;
   const connector = new EdgeConnector({
     edgeUrl: runtime.connectorUrl,
     token: connectorToken,
@@ -198,7 +202,12 @@ async function main(): Promise<void> {
       hostPid: process.ppid,
     },
     ...(runtime.maxConcurrentRequests === undefined ? {} : { maxConcurrentRequests: runtime.maxConcurrentRequests }),
-    log: writeLog,
+    log: entry => {
+      if (entry.event === "edge_connector_ready") edgeConnectorReady = true;
+      if (["edge_connector_disconnected", "edge_connector_heartbeat_timeout",
+        "edge_connector_reconnecting"].includes(entry.event)) edgeConnectorReady = false;
+      writeLog(entry);
+    },
     onCompanionUpdateStatus: (status) => mcpUpdates.observeCompanionUpdate(status),
   });
   sendWakeEvent = (event) => connector.sendWakeEvent(event);
@@ -207,6 +216,10 @@ async function main(): Promise<void> {
   await mcpUpdates.recover();
 
   const controller = new AbortController();
+  const operationalMonitor = new CentralMemoryOperationalMonitor(memoryStore,
+    () => ({workspaceBackendReady: reloadable.ready, edgeConnectorReady}),
+    code => writeLog({event: "mcp_operational_monitor_error", reason: code}));
+  operationalMonitor.start(controller.signal);
   const stop = (signal: NodeJS.Signals) => {
     writeLog({ event: "edge_connector_process_signal", signal });
     controller.abort();
@@ -253,6 +266,7 @@ async function main(): Promise<void> {
     connector.stop();
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);
+    operationalMonitor.stop();
     await gateway.close();
     await closeLoopbackGateway(loopback.server);
     await browserPool?.close();
