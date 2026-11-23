@@ -3485,10 +3485,12 @@ function collectPersonalLegacyIndex(expectedUrl, options) {
   }
   if (!root) return { missing: true };
   const selector = [
-    "button", "a[href]", "input:not([type='hidden'])", "textarea", "select", "summary",
+    "button", "a", "input:not([type='hidden'])", "textarea", "select", "summary",
     "[role='button']", "[role='link']", "[role='checkbox']", "[role='radio']",
     "[role='combobox']", "[role='option']", "[role='menuitem']", "[role='tab']",
     "[role='switch']", "[role='slider']", "[contenteditable='true']",
+    "[class~='button']", "[class~='btn']", "[tabindex]:not([tabindex='-1'])",
+    "[onclick]", "[data-action]",
   ].join(",");
   const candidates = Array.from(root.querySelectorAll(selector));
   const capped = candidates.length > 5000;
@@ -3507,7 +3509,7 @@ function collectPersonalLegacyIndex(expectedUrl, options) {
     const label = attr("aria-label", 500) || attr("title", 500) ||
       (tag === "input" || tag === "textarea" || tag === "select"
         ? attr("placeholder", 500)
-        : (element.innerText || element.textContent || "").trim().slice(0, 500));
+        : (element.innerText || element.textContent || "").replace(/\\s+/gu, " ").trim().slice(0, 500));
     const id = attr("id");
     const name = attr("name");
     const searchable = [label, id, name, role, type, tag].join(" ").toLocaleLowerCase();
@@ -3531,9 +3533,9 @@ function collectPersonalLegacyIndex(expectedUrl, options) {
     const path = uniqueSelector();
     if (!path) continue;
     let href;
-    if (tag === "a") {
+    if (tag === "a" && element.getAttribute("href") !== null) {
       try {
-        const url = new URL(element.getAttribute("href") || "", location.href);
+        const url = new URL(element.getAttribute("href"), location.href);
         if (url.protocol === "https:" || url.protocol === "http:") href = (url.origin + url.pathname).slice(0, 2000);
       } catch {}
     }
@@ -3647,7 +3649,7 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
           ? element.getAttribute("alt") :
           ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
             ? element.getAttribute("placeholder") : (element.innerText || element.textContent)) ||
-      "").trim();
+      "").replace(/\\s+/gu, " ").trim();
   let candidates = [];
   if (locator) {
     try {
@@ -3655,7 +3657,7 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
       else if (locator.selector) candidates = Array.from(document.querySelectorAll(locator.selector));
       else if (locator.id) candidates = Array.from(document.querySelectorAll("[id]")).filter((e) => e.id === locator.id);
       else if (locator.name) candidates = Array.from(document.querySelectorAll("[name]")).filter((e) => e.getAttribute("name") === locator.name);
-      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable],[onclick]")).slice(0, 2001);
+      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable],[onclick],[class~='button'],[class~='btn'],[tabindex]:not([tabindex='-1']),[data-action]")).slice(0, 2001);
     } catch { return { invalidSelector: true }; }
     if (candidates.length > 2000) return { ambiguous: true };
     candidates = candidates.filter((element) => {
@@ -3670,7 +3672,8 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
       if (locator.onclickSignature && !element.hasAttribute("onclick")) return false;
       if (locator.text) {
         const actual = label(element);
-        if (locator.exact === false ? !actual.includes(locator.text) : actual !== locator.text) return false;
+        const wanted = locator.text.replace(/\\s+/gu, " ").trim();
+        if (locator.exact === false ? !actual.includes(wanted) : actual !== wanted) return false;
       }
       if (locator.ancestorText && !element.parentElement?.innerText?.includes(locator.ancestorText)) return false;
       return true;
