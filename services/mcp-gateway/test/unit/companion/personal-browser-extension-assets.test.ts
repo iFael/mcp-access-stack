@@ -79,7 +79,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.8");
+    expect(manifest.version).toBe("1.17.9");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -1011,6 +1011,77 @@ describe("personal browser extension assets", () => {
     navigation[2]!.parentFrameId = 15;
     await expect(profilePage({ tabId: "personal:7" }))
       .rejects.toMatchObject({ code: "FRAME_NOT_READY" });
+  });
+
+  it("indexes Trello-style div buttons and href-less navigation, and resolves normalized frame text", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://child.example/automation";
+    const element = (tagName: string, className: string, innerText: string) => ({
+      tagName, className, innerText, textContent: innerText, nodeType: 1,
+      id: "", disabled: false, parentElement: null, isContentEditable: false,
+      getAttribute(name: string) {
+        if (name === "class") return className;
+        if (name === "tabindex") return tagName === "A" ? "0" : null;
+        return null;
+      },
+      getBoundingClientRect: () => ({ left: 25, top: 30, width: 150, height: 40 }),
+      scrollIntoView: () => undefined,
+      contains(other: unknown) { return other === this; },
+    });
+    const trigger = element("DIV", "ui fluid blue button add-triggers", "+ Add " + String.fromCharCode(10) + " Trigger");
+    const navigation = element("A", "item tab-rules", "Card Changes");
+    const candidates = [trigger, navigation];
+    const matches = (selector: string, node: typeof trigger) => {
+      const parts = selector.split(",").map((part) => part.trim());
+      return parts.some((part) => {
+        if (part === "a") return node.tagName === "A";
+        if (part === "button") return node.tagName === "BUTTON";
+        if (part === "a:not([href])") return node.tagName === "A";
+        if (part === "[class~='button']") return node.className.split(" ").includes("button");
+        if (part === "[tabindex]:not([tabindex='-1'])") return node.getAttribute("tabindex") !== null;
+        if (part === "div:nth-of-type(1)") return node === trigger;
+        if (part === "a:nth-of-type(1)") return node === navigation;
+        return false;
+      });
+    };
+    let covering: unknown = trigger;
+    const doc = {
+      querySelectorAll: (selector: string) => candidates.filter((node) => matches(selector, node)),
+      elementFromPoint: () => covering,
+      body: { innerText: "+ Add Trigger" },
+      readyState: "complete",
+    };
+    const ctx = vm.createContext({
+      document: doc, location: { href: url }, innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      URL, CSS: { escape: (value: string) => value },
+      globalThis: {},
+    });
+    for (const name of ["collectPersonalLegacyIndex", "probePersonalLegacyReadStep"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const index = vm.runInContext("collectPersonalLegacyIndex", ctx) as
+      (url: string, opts: unknown) => Record<string, unknown>;
+    const probe = vm.runInContext("probePersonalLegacyReadStep", ctx) as
+      (url: string, step: unknown, selector?: string) => Record<string, unknown>;
+    expect(index(url, { visibleOnly: true, query: "Add Trigger" }))
+      .toMatchObject({ totalCount: 1, items: [{ tag: "div", text: "+ Add Trigger", visible: true }] });
+    const navIndex = index(url, { visibleOnly: true, query: "Card Changes" }) as { items: unknown[] };
+    expect(navIndex).toMatchObject({ totalCount: 1, items: [{ tag: "a", text: "Card Changes" }] });
+    expect(navIndex.items[0]).not.toHaveProperty("href");
+    expect(probe(url, { action: "click", locator: { text: "+ Add Trigger" }, describeOnly: true }))
+      .toMatchObject({ found: true, target: { label: "+ Add Trigger", role: "div", submitLike: false } });
+    expect(probe(url, { action: "click", locator: { text: "+ Add Trigger" } }))
+      .toMatchObject({ found: true, point: { x: 100, y: 50 } });
+    expect(probe(url, { action: "assert", condition: "visible", locator: { text: "+ Add Trigger" } }))
+      .toMatchObject({ asserted: true });
+    covering = {};
+    expect(probe(url, { action: "click", locator: { text: "+ Add Trigger" } }))
+      .toMatchObject({ obscured: true });
+    covering = trigger;
+    candidates.push(element("DIV", "ui button add-triggers", "+ Add Trigger"));
+    expect(probe(url, { action: "click", locator: { text: "+ Add Trigger" }, describeOnly: true }))
+      .toMatchObject({ ambiguous: true });
   });
 
   it("builds legacy selectors without reading personal input or password values", () => {
@@ -3616,7 +3687,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.8");
+    expect(parsedManifest.version).toBe("1.17.9");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
