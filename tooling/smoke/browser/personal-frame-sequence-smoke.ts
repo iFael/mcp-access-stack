@@ -21,6 +21,7 @@ const fixtureModulePath = "../../benchmarks/browser/legacy-private-site-fixture.
 
 const submissions: string[] = [];
 const listHits: string[] = [];
+const consultationPosts: string[] = [];
 const pages: Record<string, (url: URL, port: number) => string> = {
   "parent-site.test/": (_url, port) => `<!doctype html><title>Parent</title>
     <body style="margin:0"><div style="height:900px">Top content</div>
@@ -123,6 +124,13 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("ime").textContent += "[" + event.data + "]";
       });
     </script>`,
+  "consult-site.test/MisterT.asp": (url) => url.searchParams.get("R") === "42"
+    ? `<!doctype html><title>Resultados</title><p id="result">Consulta concluída</p>`
+    : `<!doctype html><title>Itens do Estoque</title><form method="post" action="/MisterT.asp?CTRL=fixture&R=42">
+      <label>Descrição <input name="IN1"></label>
+      <input type="submit" name="IN2" value="Pesquisar" onclick="ISP_Submit_OnClick(this);">
+      <input type="submit" name="IN3" value="Salvar" onclick="ISP_Submit_OnClick(this);">
+      </form><script>function ISP_Submit_OnClick(control) {}</script>`,
   "share-site.test/": (_url, port) => `<!doctype html><title>Minha aba</title><body>
     <button onclick="document.getElementById('estado').textContent='clicado pelo MCP'">Marcar</button>
     <p id="estado">intocado</p><a href="http://plain-site.test:${port}/?via=plano">Sair do plano</a>`,
@@ -166,6 +174,7 @@ async function main(): Promise<void> {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     if (url.hostname === "mistert-fixture.test" && legacyFixture.handle(req, res, url)) return;
+    if (url.hostname === "consult-site.test" && req.method === "POST") consultationPosts.push(url.pathname);
     const page = pages[url.hostname + url.pathname];
     if (!page) {
       res.writeHead(404).end("missing");
@@ -395,6 +404,44 @@ async function main(): Promise<void> {
     }
     report("MisterT-like large frameset regression", { indexElapsed, clicked: clicked.clicked,
       alert: alertResult.dialog, destination: verifiedGrid.steps.at(-1)?.value });
+
+    // A real toolbar share grants the native consultation only, not arbitrary POST writes.
+    const consultationPage = await context.newPage();
+    await consultationPage.goto(`http://consult-site.test:${sitePort}/MisterT.asp`);
+    const consultationChromeId = await extensionWorker.evaluate(`(async () => {
+      const [tab] = await chrome.tabs.query({ url: "http://consult-site.test/*" });
+      if (!tab || !(await personalBrowserToolbarClick(tab))) throw new Error("Unable to share consultation fixture");
+      return tab.id;
+    })()`) as number;
+    const consultationTab = "personal:" + consultationChromeId;
+    const consultaIndex = await bridge.domIndex!({ tabId: consultationTab, query: "Pesquisar", limit: 5 });
+    if (consultaIndex.items.length !== 1 || consultaIndex.items[0]?.text !== "Pesquisar") {
+      throw new Error("Native submit label is missing from the legacy index.");
+    }
+    const deniedWrite = await bridge.frameSequence!({ tabId: consultationTab, steps: [
+      { action: "click", locator: { name: "IN3" } },
+    ] }).then(() => "allowed", (error: { code?: string }) => error.code);
+    if (deniedWrite !== "ACTION_REQUIRES_CONFIRMATION" || consultationPosts.length !== 0) {
+      throw new Error("Sharing a tab must not authorize writes.");
+    }
+    const consulted = await bridge.frameSequence!({ tabId: consultationTab, steps: [
+      { action: "fill", locator: { name: "IN1" }, value: "parafuso" },
+      { action: "click", locator: { ref: consultaIndex.items[0]!.ref } },
+      { action: "waitFor", locator: { id: "result" }, state: "visible" },
+      { action: "extract", locator: { id: "result" } },
+    ], timeoutMs: 20000 });
+    if (!consulted.completed || consulted.steps.at(-1)?.value !== "Consulta concluída" || Number(consultationPosts.length) !== 1) {
+      throw new Error("Shared consultation did not complete exactly once without an additional confirmation.");
+    }
+    report("shared native consultation", { result: consulted.steps.at(-1)?.value, deniedWrite, posts: consultationPosts.length });
+    await extensionWorker.evaluate(`(async () => {
+      const tab = await chrome.tabs.get(${consultationChromeId});
+      return personalBrowserToolbarClick(tab);
+    })()`);
+    if ((await bridge.tabs({})).tabs.some((tab) => tab.tabId === consultationTab) || consultationPage.isClosed()) {
+      throw new Error("Revoking the share did not preserve and release the original tab.");
+    }
+    await consultationPage.close();
 
     // Safe pagination follows only same-origin rel=next, never a bare "Próxima".
     const list = await bridge.open({ url: `http://list-site.test:${sitePort}/list?page=1`, taskId: "personal-frame-smoke" });

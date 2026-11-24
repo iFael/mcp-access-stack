@@ -33,7 +33,18 @@ describe("PersonalBrowserBridge", () => {
         ...(request.operation ? { operation: request.operation } : {}),
         input: request.input,
       });
+      if (request.operation === "snapshot") {
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId: "personal:7", url: "https://legacy.example/", content: "Legacy", refs: [] } }));
+        return;
+      }
       if (request.operation !== "frameSequence") return;
+      if ((request.input as { phase?: string })?.phase === "preflight") {
+        extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+          result: { tabId: "personal:7", completed: true, steps: [{ index: 1, action: "click", completed: true,
+            value: { label: "Excluir pedido", role: "button", submitLike: false } }], telemetry: { totalMs: 1 } } }));
+        return;
+      }
       extension.send(JSON.stringify({
         type: "response", id: request.id, ok: true,
         result: {
@@ -58,12 +69,14 @@ describe("PersonalBrowserBridge", () => {
         steps: [{ action: "index" }, { action: "assert" }],
       });
       expect(requests).toEqual([{ operation: "frameSequence", input }]);
-      // Mutations need a fresh page guard before anything is dispatched.
+      // A missing observation is obtained internally, but destructive input
+      // must still be stopped before execution.
       await expect(bridge.frameSequence({ tabId: input.tabId, steps: [
         { action: "index", framePath: ["menu"] },
         { action: "click", framePath: ["menu"], locator: { selector: "#delete" } },
-      ] })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
-      expect(requests).toHaveLength(1);
+      ] })).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      expect(requests.map((request) => request.operation)).toEqual(["frameSequence", "snapshot", "frameSequence"]);
+      expect(requests[2]?.input).toMatchObject({ phase: "preflight", guard: { url: "https://legacy.example/" } });
     } finally {
       extension.off("message", respond);
       await close();
@@ -146,9 +159,11 @@ describe("PersonalBrowserBridge", () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";
     const sent: Array<Record<string, unknown>> = [];
+    const observedOperations: string[] = [];
     const respond = (data: WebSocket.RawData) => {
       const req = JSON.parse(data.toString()) as WireMessage;
       if (req.type !== "request") return;
+      observedOperations.push(req.operation ?? "");
       const input = req.input as { path?: string[] };
       let result: unknown = { tabId, url: "https://legacy.example/", content: "Legacy", refs: [] };
       if (req.operation === "navigatePath") {
@@ -164,10 +179,9 @@ describe("PersonalBrowserBridge", () => {
     extension.on("message", respond);
     try {
       const route = { tabId, path: ["Cadastros", "Clientes"], sourceFramePath: ["menu"] };
-      await expect(bridge.navigatePath(route)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
-      expect(sent).toHaveLength(0);
-      await bridge.snapshot({ tabId });
       await expect(bridge.navigatePath(route)).resolves.toMatchObject({ completed: true });
+      expect(observedOperations).toEqual(["snapshot", "navigatePath", "snapshot"]);
+      expect(sent).toHaveLength(1);
       expect(sent[0]).toMatchObject({ authorized: false, guard: { url: "https://legacy.example/" } });
       const danger = { tabId, path: ["Pedidos", "Excluir pedido"], sourceFramePath: ["menu"] };
       let confirmationId = "";

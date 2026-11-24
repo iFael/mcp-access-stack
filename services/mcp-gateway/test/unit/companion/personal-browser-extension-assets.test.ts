@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.10");
+    expect(manifest.version).toBe("1.17.11");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -522,7 +522,8 @@ describe("personal browser extension assets", () => {
     current = button;
     const locator = { selector: "#salvar" };
     expect(probe(url, { action: "click", locator, describeOnly: true }, undefined))
-      .toEqual({ found: true, target: { label: "Salvar", role: "input:submit", submitLike: true, formMethod: "post" } });
+      .toEqual({ found: true, target: { label: "Salvar", role: "input:submit", submitLike: true, formMethod: "post",
+        frameUrl: "https://child.example/", frameTitle: "" } });
     expect(probe(url, { action: "fill", locator, value: "v" }, undefined))
       .toMatchObject({ notEditable: true });
     button.contains = () => false;
@@ -530,6 +531,49 @@ describe("personal browser extension assets", () => {
     expect(probe(url, { action: "click", locator }, undefined)).toMatchObject({ obscured: true });
     expect(probe("https://other.example/", { action: "click", locator }, undefined))
       .toMatchObject({ stale: true });
+  });
+
+  it("recognizes only native consultation submits and binds the form action without exposing routing parameters", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://legacy.example/MisterT.asp?CTRL=opaque";
+    let action = "/MisterT.asp?CTRL=opaque&R=42";
+    let password = false;
+    let handler = "ISP_Submit_OnClick(this);";
+    let label = "Pesquisar";
+    const form = {
+      getAttribute: (name: string) => name === "method" ? "post" : name === "action" ? action : null,
+      querySelector: () => password ? {} : null,
+    };
+    const button = {
+      tagName: "INPUT", form, disabled: false,
+      get value() { return label; },
+      getAttribute: (name: string) => name === "type" ? "submit" : name === "onclick" ? handler : null,
+      getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    };
+    const ctx = vm.createContext({ URL, location: { href: url }, document: {
+      title: "Itens do Estoque", querySelectorAll: () => [button], body: {},
+    }, getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalLegacyReadStep"), ctx);
+    const probe = vm.runInContext("probePersonalLegacyReadStep", ctx) as
+      (url: string, step: unknown) => { target: Record<string, unknown> };
+    const read = () => probe(url, { action: "click", locator: { selector: "#query" }, describeOnly: true }).target;
+    const first = read();
+    expect(first).toMatchObject({ consultationLabel: true, consultationToken: 1, frameUrl: "https://legacy.example/MisterT.asp" });
+    expect(JSON.stringify(first)).not.toContain("opaque");
+    expect(read()).toEqual(first);
+    action = "/MisterT.asp?CTRL=opaque&R=43";
+    expect(read().consultationToken).toBe(2);
+    label = "Salvar";
+    expect(read()).not.toHaveProperty("consultationLabel");
+    label = "Pesquisar";
+    password = true;
+    expect(read()).not.toHaveProperty("consultationLabel");
+    password = false;
+    handler = "otherHandler()";
+    expect(read()).not.toHaveProperty("consultationLabel");
+    handler = "ISP_Submit_OnClick(this);";
+    action = "https://other.example/MisterT.asp?CTRL=opaque&R=43";
+    expect(read()).not.toHaveProperty("consultationLabel");
   });
 
   it("maps a nested frame point through each verified parent host and rejects transformed hosts", async () => {
@@ -3855,7 +3899,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.10");
+    expect(parsedManifest.version).toBe("1.17.11");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -4377,6 +4421,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const record = vm.runInContext("recordPersonalApprovalRequest", context) as (message: Record<string, unknown>) => Promise<void>;
     const grant = vm.runInContext("grantPersonalSiteApproval", context) as
       (chromeTabId: number, rememberScript?: boolean) => Promise<boolean>;
+    const grantConsultation = vm.runInContext("grantPersonalSharedConsultation", context) as
+      (tabId: number, origin: string) => Promise<boolean>;
     const clearTask = vm.runInContext("clearPersonalTaskApprovals", context) as
       (taskId: string | undefined, chromeTabIds: number[]) => Promise<void>;
     const clearTab = vm.runInContext("clearPersonalTabApprovals", context) as (chromeTabId: number) => Promise<void>;
@@ -4462,6 +4508,14 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(local.has("mcpV3AutoApproveSites")).toBe(false);
     expect((sent.at(-1) as typeof report).autoSites).toEqual([]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 9 })).resolves.toMatchObject({ autoEligible: false, auto: false });
+
+    // An explicit share grants only consultation, for the same origin and tab.
+    await expect(grantConsultation(7, "https://shop.example")).resolves.toBe(false);
+    await expect(grantConsultation(8, "https://other.example")).resolves.toBe(false);
+    await expect(grantConsultation(8, "https://docs.example")).resolves.toBe(true);
+    expect(sent.at(-1)).toMatchObject({ grants: [], consultationGrants: [{ origin: "https://docs.example", tabId: "personal:8" }] });
+    await clearTab(8);
+    expect(sent.at(-1)).not.toHaveProperty("consultationGrants");
 
     // Remembering JavaScript requires the explicit second button on a Chrome notification.
     await ask("personal:7", "https://shop.example", "execute-script");

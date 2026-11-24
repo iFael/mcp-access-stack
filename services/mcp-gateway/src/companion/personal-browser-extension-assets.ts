@@ -101,7 +101,7 @@ export function buildPersonalBrowserExtensionAssets(
       "declarativeNetRequest", "alarms", "contextMenus"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
-    action: { default_title: "MCP V3 — compartilhar ou parar de compartilhar esta aba" },
+    action: { default_title: "MCP V3 — compartilhar aba e permitir consultas neste site; clicar novamente revoga" },
     options_page: "secret-provision.html",
     commands: { "fill-mcp-preparation-secret": { suggested_key: { default: "Ctrl+Shift+8" }, description: "Fill the focused MCP prepare-secret field without showing its value" } },
     // Chrome fetches a notification's data: icon under this policy; without
@@ -816,10 +816,31 @@ async function pushPersonalSiteApprovals() {
   const grants = await readPersonalSiteGrants();
   send({
     type: "site-approvals",
-    grants: grants.map((grant) => ({ origin: grant.origin, category: grant.category,
+    ...(grants.some((grant) => grant.category === "consult-form") ? {
+      consultationGrants: grants.filter((grant) => grant.category === "consult-form" && !grant.taskId)
+        .map((grant) => ({ origin: grant.origin, tabId: grant.tabId })),
+    } : {}),
+    grants: grants.filter((grant) => grant.category !== "consult-form").map((grant) => ({ origin: grant.origin, category: grant.category,
       ...(typeof grant.taskId === "string" ? { taskId: grant.taskId } : { tabId: grant.tabId }) })),
     autoSites: await readPersonalAutoSites(),
     permanentScriptOrigins: await readPersonalPermanentScriptOrigins(),
+  });
+}
+
+// A toolbar share is explicit consent for consultation forms on that tab and origin,
+// not for login, writes, uploads, JavaScript or sensitive actions.
+function grantPersonalSharedConsultation(chromeTabId, expectedOrigin) {
+  return withPersonalSiteGrants(async () => {
+    const metadata = (await readOwnedTabs())[String(chromeTabId)];
+    const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
+    if (metadata?.ownership !== "user" || !tab?.url || !expectedOrigin) return false;
+    let origin;
+    try { origin = new URL(assertPersonalNavigationTarget(tab.url)).origin; } catch { return false; }
+    if (origin !== expectedOrigin) return false;
+    const grant = { origin, category: "consult-form", tabId: PERSONAL_PREFIX + chromeTabId, grantedAt: Date.now() };
+    await changePersonalSiteGrants((grants) => [...grants.filter((candidate) =>
+      candidate.category !== grant.category || candidate.tabId !== grant.tabId), grant]);
+    return true;
   });
 }
 
@@ -3815,7 +3836,10 @@ function collectPersonalLegacyIndex(expectedUrl, options) {
     const role = attr(element, "role", 100);
     // Never inspect field values; only a button's visible label may be indexed.
     const label = attr(element, "aria-label", 500) || attr(element, "title", 500) ||
-      (tag === "input" || tag === "textarea" || tag === "select"
+      (tag === "input" && ["submit", "button", "reset"].includes(type)
+        ? attr(element, "value", 500)
+        : tag === "input" && type === "image" ? attr(element, "alt", 500)
+        : tag === "input" || tag === "textarea" || tag === "select"
         ? attr(element, "placeholder", 500)
         : (element.innerText || element.textContent || "").replace(/\\s+/gu, " ").trim().slice(0, 500));
     const id = attr(element, "id");
@@ -4065,14 +4089,45 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
     const type = (element.getAttribute("type") || "").toLowerCase();
     // The bridge classifies this descriptor with the shared dangerous-action
     // policy; it never contains field values.
+    const form = element.form || element.closest?.("form");
+    const formMethod = (element.getAttribute("formmethod") ||
+      (form ? form.getAttribute("method") || "get" : "")).toLowerCase();
+    // Only the native MisterT consultation controls qualify for the share grant.
+    // A generic POST labelled Search is not proof of a consultation.
+    let consultationToken;
+    if (tag === "input" && type === "submit" && formMethod === "post" &&
+        /^(Pesquisar|Pesquisar ou Inserir novo Registro)$/u.test(text) &&
+        element.getAttribute("onclick") === "ISP_Submit_OnClick(this);" &&
+        !element.getAttribute("formaction") && !element.getAttribute("formtarget") &&
+        !element.getAttribute("formmethod") && form?.querySelector &&
+        !form.querySelector("input[type=password]") && !form.getAttribute("onsubmit")) {
+      try {
+        const page = new URL(expectedUrl);
+        const action = new URL(form.getAttribute("action"), expectedUrl);
+        if (page.origin === action.origin && page.pathname === action.pathname &&
+            /\\/MisterT\\.asp$/iu.test(page.pathname) &&
+            action.searchParams.has("CTRL") && /^\\d+$/u.test(action.searchParams.get("R") || "")) {
+          globalThis.__mcpV3LegacyConsultations ??= new WeakMap();
+          let binding = globalThis.__mcpV3LegacyConsultations.get(element);
+          if (!binding || binding.form !== form || binding.action !== action.href) {
+            const token = (globalThis.__mcpV3LegacyConsultationCounter || 0) + 1;
+            globalThis.__mcpV3LegacyConsultationCounter = token;
+            binding = { form, action: action.href, token };
+            globalThis.__mcpV3LegacyConsultations.set(element, binding);
+          }
+          consultationToken = binding.token;
+        }
+      } catch {}
+    }
     const target = {
       label: text.replace(/\\s+/gu, " ").slice(0, 200),
       role: element.getAttribute("role") || (type ? tag + ":" + type : tag),
       submitLike: type === "submit" || type === "image" ||
         (tag === "button" && (!type || type === "submit") && !!element.form),
-      formMethod: (element.getAttribute("formmethod") ||
-        ((element.form || element.closest?.("form")) ?
-          (element.form || element.closest?.("form")).getAttribute("method") || "get" : "")).toLowerCase(),
+      frameUrl: expectedUrl.split(/[?#]/u)[0].slice(0, 2048),
+      frameTitle: (document.title || "").slice(0, 200),
+      ...(consultationToken !== undefined ? { consultationLabel: true, consultationToken } : {}),
+      formMethod,
     };
     if (step.describeOnly) return { found: true, target };
     if (!enabled) return { disabled: true };
@@ -4433,7 +4488,9 @@ async function preflightPersonalLegacyTargets(input, chromeTabId, signal) {
         " must exist when the sequence starts so it can be confirmed; split the sequence after navigation. " +
         String(error.message || ""));
     }
-    targets.push({ index, ...resolved.observed.target });
+    targets.push({ index, ...resolved.observed.target,
+      ...(resolved.observed.target.consultationLabel && resolved.frame.documentId
+        ? { consultationDocumentId: resolved.frame.documentId } : {}) });
   }
   return targets;
 }
@@ -4484,7 +4541,11 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
           throw coded("ACTION_BLOCKED_BY_POLICY", "Deferred legacy target requires fresh observation and confirmation. Do not replay earlier completed steps.");
         }
       } else if (!expected || expected.label !== target.label || expected.role !== target.role ||
-          expected.submitLike !== target.submitLike || expected.formMethod !== target.formMethod) {
+          expected.submitLike !== target.submitLike || expected.formMethod !== target.formMethod ||
+          expected.frameUrl !== target.frameUrl || expected.frameTitle !== target.frameTitle ||
+          expected.consultationLabel !== target.consultationLabel ||
+          expected.consultationToken !== target.consultationToken ||
+          (expected.consultationDocumentId !== undefined && expected.consultationDocumentId !== resolved?.frame.documentId)) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "The legacy target of step " + index + " changed after preflight.");
       }
     }
@@ -4620,6 +4681,10 @@ async function frameSequence(input, signal) {
     const confirmed = expected.get(target.index);
     return !confirmed || confirmed.label !== target.label || confirmed.role !== target.role ||
       confirmed.submitLike !== target.submitLike || confirmed.formMethod !== target.formMethod ||
+      confirmed.frameUrl !== target.frameUrl || confirmed.frameTitle !== target.frameTitle ||
+      confirmed.consultationLabel !== target.consultationLabel ||
+      confirmed.consultationToken !== target.consultationToken ||
+      confirmed.consultationDocumentId !== target.consultationDocumentId ||
       Boolean(confirmed.deferred) !== Boolean(target.deferred);
   })) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Legacy click/Enter targets changed since preflight; nothing was executed.");
@@ -7274,12 +7339,15 @@ async function personalBrowserToolbarClick(tab) {
       await setPersonalSharedBadge(tab.id, false);
       return true;
     }
+    let consultationOrigin;
+    try { consultationOrigin = new URL(assertPersonalNavigationTarget(tab.url)).origin; } catch {}
     await personalTabSharingDispatch({ type: "mcp-tab-share", tabId: tab.id });
     const shared = (await readOwnedTabs())[String(tab.id)];
     if (shared?.ownership !== "user" || !Number.isInteger(shared.mcpGroupId)) {
       await releasePersonalSharedTab(tab.id).catch(() => undefined);
       throw Error("Chrome could not share the tab in an MCP group.");
     }
+    if (consultationOrigin) await grantPersonalSharedConsultation(tab.id, consultationOrigin);
     return true;
   });
 }

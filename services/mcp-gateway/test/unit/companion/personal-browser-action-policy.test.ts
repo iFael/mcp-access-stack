@@ -19,6 +19,39 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("scopes native consultation authorization to the explicitly shared origin and tab", () => {
+    const policy = new PersonalBrowserActionPolicy();
+    const tabId = "personal:7";
+    const origin = "https://legacy.example";
+    const url = origin + "/MisterT.asp";
+    policy.observeTab({ tabId, url });
+    const input = { tabId, steps: [{ action: "click" as const, framePath: ["MenuContent"],
+      locator: { name: "IN1" } }] };
+    const target = { index: 0, label: "Pesquisar", role: "input:submit", submitLike: true,
+      formMethod: "post", frameUrl: url, frameTitle: "Itens do Estoque",
+      consultationLabel: true, consultationToken: 1, consultationDocumentId: "doc-1" };
+    const denied = (patch: Partial<typeof target> = {}) =>
+      expect(() => policy.guardFrameSequence(input, [{ ...target, ...patch }]))
+        .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    denied();
+    policy.setSiteApprovals({ grants: [], autoSites: [], consultationGrants: [{ origin, tabId }] });
+    expect(() => policy.guardFrameSequence(input, [target])).not.toThrow();
+    expect(() => policy.guardFrameSequence(input, [{ ...target, label: "Pesquisar ou Inserir novo Registro" }])).not.toThrow();
+    denied({ label: "Salvar" });
+    denied({ label: "Excluir" });
+    denied({ label: "Entrar" });
+    denied({ frameTitle: "Login" });
+    denied({ frameUrl: "https://other.example/MisterT.asp" });
+    denied({ frameUrl: origin + "/other.asp" });
+    denied({ consultationLabel: false });
+    denied({ consultationToken: 0 });
+    denied({ consultationDocumentId: "" });
+    policy.setSiteApprovals({ grants: [], autoSites: [], consultationGrants: [{ origin, tabId: "personal:8" }] });
+    denied();
+    policy.setSiteApprovals({ grants: [], autoSites: [], consultationGrants: [] });
+    denied();
+  });
+
   it("allows verified safe child-frame pixels and confirms destructive or unknown targets", () => {
     const policy = prepare();
     const input = { tabId: sample.tabId, x: 120, y: 240 };

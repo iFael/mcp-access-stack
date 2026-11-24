@@ -48,6 +48,7 @@ export interface PersonalSiteApprovals {
   grants: readonly PersonalSiteGrant[];
   autoSites: readonly string[];
   permanentScriptOrigins?: readonly string[];
+  consultationGrants?: readonly { origin: string; tabId: string }[];
 }
 
 export interface PersonalSiteApprovalRequest {
@@ -71,6 +72,11 @@ export interface PersonalLegacyFrameTarget {
   submitLike: boolean;
   deferred?: boolean;
   formMethod?: string;
+  frameUrl?: string;
+  frameTitle?: string;
+  consultationLabel?: boolean;
+  consultationToken?: number;
+  consultationDocumentId?: string;
 }
 
 export class PersonalBrowserActionPolicy {
@@ -439,7 +445,18 @@ export class PersonalBrowserActionPolicy {
         }
         continue;
       }
-      const action = `legacy-${step.action}`;
+      const frame = target.frameUrl ? { tabId: input.tabId, url: target.frameUrl, title: target.frameTitle } : undefined;
+      const frameRisk = frame ? this.interactions.pageRiskCategory(frame) : undefined;
+      const pageRisk = this.interactions.pageRiskCategory(tab);
+      const consultation = step.action === "click" && target.submitLike && target.consultationLabel === true &&
+        target.formMethod === "post" && Number.isSafeInteger(target.consultationToken) &&
+        (target.consultationToken ?? 0) > 0 && Boolean(target.consultationDocumentId) &&
+        !frameRisk && !pageRisk && frame !== undefined &&
+        new URL(frame.url).origin === new URL(page.url).origin &&
+        !/\b(login|logon|sign[ -]?in|entrar|autentica[cç][aã]o)\b/iu.test(`${frame.url} ${frame.title ?? ""} ${page.url} ${page.title ?? ""}`) &&
+        /\/MisterT\.asp$/iu.test(new URL(frame.url).pathname) &&
+        /^(Pesquisar|Pesquisar ou Inserir novo Registro)$/u.test(target.label);
+      const action = consultation ? "legacy-consultation" : `legacy-${step.action}`;
       const scope = `${(step.framePath ?? []).join("/")}|${target.role}:${target.label}`;
       const semanticRole = target.role.replace(/:(?:submit|image)$/u, "");
       const labelRisk = this.interactions.prepareDangerousTarget(tab, target.label,
@@ -447,7 +464,7 @@ export class PersonalBrowserActionPolicy {
       const safeQuery = target.formMethod === "get" &&
         /^(pesquisar|filtrar|consultar|exibir)$/iu.test(target.label);
       const category = labelRisk ?? ((target.submitLike || step.action === "press")
-        ? this.interactions.pageRiskCategory(tab) : undefined) ??
+        ? frameRisk ?? pageRisk : undefined) ??
         ((target.submitLike && !safeQuery) || step.action === "press" ? "submit-form" : undefined);
       if (!category) continue;
       required.push({
@@ -530,6 +547,8 @@ export class PersonalBrowserActionPolicy {
   private approvedBySite(binding: BrowserConfirmationBinding): boolean {
     const approvals = this.siteApprovals;
     if (!approvals || !this.siteApprovable(binding)) return false;
+    if (binding.category === "submit-form" && binding.action === "legacy-consultation" &&
+        approvals.consultationGrants?.some((grant) => grant.origin === binding.origin && grant.tabId === binding.tabId)) return true;
     const taskId = this.pages.get(binding.tabId)?.taskId;
     if (approvals.grants.some((grant) => grant.origin === binding.origin && grant.category === binding.category &&
         ("taskId" in grant ? grant.taskId === taskId : grant.tabId === binding.tabId))) return true;
