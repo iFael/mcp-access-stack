@@ -164,6 +164,15 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async oracleAptMaintenance(
+    input: import("@vs-code-gpt/shared").OracleAptMaintenanceInput,
+  ): Promise<import("@vs-code-gpt/shared").OracleAptMaintenanceResult> {
+    this.calls.push("oracleAptMaintenance");
+    return { status: "permission_required", diagnostic: "helper_missing",
+      ...("operation" in input ? { operation: input.operation } : {}),
+      ...("operationId" in input ? { operationId: input.operationId } : {}) };
+  }
+
   async oracleDiskAuditProvision(
     input: import("@vs-code-gpt/shared").OracleDiskAuditProvisionInput,
   ): Promise<import("@vs-code-gpt/shared").OracleDiskAuditProvisionResult> {
@@ -662,6 +671,19 @@ describe("registerWorkspaceTools", () => {
       status: "bootstrap_required", bootstrapPresent: false,
     });
     expect(executor.calls).toEqual(["oracleDiskAuditProvision"]);
+  });
+
+  it("exposes APT maintenance as a typed, explicit privileged operation", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerWorkspaceTools(server, executor, { includeTools: ["oracle_apt_maintenance"],
+      securitySchemes: [{ type: "noauth" }] });
+    const tool = registeredTools(server)["oracle_apt_maintenance"]!;
+    expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    const result = await tool.handler({ workspaceId: "mcp-access-stack", action: "plan",
+      operation: "repair_oracle_kernel_dependencies" }, { signal: new AbortController().signal });
+    expect(result.structuredContent).toMatchObject({ status: "permission_required", diagnostic: "helper_missing" });
+    expect(executor.calls).toEqual(["oracleAptMaintenance"]);
   });
 
   it("exposes a read-only Oracle inventory tool and rejects Windows or command inputs", async () => {
@@ -2087,8 +2109,9 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(26);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(68);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(68);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(69);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(69);
+    expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

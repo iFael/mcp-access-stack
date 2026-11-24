@@ -3804,6 +3804,131 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "Plan first; apply only with explicit authorization, plan digest and operationId. Read status with the same ID until terminal. Missing helper: authorized host admin. Never elevate run_command or retry uncertain apply.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Oracle-only fixed-scope maintenance: plan repair of missing matching Oracle kernel modules or installation of three fixed Chromium libraries; apply only the exact observed plan SHA and a UUID operation ID, then read status with the same ID. Requires an independently installed root-owned helper. Rejects arbitrary commands, packages, removals and upgrade plans; no reboot or automatic retry. Next: Plan first; apply only with explicit authorization, plan digest and operationId. Read status with the same ID until terminal. Missing helper: authorized host admin. Never elevate run_command or retry uncertain apply.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "oracle_apt_maintenance",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "install",
+                  "configure"
+                ],
+                "type": "string"
+              },
+              "package": {
+                "maxLength": 150,
+                "pattern": "^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9-]+)?$",
+                "type": "string"
+              },
+              "version": {
+                "maxLength": 150,
+                "pattern": "^[0-9][a-zA-Z0-9.+:~\\-]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "package",
+              "version"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "diagnostic": {
+          "enum": [
+            "helper_missing",
+            "root_policy_denied",
+            "invalid_response",
+            "linux_only",
+            "execution_failed",
+            "apt_busy",
+            "apt_simulation_failed",
+            "unsafe_plan",
+            "apt_unhealthy",
+            "plan_changed",
+            "another_operation_active",
+            "operation_conflict",
+            "dispatch_unverified",
+            "worker_unverified",
+            "apt_apply_failed",
+            "postcheck_failed"
+          ],
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "repair_oracle_kernel_dependencies",
+            "install_browser_dependencies"
+          ],
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "planSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "healthy",
+            "blocked",
+            "running",
+            "succeeded",
+            "failed",
+            "outcome_unknown",
+            "permission_required",
+            "unavailable",
+            "not_found",
+            "plan_changed",
+            "operation_conflict"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Plan or execute bounded Oracle APT maintenance"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "service_start only when it is inactive and should run.",
       "securitySchemes": [
         {
@@ -29249,15 +29374,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "6cb0993d6d142cda3cc664d790144d4474eabbb9628f898f0e57fabc55c5f583",
-  "serverVersion": "0.4.0-catalog.c6cb0993d6d14.s65e543617746",
-  "toolCount": 133,
-  "toolSetRevision": "65e5436177469676568b42f9b6fcca7928eddabdf392f5bff782986f0aa0ab1c"
+  "contractRevision": "291cab69e37c15fcf13998ea75dced027f86525227ec67ef21dacaed011fd64c",
+  "serverVersion": "0.4.0-catalog.c291cab69e37c.s8ad4760e9b6e",
+  "toolCount": 134,
+  "toolSetRevision": "8ad4760e9b6e7e6cbe1af7eb3fd5184431a45a8b657ef57c19a036d4de305273"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c6cb0993d6d14.s65e543617746"
+  "version": "0.4.0-catalog.c291cab69e37c.s8ad4760e9b6e"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

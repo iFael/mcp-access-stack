@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
+import { oracleAptMaintenanceInputSchema, oracleAptMaintenanceResultSchema } from "./oracle-apt-contracts.js";
 import { errorCodes, errorDetailsSchema } from "./errors.js";
 import { confirmationModeSchema, permissionProfileSchema, shellNameSchema, workspaceKindSchema } from "./policy.js";
 import {
@@ -939,6 +940,7 @@ export const relayOperations = [
   "oracleListInstances",
   "oracleDiskAudit",
   "oracleDiskAuditProvision",
+  "oracleAptMaintenance",
   "oracleReleaseAdvance",
   "mcpUpdate",
   "prepareRelease",
@@ -1022,6 +1024,7 @@ export const relayRequestSchema = z.discriminatedUnion("operation", [
   z.object({ ...relayRequestBase, operation: z.literal("oracleListInstances"), input: oracleListInstancesInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("oracleDiskAudit"), input: oracleDiskAuditInputSchema }).strict(),
   z.object({ ...relayRequestBase, operation: z.literal("oracleDiskAuditProvision"), input: oracleDiskAuditProvisionInputSchema }).strict(),
+  z.object({ ...relayRequestBase, operation: z.literal("oracleAptMaintenance"), input: oracleAptMaintenanceInputSchema }).strict(),
   z.object({...relayRequestBase,operation:z.literal("oracleReleaseAdvance"),
     input:oracleReleaseAdvanceInputSchema}).strict(),
   z.object({...relayRequestBase,operation:z.literal("mcpUpdate"),input:mcpUpdateInputSchema}).strict(),
@@ -1204,6 +1207,7 @@ export const relayResultSchemas = {
   oracleListInstances: oracleListInstancesResultSchema,
   oracleDiskAudit: oracleDiskAuditResultSchema,
   oracleDiskAuditProvision: oracleDiskAuditProvisionResultSchema,
+  oracleAptMaintenance: oracleAptMaintenanceResultSchema,
   oracleReleaseAdvance:oracleReleaseAdvanceResultSchema,
   mcpUpdate:mcpUpdateResultSchema,
   prepareRelease: prepareReleaseResultSchema,
