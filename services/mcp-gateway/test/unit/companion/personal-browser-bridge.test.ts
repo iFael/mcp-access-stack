@@ -429,8 +429,13 @@ describe("PersonalBrowserBridge", () => {
       await primeReference(bridge, extension, tabId);
       const respond = (data: WebSocket.RawData) => {
         const request = JSON.parse(data.toString()) as WireMessage;
-        if (request.type !== "request" || !request.operation ||
-            !["frameClick", "frameFill"].includes(request.operation)) return;
+        if (request.type !== "request" || !request.operation) return;
+        if (request.operation === "snapshot") {
+          extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
+            result: { tabId, url: "https://example.com/", content: "Frame content", refs: [], pageInstanceId: "frame-state" } }));
+          return;
+        }
+        if (!["frameClick", "frameFill"].includes(request.operation)) return;
         forwarded.push({ operation: request.operation, input: request.input as Record<string, unknown> });
         extension.send(JSON.stringify({ type: "response", id: request.id, ok: true,
           result: { tabId, completed: true } }));
@@ -438,9 +443,9 @@ describe("PersonalBrowserBridge", () => {
       extension.on("message", respond);
       try {
         await expect(bridge.frameClick({ tabId, frame: "details", selector: "#save" }))
-          .resolves.toEqual({ tabId, completed: true });
+          .resolves.toMatchObject({ tabId, completed: true, state: { kind: "full", snapshot: "Frame content" } });
         await expect(bridge.frameFill({ tabId, frame: "details", selector: "#title", value: "Draft" }))
-          .resolves.toEqual({ tabId, completed: true });
+          .resolves.toMatchObject({ tabId, completed: true, state: { kind: "full", snapshot: "Frame content" } });
         expect(forwarded).toEqual([
           { operation: "frameClick", input: { tabId, frame: "details", selector: "#save",
             guard: { url: "https://example.com/" } } },

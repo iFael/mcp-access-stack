@@ -18734,6 +18734,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxLength": 2000000,
           "type": "string"
         },
+        "frameSummary": {
+          "maxLength": 100000,
+          "type": "string"
+        },
         "pageInstanceId": {
           "pattern": "^[a-zA-Z0-9_-]{1,128}$",
           "type": "string"
@@ -19240,9 +19244,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -19452,9 +19568,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -19737,9 +19965,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -19965,9 +20305,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -20178,9 +20630,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -20410,9 +20974,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -20623,9 +21299,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -20836,9 +21624,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -21062,9 +21962,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -22036,6 +23048,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
               "maxLength": 2000000,
               "type": "string"
             },
+            "frameSummary": {
+              "maxLength": 100000,
+              "type": "string"
+            },
             "pageInstanceId": {
               "pattern": "^[a-zA-Z0-9_-]{1,128}$",
               "type": "string"
@@ -22744,9 +23760,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -22963,9 +24091,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -24527,6 +25767,49 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "const": true,
           "type": "boolean"
         },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
         "steps": {
           "items": {
             "additionalProperties": false,
@@ -25522,6 +26805,49 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "maxItems": 10,
           "type": "array"
         },
+        "state": {
+          "additionalProperties": false,
+          "properties": {
+            "baseRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "documentId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "full",
+                "delta",
+                "unchanged",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "refsValid": {
+              "type": "boolean"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "maxLength": 2000000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "documentId",
+            "revision",
+            "kind",
+            "refsValid"
+          ],
+          "type": "object"
+        },
         "tabId": {
           "maxLength": 128,
           "minLength": 1,
@@ -26344,9 +27670,121 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "clicked": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name"
+          ],
+          "type": "object"
+        },
         "completed": {
           "const": true,
           "type": "boolean"
+        },
+        "dialog": {
+          "additionalProperties": false,
+          "properties": {
+            "dialogType": {
+              "enum": [
+                "alert",
+                "confirm",
+                "prompt",
+                "beforeunload"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "open",
+                "handled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "dialogType",
+            "message"
+          ],
+          "type": "object"
+        },
+        "inspected": {
+          "additionalProperties": false,
+          "properties": {
+            "elementToken": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "formMethod": {
+              "maxLength": 20,
+              "type": "string"
+            },
+            "frame": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameTitle": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "frameUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "role": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "submitLike": {
+              "type": "boolean"
+            },
+            "tag": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "type": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          "required": [
+            "frame",
+            "role",
+            "name",
+            "tag",
+            "type",
+            "submitLike",
+            "formMethod",
+            "elementToken",
+            "frameUrl",
+            "frameTitle"
+          ],
+          "type": "object"
         },
         "state": {
           "additionalProperties": false,
@@ -29374,15 +30812,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "291cab69e37c15fcf13998ea75dced027f86525227ec67ef21dacaed011fd64c",
-  "serverVersion": "0.4.0-catalog.c291cab69e37c.s8ad4760e9b6e",
+  "contractRevision": "9e4afb29c41bbe0ed1206e0b07b23e3c3612749ecb71ee663360e91a4f3e6e9a",
+  "serverVersion": "0.4.0-catalog.c9e4afb29c41b.s8ad4760e9b6e",
   "toolCount": 134,
   "toolSetRevision": "8ad4760e9b6e7e6cbe1af7eb3fd5184431a45a8b657ef57c19a036d4de305273"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c291cab69e37c.s8ad4760e9b6e"
+  "version": "0.4.0-catalog.c9e4afb29c41b.s8ad4760e9b6e"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

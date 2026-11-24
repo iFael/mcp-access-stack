@@ -347,10 +347,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
           this.coordinateClicks.delete(input.tabId);
           throw new AppError("ACTION_BLOCKED_BY_POLICY", "Pixel click requires a screenshot captured in the past minute.");
         }
+        // Read-only hit-test in the actual child frame before classifying a
+        // physical click. Unknown targets retain the one-use confirmation.
+        const inspected = this.peerInfo?.capabilities.includes("legacyPixelInspectionV1") &&
+          (input.button ?? "left") === "left" && (input.clickCount ?? 1) === 1 &&
+          (input.modifiers ?? []).length === 0
+          ? await this.call("click", { ...input, guard: { url: point.url }, phase: "inspect-pixel" }, context)
+          : undefined;
         const guard = await this.guardWithChromeConfirmation(
           (confirmationId) => this.actions.guardPixelClick({
             ...input, confirmationId: confirmationId ?? input.confirmationId,
-          }, point.url), context,
+          }, point.url, inspected?.inspected), context,
         );
         try {
           const result = await this.call("click", { ...input, guard }, context);
@@ -412,7 +419,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         tabId: input.tabId, point: { x: input.x, y: input.y }, forceFull: true,
       }, context);
       ref = snapshot.pointTarget?.ref;
-      if (!ref) throw new AppError("LOCATOR_NOT_FOUND", "No observed control at those coordinates.");
+      if (!ref) {
+        const evidence = this.pixelEvidence.get(input.tabId);
+        if (!evidence || evidence.url !== snapshot.url || Date.now() - evidence.observedAt > 60_000) {
+          throw new AppError("ACTION_BLOCKED_BY_POLICY", "Capture a fresh browser_screenshot before hovering inside an unobserved frame.");
+        }
+        const guard = this.actions.guardPixelHover(input, snapshot.url);
+        return this.call("hover", { ...input, guard }, context);
+      }
     }
     const guard = this.actions.guardReference(input.tabId, ref);
     return this.call("hover", { ...input, ref, guard }, context);
@@ -551,7 +565,17 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const resolvedSteps: typeof input.steps = [];
     for (const step of input.steps) {
       if (step.action === "hover" && !step.ref && step.x !== undefined && step.y !== undefined) {
-        resolvedSteps.push({ ...step, ref: await resolvePoint(step.x, step.y) });
+        const snapshot = await this.snapshot({ tabId: input.tabId,
+          point: { x: step.x, y: step.y }, forceFull: true }, context);
+        if (snapshot.pointTarget?.ref) {
+          resolvedSteps.push({ ...step, ref: snapshot.pointTarget.ref });
+        } else {
+          const evidence = this.pixelEvidence.get(input.tabId);
+          if (!evidence || evidence.url !== snapshot.url || Date.now() - evidence.observedAt > 60_000) {
+            throw new AppError("ACTION_BLOCKED_BY_POLICY", "Sequence pixel hover requires a recent screenshot.");
+          }
+          resolvedSteps.push(step);
+        }
       } else if (step.action === "drag") {
         const from = "ref" in step.from ? step.from : { ...step.from,
           ref: await resolvePoint(step.from.x, step.from.y) };
@@ -587,9 +611,10 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
             ...step, tabId: input.tabId, confirmationId: id ?? step.confirmationId,
           }), context) });
         else if (step.action === "hover") {
-          if (!step.ref) throw new AppError("INVALID_ARGUMENT",
-            "Resolve hover coordinates against a fresh snapshot before sequencing.");
-          steps.push({ ...step, guard: this.actions.guardReference(input.tabId, step.ref) });
+          steps.push({ ...step, guard: step.ref
+            ? this.actions.guardReference(input.tabId, step.ref)
+            : this.actions.guardPixelHover({ ...step, tabId: input.tabId },
+                this.actions.guardPage(input.tabId).url) });
         } else if (step.action === "scroll") steps.push({ ...step, guard: step.ref
           ? this.actions.guardReference(input.tabId, step.ref) : this.actions.guardPage(input.tabId) });
         else if (step.action === "drag") steps.push({ ...step,
@@ -620,13 +645,27 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     return this.call("frameExtract", args[0], args[1]);
   }
 
+  // A failed observation cannot turn an already-dispatched click into a
+  // repeatable failure. Report unavailable state rather than hiding it.
+  private async legacyState(tabId: string, context?: OperationContext) {
+    try {
+      const snapshot = await this.snapshot({ tabId, forceFull: true, maxChars: 3500 }, context);
+      return snapshot.state ?? { documentId: "unavailable", revision: 0,
+        kind: "unavailable" as const, refsValid: false };
+    } catch {
+      return { documentId: "unavailable", revision: 0,
+        kind: "unavailable" as const, refsValid: false };
+    }
+  }
+
   async frameClick(
     ...args: Parameters<NonNullable<BrowserExecutor["frameClick"]>>
   ): ReturnType<NonNullable<BrowserExecutor["frameClick"]>> {
     this.requireGuardedActions();
     const [input, context] = args;
     const guard = this.actions.guardPage(input.tabId);
-    return this.call("frameClick", { ...input, guard }, context);
+    const result = await this.call("frameClick", { ...input, guard }, context);
+    return { ...result, state: await this.legacyState(input.tabId, context) };
   }
 
   async frameFill(
@@ -635,7 +674,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     this.requireGuardedActions();
     const [input, context] = args;
     const guard = this.actions.guardPage(input.tabId);
-    return this.call("frameFill", { ...input, guard }, context);
+    const result = await this.call("frameFill", { ...input, guard }, context);
+    return { ...result, state: await this.legacyState(input.tabId, context) };
   }
 
   profilePage(
@@ -668,7 +708,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     const preflight = await this.call("frameSequence", { ...input, guard, phase: "preflight" }, context);
     const targets = parseLegacyFrameTargets(input, preflight.steps);
     this.actions.guardFrameSequence(input, targets);
-    return this.call("frameSequence", { ...input, guard, phase: "execute", expectedTargets: targets }, context);
+    const result = await this.call("frameSequence", { ...input, guard, phase: "execute", expectedTargets: targets }, context);
+    return { ...result, state: await this.legacyState(input.tabId, context) };
   }
 
   async navigatePath(
@@ -682,7 +723,8 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         ...input, confirmationId: confirmationId ?? input.confirmationId,
       }), context,
     );
-    return this.call("navigatePath", { ...input, guard, authorized }, context);
+    const result = await this.call("navigatePath", { ...input, guard, authorized }, context);
+    return { ...result, state: await this.legacyState(input.tabId, context) };
   }
 
   async screenshot(
@@ -2035,7 +2077,9 @@ function parseLegacyFrameTargets(
         typeof value.submitLike !== "boolean" || step.action !== input.steps[step.index]?.action) {
       throw new AppError("RELAY_PROTOCOL_ERROR", "Personal Chrome returned an invalid legacy frame preflight.");
     }
-    return { index: step.index, label: value.label, role: value.role, submitLike: value.submitLike };
+    return { index: step.index, label: value.label, role: value.role,
+      submitLike: value.submitLike, ...(value.deferred === true ? { deferred: true } : {}),
+      ...(typeof value.formMethod === "string" ? { formMethod: value.formMethod } : {}) };
   });
   if (targets.length !== expected.length ||
       targets.some((target, position) => target.index !== expected[position])) {

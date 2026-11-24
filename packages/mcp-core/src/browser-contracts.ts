@@ -415,6 +415,7 @@ export const browserSnapshotResultSchema = z
     title: z.string().max(500).optional(),
     pageInstanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u).optional(),
     accessibility: browserAccessibilitySummarySchema.optional(),
+    frameSummary: z.string().max(100_000).optional(),
     pointTarget: z.object({ ref: z.string().min(1).max(128), role: z.string().max(100), name: z.string().max(500) }).strict().optional(),
     content: z.string().max(2_000_000),
     truncated: z.boolean().optional(),
@@ -1226,6 +1227,30 @@ export const browserActionResultSchema = z
     // Input was dispatched, but the page could not prove whether it changed.
     // Never invite an automatic retry of a potentially duplicated insertion.
     unverified: z.boolean().optional(),
+    // Verified semantic target of a coordinate click, including child frames.
+    clicked: z.object({
+      frame: z.string().max(200),
+      role: z.string().max(100),
+      name: z.string().max(200),
+    }).strict().optional(),
+    // Side-effect-free Chrome hit-test used by the personal-browser bridge.
+    dialog: z.object({
+      state: z.enum(["open", "handled"]),
+      dialogType: z.enum(["alert", "confirm", "prompt", "beforeunload"]),
+      message: z.string().max(2000),
+    }).strict().optional(),
+    inspected: z.object({
+      frame: z.string().max(200),
+      role: z.string().max(100),
+      name: z.string().max(200),
+      tag: z.string().max(100),
+      type: z.string().max(100),
+      submitLike: z.boolean(),
+      formMethod: z.string().max(20),
+      elementToken: z.string().uuid(),
+      frameUrl: z.string().max(2048),
+      frameTitle: z.string().max(200),
+    }).strict().optional(),
     state: browserStateUpdateSchema.optional(),
     timing: browserOperationTimingSchema.optional(),
   })

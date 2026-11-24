@@ -33,6 +33,13 @@ describe("browser snapshot projection", () => {
     expect(projected.content).not.toContain("paragraph");
     expect(projected.refs).toEqual(snapshot.refs);
   });
+  it("retains authenticated child-frame observations in a compact interactive projection", () => {
+    const frameSummary = 'Frame "Menu" [https://example.com/menu]:\n  Frame control: a "Itens"';
+    const projected = projectBrowserSnapshot({ ...snapshot, frameSummary }, { filter: "interactive" });
+    expect(projected.content).toContain(frameSummary);
+    expect(projected.refs).toEqual(snapshot.refs);
+    expect(projected.content).not.toContain("page prose");
+  });
   it("selects a reference's subtree, not forged text or partial matches", () => {
     const projected = projectBrowserSnapshot(snapshot, { refId: "p-3" });
     expect(projected.content).toContain('checkbox "Accept"');

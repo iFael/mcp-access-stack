@@ -19,6 +19,50 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("allows verified safe child-frame pixels and confirms destructive or unknown targets", () => {
+    const policy = prepare();
+    const input = { tabId: sample.tabId, x: 120, y: 240 };
+    const safe = { frame: "Menu", role: "link", name: "Itens",
+      tag: "a", type: "", submitLike: false, formMethod: "",
+      elementToken: "0d6b1423-1421-4b0b-90c3-f6c20e79a638", frameUrl: "https://example.com/menu", frameTitle: "Menu" };
+    expect(policy.guardPixelClick(input, sample.url, safe)).toMatchObject({
+      pixel: true, x: 120, y: 240, inspected: safe,
+    });
+    const getQuery = { ...safe, frame: "MenuContent", role: "input:submit",
+      name: "Pesquisar", tag: "input", type: "submit",
+      submitLike: true, formMethod: "get" };
+    expect(policy.guardPixelClick(input, sample.url, getQuery)).toMatchObject({
+      inspected: getQuery,
+    });
+    const postQuery = { ...getQuery, formMethod: "post" };
+    expect(() => policy.guardPixelClick(input, sample.url, postQuery))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    expect(() => policy.guardPixelClick(input, sample.url, { ...safe, name: "Excluir" }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    expect(() => policy.guardPixelClick(input, sample.url))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    policy.setSiteApprovals({ grants: [{ origin: "https://example.com", category: "submit-form", taskId: "task-1" }], autoSites: [] });
+    expect(policy.guardPixelClick(input, sample.url, postQuery)).toMatchObject({ inspected: postQuery });
+    for (const name of ["Salvar", "Gravar", "Aprovar", "Liberar", "Excluir"]) {
+      expect(() => policy.guardPixelClick(input, sample.url, { ...safe, name }))
+        .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    }
+    expect(() => policy.guardPixelClick(input, sample.url))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    expect(() => policy.guardPixelClick(input, sample.url, { ...safe, frameUrl: "https://example.com/checkout" }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+  });
+
+  it("allows screenshot-bound hover in a child frame without authorizing a click", () => {
+    const policy = prepare();
+    expect(policy.guardPixelHover({ tabId: sample.tabId, x: 20, y: 40 }, sample.url))
+      .toEqual({ url: sample.url, pixel: true, x: 20, y: 40 });
+    expect(() => policy.guardPixelHover({ tabId: sample.tabId, x: 20, y: 40 },
+      "https://other.example")).toThrow(expect.objectContaining({
+        code: "BROWSER_CONFIRMATION_INVALID",
+      }));
+  });
+
   it("binds file upload confirmation to exact file bytes, target and owned origin", () => {
     const policy = prepare();
     const input = {

@@ -303,7 +303,10 @@ function classifyDangerousAction(
   const role = reference.role.toLowerCase();
   const pageRisk = classifyPageContext(context);
   if (role === "link" && pageRisk && PROCEED_LABEL.exec(label)?.[0] === label) return pageRisk;
-  if (role === "link" && (byLabel === undefined || byLabel === "submit-form") && !pageRisk) return undefined;
+  // Explicit mutation labels stay guarded even in legacy UIs that implement
+  // buttons as links. Ordinary navigation links retain the existing behavior.
+  if (role === "link" && (byLabel === undefined || byLabel === "submit-form") && !pageRisk &&
+      !/^(save|salvar|gravar|aprovar|liberar|confirmar)\b/u.test(label)) return undefined;
   if (["checkbox", "switch"].includes(role) &&
       (byLabel === undefined || byLabel === "submit-form") && !pageRisk) return undefined;
   // A control that only saves or goes on is as risky as the page it is on:
@@ -317,6 +320,13 @@ function classifyDangerousAction(
   return byLabel;
 }
 
+// Share the exact classifier with the authenticated extension.
+export function browserDangerousActionClassifierSource(): string {
+  return [foldText.toString(), `const PROCEED_LABEL = ${PROCEED_LABEL};`,
+    `const CLICKABLE_ROLE = ${CLICKABLE_ROLE};`, classifyPageContext.toString(),
+    classifyDangerousLabel.toString(), classifyDangerousAction.toString()].join("\n");
+}
+
 function classifyDangerousLabel(value: string): BrowserConfirmationCategory | undefined {
   if (/\b(delete|remove|cancel|terminate|unsubscribe|deactivate|excluir|remover|cancelar|apagar|encerrar|desativar|descadastrar)\b/.test(value)) return "delete-or-cancel";
   if (/\b(buy|purchase|pay|checkout|order|subscribe|donate|comprar|pagar|pagamento|finalizar compra|assinar|contratar|doar)\b/.test(value) ||
@@ -327,6 +337,6 @@ function classifyDangerousLabel(value: string): BrowserConfirmationCategory | un
   if (/\b(password|credential|security|senha|credencial)\b/.test(value)) return "change-credentials";
   if (/\b(accept|agree|terms|contract|aceitar|concordo|termos|contrato)\b/.test(value)) return "accept-terms-or-contract";
   if (/\b(upload|attach|anexar|enviar arquivo)\b/.test(value)) return "upload-file";
-  if (/\b(submit|save|confirm|apply|create|update|salvar|confirmar|enviar formulario)\b/.test(value)) return "submit-form";
+  if (/\b(submit|save|confirm|apply|create|update|salvar|gravar|aprovar|liberar|confirmar|enviar formulario)\b/.test(value)) return "submit-form";
   return undefined;
 }

@@ -41,7 +41,7 @@ export const LEGACY_LEGACY_SITE_FIXTURE_CONTRACT = Object.freeze({
   }),
 });
 
-export function createLegacyLegacySiteFixtureRouter() {
+export function createLegacyLegacySiteFixtureRouter({ largeMenu = false } = {}) {
   const requestCounts = new Map();
 
   return {
@@ -61,7 +61,7 @@ export function createLegacyLegacySiteFixtureRouter() {
       }
       if (url.pathname === "/legacySite/menu.html") {
         countRequest(requestCounts, nonce, "menu");
-        return html(response, menuDocument(nonce));
+        return html(response, menuDocument(nonce, largeMenu));
       }
       if (url.pathname === "/legacySite/home.html") {
         countRequest(requestCounts, nonce, "home");
@@ -111,16 +111,35 @@ function framesetDocument(nonce) {
 </frameset></html>`;
 }
 
-function menuDocument(nonce) {
+function menuDocument(nonce, largeMenu) {
   const encoded = encodeURIComponent(nonce);
   const delay = LEGACY_LEGACY_SITE_FIXTURE_CONTRACT.delays.menuExpansionMs;
   const dispatch = LEGACY_LEGACY_SITE_FIXTURE_CONTRACT.delays.contentDispatchMs;
+  // The real legacy menu keeps thousands of closed controls in its DOM.
+  const hiddenEntries = Array.from({ length: largeMenu ? 3000 : 0 }, (_, index) =>
+    '<table onmouseover="this.style.cursor=\'pointer\'" onclick="return false"><tr><td>' +
+    '<a href="#" onclick="return false">Rotina ' + index + '</a></td></tr></table>'
+  ).join("");
   return `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><title>Menu legado</title>
 <style>
   body{font-family:Arial,sans-serif;font-size:12px}.legacy-hidden{display:none}table{cursor:pointer;border-collapse:collapse}td{padding:3px 5px}
 </style>
 <script>
+function filterMenu(input) {
+  const query = input.value.toLowerCase();
+  document.querySelectorAll('[data-search-entry]').forEach(function (entry) {
+    entry.style.display = query && entry.textContent.toLowerCase().indexOf(query) !== -1 ? 'block' : 'none';
+  });
+}
+function openStock() {
+  document.getElementById('stock-operation').style.display = 'block';
+  return false;
+}
+function openStockOperation() {
+  document.getElementById('stock-items').style.display = 'block';
+  return false;
+}
 function setFinanceExpanded(expanded) {
   document.getElementById('Plus101').style.display = expanded ? 'none' : 'block';
   document.getElementById('Minus101').style.display = expanded ? 'block' : 'none';
@@ -155,6 +174,21 @@ function openCpxFinance() {
 </script></head>
 <body data-menu-state="collapsed" data-menu-transition="idle" data-content-navigation="idle">
 <div id="MainMenu_1">
+  ${largeMenu ? `<input id="menu-search" type="text" aria-label="Buscar menu" onkeyup="filterMenu(this)">
+  <div id="large-hidden-menu" style="display:none">${hiddenEntries}
+    <a href="#" onclick="return false">Itens</a><a href="#" onclick="return false">Itens</a>
+    <a href="#" onclick="return false">Itens</a>
+  </div>
+  <table id="stock-root" onclick="return openStock()" onmouseover="this.style.cursor='pointer'"><tr><td>Estoque</td></tr></table>
+  <div id="stock-operation" style="display:none">
+    <table onclick="return openStockOperation()" onmouseover="this.style.cursor='pointer'"><tr><td>Operação</td></tr></table>
+    <div id="stock-items" style="display:none">
+      <a id="stock-items-link" href="/legacySite/cpx-finance.html?nonce=${encoded}" target="MenuContent">Itens</a>
+    </div>
+  </div>
+  <div data-search-entry style="display:none"><a href="/legacySite/cpx-finance.html?nonce=${encoded}" target="MenuContent">Estoque - Itens</a></div>
+  <button id="legacy-alert" type="button" onclick="alert('Aviso legado')">Aviso</button>
+  <button id="legacy-delete" type="button" onclick="document.body.dataset.deleted='true'">Excluir</button>` : ""}
   <div id="HomeRoot">
     <table><tr><td><font><a id="home-link" href="/legacySite/home.html?nonce=${encoded}" target="MenuContent">Novidades (Home)</a></font></td></tr></table>
   </div>

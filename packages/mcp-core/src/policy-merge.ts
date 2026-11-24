@@ -91,8 +91,12 @@ const LIMIT_KEYS = [
 ] as const satisfies ReadonlyArray<keyof WorkspaceLimits>;
 
 export function normalizePathKey(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  // Drive-rooted Windows paths retain Windows semantics when inspected on
+  // Linux. Native POSIX paths must keep case and literal backslashes.
+  const windowsPath = process.platform === "win32" || /^[a-z]:[\\/]/iu.test(filePath);
+  const normalized = (windowsPath ? filePath.replace(/\\/gu, "/") : filePath)
+    .replace(/\/+$/u, "");
+  return windowsPath ? normalized.toLowerCase() : normalized;
 }
 
 export function canonicalPathKey(filePath: string): string {

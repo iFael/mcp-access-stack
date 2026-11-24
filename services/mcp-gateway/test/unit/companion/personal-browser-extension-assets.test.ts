@@ -1,4 +1,5 @@
 import vm from "node:vm";
+import { browserActionResultSchema } from "@vs-code-gpt/shared";
 import { describe, expect, it } from "@jest/globals";
 import { buildPersonalBrowserExtensionAssets, sanitizePersonalDiagnosticText, PERSONAL_BROWSER_MUTATING_OPERATIONS } from "../../../src/companion/personal-browser-extension-assets.js";
 import { summarizeCdpAccessibility } from "../../../src/companion/personal-browser-accessibility.js";
@@ -79,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.9");
+    expect(manifest.version).toBe("1.17.10");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -394,6 +395,7 @@ describe("personal browser extension assets", () => {
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       inspectPersonalFrameGraph: async () => ({ byId: new Map([[15, frame]]) }),
+      personalLegacyRefsByTab: new Map([[7, new Map([["lref_12345678", { documentId: "doc1", frameId: 15, frameUrl: "https://child.example/", framePath: ["menu"], selector: "#save", elementToken: 1 }]])]]),
       domIndex: async (input: { framePath: string[] }) => {
         calls.push("index");
         return { items: [{ ref: "lref_12345678", selector: "#save",
@@ -437,7 +439,7 @@ describe("personal browser extension assets", () => {
         { action: "extract", value: "Sanitized content" },
         { action: "assert", completed: true }, { action: "waitFor", completed: true }],
       telemetry: { strategy: "chrome-frame-readonly" } });
-    expect(calls.filter(c => c === "index")).toHaveLength(2);
+    expect(calls.filter(c => c === "index")).toHaveLength(1);
     expect(waits).toBe(2);
   });
 
@@ -452,6 +454,7 @@ describe("personal browser extension assets", () => {
         [15, { frameId: 15, path: ["menu"], url: "https://child.example/", status: "ready",
           documentId: "doc1" }],
       ]) }),
+      personalLegacyRefsByTab: new Map(),
       domIndex: async () => ({ items: [], truncated: false, totalCount: 0 }),
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: { scripting: { executeScript: async () => {
@@ -490,7 +493,7 @@ describe("personal browser extension assets", () => {
       scrollIntoView: () => undefined, innerText: "", textContent: "",
     };
     const button = {
-      tagName: "INPUT", disabled: false, value: "Salvar", isContentEditable: false, form: {},
+      tagName: "INPUT", disabled: false, value: "Salvar", isContentEditable: false, form: { getAttribute: (name: string) => name === "method" ? "post" : null },
       getAttribute: (name: string) => ({ type: "submit" })[name as "type"] ?? null,
       getBoundingClientRect: () => ({ left: 10, top: 40, width: 80, height: 20 }),
       scrollIntoView: () => undefined, innerText: "", textContent: "",
@@ -519,7 +522,7 @@ describe("personal browser extension assets", () => {
     current = button;
     const locator = { selector: "#salvar" };
     expect(probe(url, { action: "click", locator, describeOnly: true }, undefined))
-      .toEqual({ found: true, target: { label: "Salvar", role: "input:submit", submitLike: true } });
+      .toEqual({ found: true, target: { label: "Salvar", role: "input:submit", submitLike: true, formMethod: "post" } });
     expect(probe(url, { action: "fill", locator, value: "v" }, undefined))
       .toMatchObject({ notEditable: true });
     button.contains = () => false;
@@ -969,11 +972,12 @@ describe("personal browser extension assets", () => {
           ];
           return [{ frameId: 15, documentId: "child-1", result: { items: [
             { id: "save", tag: "button", text: "Save", visible: true,
-              enabled: true, selector: "#save", ancestors: [] },
+              enabled: true, selector: "#save", ancestors: [], elementToken: 1 },
           ], truncated: false, totalCount: 1 } }];
         } },
       },
     });
+    vm.runInContext("const personalLegacyRefsByTab = new Map();", context);
     for (const name of ["inspectPersonalLegacyDocument", "personalLegacySignature",
       "inspectPersonalFrameGraph", "profilePage", "collectPersonalLegacyIndex", "domIndex"]) {
       vm.runInContext(extractFunction(serviceWorker, name), context);
@@ -1082,6 +1086,167 @@ describe("personal browser extension assets", () => {
     candidates.push(element("DIV", "ui button add-triggers", "+ Add Trigger"));
     expect(probe(url, { action: "click", locator: { text: "+ Add Trigger" }, describeOnly: true }))
       .toMatchObject({ ambiguous: true });
+  });
+
+  it("resolves a visible late menu item in a 5,000-control legacy menu and rejects replaced lref elements", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://legacy.example/menu";
+    const element = (id: string, text: string, visible: boolean) => ({
+      id, tagName: "A", nodeType: 1, innerText: text, textContent: text,
+      disabled: false, parentElement: null,
+      getAttribute: (name: string) => name === "id" ? id : null,
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: visible ? 100 : 0, height: visible ? 20 : 0 }),
+      scrollIntoView: () => undefined,
+      contains: () => false,
+    });
+    const hidden = Array.from({ length: 5100 }, (_, index) => element("hidden-" + index,
+      index < 3 ? "Itens" : "Rotina " + index, false));
+    let visible = element("stock-items", "Itens", true);
+    const candidates = [...hidden, visible];
+    const doc = {
+      querySelectorAll: (selector: string) => selector.startsWith("#")
+        ? candidates.filter((node) => node.id === selector.slice(1)) : candidates,
+      elementFromPoint: () => visible, body: { innerText: "Itens" }, readyState: "complete",
+    };
+    const ctx = vm.createContext({
+      document: doc, location: { href: url }, innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      CSS: { escape: (value: string) => value }, URL,
+    });
+    for (const name of ["collectPersonalLegacyIndex", "probePersonalLegacyReadStep", "probeDirectFrameControl"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const index = vm.runInContext("collectPersonalLegacyIndex", ctx) as
+      (url: string, opts: unknown) => { items: Array<{ selector: string; elementToken: number }>; totalCount: number };
+    const probe = vm.runInContext("probePersonalLegacyReadStep", ctx) as
+      (...args: unknown[]) => Record<string, unknown>;
+    const direct = vm.runInContext("probeDirectFrameControl", ctx) as
+      (...args: unknown[]) => Record<string, unknown>;
+    expect(probe(url, { action: "click", locator: { text: "Itens" }, describeOnly: true }))
+      .toMatchObject({ found: true, target: { label: "Itens" } });
+    expect(direct(url, null, "Itens", "exact", null, false)).toMatchObject({ x: 60, y: 20 });
+    const result = index(url, { visibleOnly: true, limit: 1, query: "Itens" });
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0]).toMatchObject({ selector: "#stock-items" });
+    const token = result.items[0]!.elementToken;
+    expect(index(url, { visibleOnly: false, limit: 1 }).items[0]).toMatchObject({ selector: "#stock-items" });
+    const step = { action: "click", locator: { ref: "lref_test" }, describeOnly: true, expectedElementToken: token };
+    expect(probe(url, step, "#stock-items")).toMatchObject({ found: true });
+    visible = element("stock-items", "Itens", true);
+    candidates[candidates.length - 1] = visible;
+    expect(probe(url, step, "#stock-items")).toMatchObject({ found: false });
+  });
+
+  it("hit-tests the actual same-origin frame and binds the pixel descriptor to element identity", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "http://legacy.example/";
+    let token = 0;
+    const anchor = () => ({
+      tagName: "A", isConnected: true, disabled: false, innerText: "Itens",
+      getAttribute: () => null, closest: (selector: string): unknown => selector === "form" ? null : control,
+    });
+    let control = anchor();
+    const child = {
+      readyState: "complete", title: "Menu",
+      location: { origin: "http://legacy.example", pathname: "/menu" },
+      elementFromPoint: (x: number, y: number) => {
+        expect([x, y]).toEqual([40, 30]);
+        return control;
+      },
+    };
+    const frame = {
+      tagName: "FRAME", contentDocument: child, clientWidth: 200, clientHeight: 300, clientLeft: 0, clientTop: 0,
+      getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 300 }),
+      getAttribute: (name: string) => name === "name" ? "Menu" : null,
+    };
+    const ctx = vm.createContext({
+      location: { href: url }, innerWidth: 800, innerHeight: 600,
+      document: { elementFromPoint: () => frame, defaultView: { getComputedStyle: () => ({ transform: "none" }) } },
+      // Insecure HTTP pages expose getRandomValues, but not randomUUID.
+      crypto: { getRandomValues: (bytes: Uint8Array) => { bytes.fill(++token); return bytes; } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "inspectPersonalPixelSemanticTarget"), ctx);
+    const hit = vm.runInContext("inspectPersonalPixelSemanticTarget", ctx) as
+      (url: string, x: number, y: number) => Record<string, unknown>;
+    const first = hit(url, 50, 50);
+    expect(first).toMatchObject({ frame: "Menu", role: "link", name: "Itens", frameUrl: "http://legacy.example/menu" });
+    expect(hit(url, 50, 50)).toEqual(first);
+    const parsed = browserActionResultSchema.parse({ tabId: "personal:7", completed: true, inspected: first }).inspected;
+    expect(JSON.stringify(first)).not.toBe(JSON.stringify(parsed));
+    vm.runInContext(extractFunction(serviceWorker, "samePersonalPixelSemanticTarget"), ctx);
+    const same = vm.runInContext("samePersonalPixelSemanticTarget", ctx) as
+      (actual: unknown, expected: unknown) => boolean;
+    expect(same(first, parsed)).toBe(true);
+    expect(same({ ...first, name: "Excluir" }, parsed)).toBe(false);
+    expect(same({ ...first, unexpected: true }, parsed)).toBe(false);
+    expect(same(undefined, parsed)).toBe(false);
+    control = anchor();
+    const replaced = hit(url, 50, 50);
+    expect(replaced.elementToken).not.toBe(first.elementToken);
+    expect(same(replaced, parsed)).toBe(false);
+    Object.assign(frame, { contentDocument: null });
+    expect(hit(url, 50, 50)).toEqual({ unknown: true });
+  });
+
+  it("reports unexpected JavaScript alerts after handling them and leaves confirm dialogs open", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    type Listener = (source: { tabId: number }, method: string, params: unknown) => void;
+    let listener: Listener | undefined;
+    let resolveRelease: (() => void) | undefined;
+    let dialogType = "alert";
+    const handled: boolean[] = [];
+    const held = new Map<string, unknown>();
+    const ctx = vm.createContext({
+      personalTaskDebuggers: held, personalDialogArms: new Map(), inFlightRequests: new Map(),
+      __mcpV3PersonalTaskDebuggers: held, PERSONAL_DEBUGGER_IDLE_MS: 600000,
+      setTimeout: () => 1, clearTimeout: () => undefined,
+      releasePersonalTaskDebugger: async () => undefined,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, attachGuardedDebugger: async () => false,
+      detachGuardedDebugger: async () => undefined,
+      probeGuardedElement: () => ({ x: 10, y: 10 }),
+      revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown, _input: unknown, point: unknown) => point,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        scripting: { executeScript: async () => [{ result: { x: 10, y: 10 } }] },
+        debugger: {
+          onEvent: { addListener: (fn: Listener) => { listener = fn; } },
+          sendCommand: async (_target: unknown, method: string, args: Record<string, unknown>) => {
+            if (method === "Input.dispatchMouseEvent" && args.type === "mouseReleased") {
+              return new Promise<void>((resolve) => {
+                resolveRelease = resolve;
+                listener?.({ tabId: 7 }, "Page.javascriptDialogOpening", {
+                  type: dialogType, message: "Aviso legado", url: "https://example.com/",
+                });
+              });
+            }
+            if (method === "Page.handleJavaScriptDialog") {
+              handled.push(args.accept === true);
+              resolveRelease?.();
+            }
+          },
+        },
+      },
+    });
+    for (const name of ["holdPersonalTaskDebugger", "click"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    vm.runInContext("holdPersonalTaskDebugger(7)", ctx);
+    const click = vm.runInContext("click", ctx) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", ref: "button", guard: { url: "https://example.com/", ref: "button" } };
+    const start = Date.now();
+    await expect(click(input)).resolves.toMatchObject({
+      completed: true, dialog: { state: "handled", dialogType: "alert", message: "Aviso legado" },
+    });
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(handled).toEqual([true]);
+    dialogType = "confirm";
+    await expect(click(input)).resolves.toMatchObject({
+      completed: true, unverified: true,
+      dialog: { state: "open", dialogType: "confirm", message: "Aviso legado" },
+    });
+    expect(handled).toEqual([true]);
+    resolveRelease?.();
   });
 
   it("builds legacy selectors without reading personal input or password values", () => {
@@ -1288,12 +1453,15 @@ describe("personal browser extension assets", () => {
           if (func.name === "confirmDirectFrameFocus") return [
             { frameId: 17, documentId: "child-1", result: focused },
           ];
+          if (func.name === "personalFocusedFieldNeedsKeys") return [
+            { frameId: 17, documentId: "child-1", result: false },
+          ];
           throw new Error("Unexpected Chrome script " + func.name);
         } },
       },
     });
     for (const fn of ["describePersonalFrame", "probeDirectFrameControl",
-      "probeDirectFrameElement", "confirmDirectFrameFocus",
+      "probeDirectFrameElement", "confirmDirectFrameFocus", "personalFocusedFieldNeedsKeys",
       "directFrameAction", "frameClick", "frameFill"]) {
       vm.runInContext(extractFunction(serviceWorker, fn), context);
     }
@@ -3687,7 +3855,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.9");
+    expect(parsedManifest.version).toBe("1.17.10");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -5192,7 +5360,7 @@ function groupHarness(serviceWorker: string) {
   });
   vm.runInContext(`const OWNED_TABS_KEY = "mcpV3OwnedTabs"; const PERSONAL_PREFIX = "personal:"; // gitleaks:allow -- fixed browser ownership storage name, not a credential
 const PERSONAL_NOTIFICATION_ICON = "data:,"; const BLOCKED_PRIVATE_ORIGINS = new Set();
-const axTargetsByTab = new Map(); const personalNetworkEntries = new Map(); const mutationQueues = new Map();
+const axTargetsByTab = new Map(); const personalLegacyRefsByTab = new Map(); const personalNetworkEntries = new Map(); const mutationQueues = new Map();
 let ownershipTail = Promise.resolve();`, context);
   for (const name of ["withOwnershipLock", "enqueueMutation", "readOwnedTabs", "writeOwnedTabs", "removeOwnedTab",
     "coded", "chromeTabIdFrom", "isPrivateIpv4", "isPrivateHost", "assertPersonalNavigationTarget",

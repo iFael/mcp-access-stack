@@ -44,6 +44,13 @@ describe("policy-merge", () => {
     );
   });
 
+  it("preserves native POSIX case and literal backslashes on non-Windows hosts", () => {
+    if (process.platform === "win32") return;
+    expect(canonicalPathKey("/srv/Repo/")).toBe("/srv/Repo");
+    expect(canonicalPathKey("/srv/Repo")).not.toBe(canonicalPathKey("/srv/repo"));
+    expect(canonicalPathKey("/srv/repo\\other")).not.toBe(canonicalPathKey("/srv/repo/other"));
+  });
+
   it("discovers open trusted folders without editing JSON", () => {
     const result = mergeWorkspacePolicies(mergeBase([]), [
       {
@@ -142,14 +149,14 @@ describe("policy-merge", () => {
               allowShell: [],
               allowedShells: ["powershell"],
             },
-            "C:/projects/secret",
+            "C:/projects/SECRET",
           ),
         ]),
         [
           {
             name: "Secret",
             rootPath: "c:/projects/secret",
-            canonicalRootPath: "C:/projects/secret",
+            canonicalRootPath: "c:/projects/secret",
             trusted: true,
           },
         ],

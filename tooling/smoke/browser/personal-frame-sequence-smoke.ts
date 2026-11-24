@@ -13,6 +13,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { chromium, type BrowserContext } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
 
+interface LegacyFixtureRouter {
+  handle(request: http.IncomingMessage, response: http.ServerResponse, url: URL): boolean;
+  indexUrl(origin: string, nonce: string): string;
+}
+const fixtureModulePath = "../../benchmarks/browser/legacy-private-site-fixture.mjs";
+
 const submissions: string[] = [];
 const listHits: string[] = [];
 const pages: Record<string, (url: URL, port: number) => string> = {
@@ -153,8 +159,13 @@ function confirmationIdOf(error: unknown): string {
 }
 
 async function main(): Promise<void> {
+  const { createLegacyLegacySiteFixtureRouter } = await import(fixtureModulePath) as {
+    createLegacyLegacySiteFixtureRouter(options: { largeMenu: boolean }): LegacyFixtureRouter;
+  };
+  const legacyFixture = createLegacyLegacySiteFixtureRouter({ largeMenu: true });
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (url.hostname === "mistert-fixture.test" && legacyFixture.handle(req, res, url)) return;
     const page = pages[url.hostname + url.pathname];
     if (!page) {
       res.writeHead(404).end("missing");
@@ -307,6 +318,83 @@ async function main(): Promise<void> {
     const deleted = await approvedPath;
     report("one-use Chrome-approved dangerous menu path", deleted.checkpoint);
     if (deleted.checkpoint?.step.value !== "apagado") throw new Error("Confirmed menu path did not run.");
+
+    // Real same-origin frameset matching the large MisterT legacy fixture.
+    const fixtureUrl = legacyFixture.indexUrl(`http://mistert-fixture.test:${sitePort}`, "mistert-smoke");
+    const fixtureTab = await bridge.open({ url: fixtureUrl, taskId: "personal-frame-smoke" });
+    const fixtureId = fixtureTab.tab.tabId;
+    const fixturePage = context.pages().find((candidate) => candidate.url() === fixtureUrl);
+    if (!fixturePage) throw new Error("MisterT-like fixture tab was not found.");
+    await fixturePage.frameLocator('frame[name="Menu"]').locator("#stock-root").waitFor();
+    const menuFrame = fixturePage.frame({ name: "Menu" });
+    if (!menuFrame) throw new Error("MisterT-like fixture menu frame was not found.");
+    const compact = await bridge.snapshot({ tabId: fixtureId, filter: "interactive", maxChars: 3500 });
+    if (!compact.content.includes('Frame "Menu"') || !compact.content.includes('Frame "MenuContent"')) {
+      throw new Error("Compact frameset snapshot omitted the child documents.");
+    }
+    const indexStarted = performance.now();
+    const menuIndex = await bridge.domIndex!({ tabId: fixtureId, framePath: ["Menu"],
+      query: "Estoque", visibleOnly: true });
+    const indexElapsed = performance.now() - indexStarted;
+    const menuRef = menuIndex.items.find((item) => item.id === "stock-root")?.ref;
+    if (!menuRef) throw new Error("The large menu index omitted the visible stock entry.");
+    report("large legacy menu index", { totalMs: indexElapsed, telemetry: menuIndex.telemetry });
+    if (indexElapsed >= 1000) throw new Error("Large-menu indexing exceeded the 1-second target.");
+    await bridge.navigatePath!({ tabId: fixtureId, path: ["Estoque", "Operação", "Itens"],
+      sourceFramePath: ["Menu"], targetFramePath: ["MenuContent"] });
+    const verifiedGrid = await bridge.frameSequence!({ tabId: fixtureId, steps: [
+      { action: "waitFor", framePath: ["MenuContent"], locator: { selector: ".finc-fila-head" }, state: "visible" },
+      { action: "assert", framePath: ["Menu"], locator: { ref: menuRef }, condition: "exists" },
+      { action: "extract", framePath: ["MenuContent"], locator: { selector: ".finc-fila-head" } },
+    ] });
+    if (verifiedGrid.steps.at(-1)?.value !== "CPX-Finance") {
+      throw new Error("Large-menu navigation failed to load the destination, or the menu ref became stale.");
+    }
+    const pointFor = async (selector: string) => {
+      const rect = await menuFrame.locator(selector).boundingBox();
+      if (!rect) throw new Error("Expected visible legacy fixture control " + selector);
+      return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+    };
+    await bridge.screenshot({ tabId: fixtureId });
+    const searchPoint = await pointFor("#menu-search");
+    const clicked = await bridge.click({ tabId: fixtureId, ...searchPoint });
+    if (clicked.clicked?.frame !== "Menu" || clicked.clicked.name !== "Buscar menu") {
+      throw new Error("Coordinate click did not identify the actual menu-frame input.");
+    }
+    await bridge.type({ tabId: fixtureId, text: "itens" });
+    if (!(await menuFrame.locator("[data-search-entry]").isVisible())) {
+      throw new Error("Native typing did not trigger the menu's onkeyup.");
+    }
+    await bridge.frameFill!({ tabId: fixtureId, frame: "Menu", selector: "#menu-search", value: "sem resultado" });
+    if (await menuFrame.locator("[data-search-entry]").isVisible()) {
+      throw new Error("Native frame fill did not trigger the menu's onkeyup.");
+    }
+    await bridge.screenshot({ tabId: fixtureId });
+    const hoverPoint = await pointFor("#stock-root");
+    await bridge.sequence({ tabId: fixtureId, steps: [{ action: "hover", ...hoverPoint }] });
+    if (await menuFrame.locator("#stock-root").evaluate((element) => (element as { style: { cursor: string } }).style.cursor) !== "pointer") {
+      throw new Error("Coordinate hover in a frame sequence did not deliver native mouse movement.");
+    }
+    fixturePage.on("dialog", () => { /* The extension, not Playwright, handles the dialog. */ });
+    await bridge.screenshot({ tabId: fixtureId });
+    const alertPoint = await pointFor("#legacy-alert");
+    const alertStarted = performance.now();
+    const alertResult = await bridge.click({ tabId: fixtureId, ...alertPoint });
+    if (alertResult.dialog?.state !== "handled" || alertResult.dialog.message !== "Aviso legado" ||
+        performance.now() - alertStarted >= 2000) {
+      throw new Error("Unexpected legacy alert was not handled and reported in under 2 seconds.");
+    }
+    await bridge.screenshot({ tabId: fixtureId });
+    const deletePoint = await pointFor("#legacy-delete");
+    const deniedFixtureDelete = bridge.click({ tabId: fixtureId, ...deletePoint })
+      .then(() => "allowed", (error: { code?: string }) => error.code);
+    await decideChromeNotification("mcp-action:", 1);
+    if (await deniedFixtureDelete !== "ACTION_BLOCKED_BY_POLICY" ||
+        await menuFrame.locator("body").getAttribute("data-deleted") !== null) {
+      throw new Error("Destructive coordinate click was not blocked.");
+    }
+    report("MisterT-like large frameset regression", { indexElapsed, clicked: clicked.clicked,
+      alert: alertResult.dialog, destination: verifiedGrid.steps.at(-1)?.value });
 
     // Safe pagination follows only same-origin rel=next, never a bare "Próxima".
     const list = await bridge.open({ url: `http://list-site.test:${sitePort}/list?page=1`, taskId: "personal-frame-smoke" });
