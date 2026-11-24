@@ -663,6 +663,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<NonNullable<BrowserExecutor["frameClick"]>> {
     this.requireGuardedActions();
     const [input, context] = args;
+    await this.ensureLegacyObservation(input.tabId, context);
     const guard = this.actions.guardPage(input.tabId);
     const result = await this.call("frameClick", { ...input, guard }, context);
     return { ...result, state: await this.legacyState(input.tabId, context) };
@@ -673,9 +674,20 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<NonNullable<BrowserExecutor["frameFill"]>> {
     this.requireGuardedActions();
     const [input, context] = args;
+    await this.ensureLegacyObservation(input.tabId, context);
     const guard = this.actions.guardPage(input.tabId);
     const result = await this.call("frameFill", { ...input, guard }, context);
     return { ...result, state: await this.legacyState(input.tabId, context) };
+  }
+
+  private async ensureLegacyObservation(tabId: string, context?: OperationContext): Promise<void> {
+    if (!this.updatedExtensionNeedsSnapshot) {
+      try { this.actions.guardPage(tabId); return; }
+      catch (error) { if (!(error instanceof AppError) || error.code !== "INVALID_ARGUMENT") throw error; }
+    }
+    // Obtain the same authenticated snapshot internally rather than requiring
+    // the caller to make a separate observation before using legacy locators.
+    await this.snapshot({ tabId, filter: "interactive", maxChars: 3500 }, context);
   }
 
   profilePage(
@@ -704,6 +716,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
     // Two calls: a side-effect-free preflight describes every click/Enter
     // target, all required confirmations are bound before any is consumed,
     // and execution fails closed unless it observes the same targets.
+    await this.ensureLegacyObservation(input.tabId, context);
     const guard = this.actions.guardPage(input.tabId);
     const preflight = await this.call("frameSequence", { ...input, guard, phase: "preflight" }, context);
     const targets = parseLegacyFrameTargets(input, preflight.steps);
@@ -717,6 +730,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   ): ReturnType<NonNullable<BrowserExecutor["navigatePath"]>> {
     const [input, context] = args;
     this.requireGuardedActions();
+    await this.ensureLegacyObservation(input.tabId, context);
     const guard = this.actions.guardPage(input.tabId);
     const authorized = await this.guardWithChromeConfirmation(
       (confirmationId) => this.actions.guardNavigatePath({
@@ -2022,9 +2036,10 @@ async function sweepStaleStagedUploads(root: string): Promise<void> {
 }
 
 function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalSiteApprovals | undefined {
-  const { grants, autoSites, permanentScriptOrigins = [] } = message;
+  const { grants, autoSites, permanentScriptOrigins = [], consultationGrants = [] } = message;
   if (!Array.isArray(grants) || grants.length > 500 || !Array.isArray(autoSites) || autoSites.length > 200 ||
-      !Array.isArray(permanentScriptOrigins) || permanentScriptOrigins.length > 100) return undefined;
+      !Array.isArray(permanentScriptOrigins) || permanentScriptOrigins.length > 100 ||
+      !Array.isArray(consultationGrants) || consultationGrants.length > 500) return undefined;
   const parsedGrants: PersonalSiteGrant[] = [];
   for (const grant of grants) {
     if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
@@ -2046,8 +2061,15 @@ function parsePersonalSiteApprovals(message: Record<string, unknown>): PersonalS
   if (autoSites.some((site) => typeof site !== "string" || !/^[a-z0-9.-]{1,253}$/u.test(site))) return undefined;
   if (permanentScriptOrigins.some((origin) => typeof origin !== "string" ||
       !/^https:\/\/[^/\s]{1,260}$/u.test(origin) || new URL(origin).origin !== origin)) return undefined;
+  const parsedConsultations: Array<{ origin: string; tabId: string }> = [];
+  for (const grant of consultationGrants) {
+    if (!isRecord(grant) || typeof grant.origin !== "string" || !/^https?:\/\/[^/\s]{1,260}$/u.test(grant.origin) ||
+        typeof grant.tabId !== "string" || !/^personal:\d{1,12}$/u.test(grant.tabId) ||
+        Object.keys(grant).length !== 2) return undefined;
+    parsedConsultations.push({ origin: grant.origin, tabId: grant.tabId });
+  }
   return { grants: parsedGrants, autoSites: [...autoSites] as string[],
-    permanentScriptOrigins: [...permanentScriptOrigins] as string[] };
+    permanentScriptOrigins: [...permanentScriptOrigins] as string[], consultationGrants: parsedConsultations };
 }
 
 function sendCancel(socket: WebSocket, id: string): void {
@@ -2079,7 +2101,12 @@ function parseLegacyFrameTargets(
     }
     return { index: step.index, label: value.label, role: value.role,
       submitLike: value.submitLike, ...(value.deferred === true ? { deferred: true } : {}),
-      ...(typeof value.formMethod === "string" ? { formMethod: value.formMethod } : {}) };
+      ...(typeof value.formMethod === "string" ? { formMethod: value.formMethod } : {}),
+      ...(typeof value.frameUrl === "string" && /^https?:\/\//u.test(value.frameUrl) && value.frameUrl.length <= 2048 ? { frameUrl: value.frameUrl } : {}),
+      ...(typeof value.frameTitle === "string" && value.frameTitle.length <= 200 ? { frameTitle: value.frameTitle } : {}),
+      ...(typeof value.consultationLabel === "boolean" ? { consultationLabel: value.consultationLabel } : {}),
+      ...(typeof value.consultationToken === "number" && Number.isSafeInteger(value.consultationToken) && value.consultationToken > 0 ? { consultationToken: value.consultationToken } : {}),
+      ...(typeof value.consultationDocumentId === "string" && value.consultationDocumentId.length <= 128 ? { consultationDocumentId: value.consultationDocumentId } : {}) };
   });
   if (targets.length !== expected.length ||
       targets.some((target, position) => target.index !== expected[position])) {
