@@ -12,7 +12,12 @@ import path from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { chromium, type BrowserContext } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
-import { createLegacyLegacySiteFixtureRouter } from "../../benchmarks/browser/legacy-private-site-fixture.mjs";
+
+interface LegacyFixtureRouter {
+  handle(request: http.IncomingMessage, response: http.ServerResponse, url: URL): boolean;
+  indexUrl(origin: string, nonce: string): string;
+}
+const fixtureModulePath = "../../benchmarks/browser/legacy-private-site-fixture.mjs";
 
 const submissions: string[] = [];
 const listHits: string[] = [];
@@ -154,7 +159,10 @@ function confirmationIdOf(error: unknown): string {
 }
 
 async function main(): Promise<void> {
-  const legacyFixture = createLegacyLegacySiteFixtureRouter();
+  const { createLegacyLegacySiteFixtureRouter } = await import(fixtureModulePath) as {
+    createLegacyLegacySiteFixtureRouter(options: { largeMenu: boolean }): LegacyFixtureRouter;
+  };
+  const legacyFixture = createLegacyLegacySiteFixtureRouter({ largeMenu: true });
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     if (url.hostname === "mistert-fixture.test" && legacyFixture.handle(req, res, url)) return;
@@ -364,7 +372,7 @@ async function main(): Promise<void> {
     await bridge.screenshot({ tabId: fixtureId });
     const hoverPoint = await pointFor("#stock-root");
     await bridge.sequence({ tabId: fixtureId, steps: [{ action: "hover", ...hoverPoint }] });
-    if (await menuFrame.locator("#stock-root").evaluate((element) => (element as HTMLElement).style.cursor) !== "pointer") {
+    if (await menuFrame.locator("#stock-root").evaluate((element) => (element as { style: { cursor: string } }).style.cursor) !== "pointer") {
       throw new Error("Coordinate hover in a frame sequence did not deliver native mouse movement.");
     }
     fixturePage.on("dialog", () => { /* The extension, not Playwright, handles the dialog. */ });

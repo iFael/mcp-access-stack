@@ -41,7 +41,7 @@ export const LEGACY_LEGACY_SITE_FIXTURE_CONTRACT = Object.freeze({
   }),
 });
 
-export function createLegacyLegacySiteFixtureRouter() {
+export function createLegacyLegacySiteFixtureRouter({ largeMenu = false } = {}) {
   const requestCounts = new Map();
 
   return {
@@ -61,7 +61,7 @@ export function createLegacyLegacySiteFixtureRouter() {
       }
       if (url.pathname === "/legacySite/menu.html") {
         countRequest(requestCounts, nonce, "menu");
-        return html(response, menuDocument(nonce));
+        return html(response, menuDocument(nonce, largeMenu));
       }
       if (url.pathname === "/legacySite/home.html") {
         countRequest(requestCounts, nonce, "home");
@@ -111,12 +111,12 @@ function framesetDocument(nonce) {
 </frameset></html>`;
 }
 
-function menuDocument(nonce) {
+function menuDocument(nonce, largeMenu) {
   const encoded = encodeURIComponent(nonce);
   const delay = LEGACY_LEGACY_SITE_FIXTURE_CONTRACT.delays.menuExpansionMs;
   const dispatch = LEGACY_LEGACY_SITE_FIXTURE_CONTRACT.delays.contentDispatchMs;
   // The real legacy menu keeps thousands of closed controls in its DOM.
-  const hiddenEntries = Array.from({ length: 3000 }, (_, index) =>
+  const hiddenEntries = Array.from({ length: largeMenu ? 3000 : 0 }, (_, index) =>
     '<table onmouseover="this.style.cursor=\'pointer\'" onclick="return false"><tr><td>' +
     '<a href="#" onclick="return false">Rotina ' + index + '</a></td></tr></table>'
   ).join("");
@@ -174,7 +174,7 @@ function openCpxFinance() {
 </script></head>
 <body data-menu-state="collapsed" data-menu-transition="idle" data-content-navigation="idle">
 <div id="MainMenu_1">
-  <input id="menu-search" type="text" aria-label="Buscar menu" onkeyup="filterMenu(this)">
+  ${largeMenu ? `<input id="menu-search" type="text" aria-label="Buscar menu" onkeyup="filterMenu(this)">
   <div id="large-hidden-menu" style="display:none">${hiddenEntries}
     <a href="#" onclick="return false">Itens</a><a href="#" onclick="return false">Itens</a>
     <a href="#" onclick="return false">Itens</a>
@@ -188,7 +188,7 @@ function openCpxFinance() {
   </div>
   <div data-search-entry style="display:none"><a href="/legacySite/cpx-finance.html?nonce=${encoded}" target="MenuContent">Estoque - Itens</a></div>
   <button id="legacy-alert" type="button" onclick="alert('Aviso legado')">Aviso</button>
-  <button id="legacy-delete" type="button" onclick="document.body.dataset.deleted='true'">Excluir</button>
+  <button id="legacy-delete" type="button" onclick="document.body.dataset.deleted='true'">Excluir</button>` : ""}
   <div id="HomeRoot">
     <table><tr><td><font><a id="home-link" href="/legacySite/home.html?nonce=${encoded}" target="MenuContent">Novidades (Home)</a></font></td></tr></table>
   </div>
