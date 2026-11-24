@@ -35,6 +35,19 @@ describe("auto write policy", () => {
     expect(isUnderConfiguredRoot("C:/Users/me/Desktop/Project", developmentRoot)).toBe(false);
   });
 
+  it("applies Windows root containment across hosts without matching sibling prefixes", () => {
+    expect(isUnderConfiguredRoot("c:/repo/project/Child", "C:\\Repo\\Project")).toBe(true);
+    expect(isUnderConfiguredRoot("c:/repo/project-other", "C:\\Repo\\Project")).toBe(false);
+  });
+
+  it("does not grant POSIX write access through case or separator aliases", () => {
+    if (process.platform === "win32") return;
+    expect(isUnderConfiguredRoot("/srv/Repo/child", "/srv/Repo")).toBe(true);
+    expect(isUnderConfiguredRoot("/srv/repo/child", "/srv/Repo")).toBe(false);
+    expect(isUnderConfiguredRoot("/srv/Repo\\outside", "/srv/Repo")).toBe(false);
+    expect(isUnderConfiguredRoot("/srv/Repo-other", "/srv/Repo")).toBe(false);
+  });
+
   it("upgrades workspaces under the development root", () => {
     const upgraded = withAutoWriteAccess(baseWorkspace, baseWorkspace.rootPath, {
       enableDevelopmentWrites: true,

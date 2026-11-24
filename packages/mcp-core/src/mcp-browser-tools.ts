@@ -334,6 +334,10 @@ export function registerBrowserTools(
             // probing a managed tab would create an unrequested second operation.
             if (typeof tabId !== "string" || !tabId.startsWith("personal:") ||
                 action.state !== undefined) return performed;
+            const dialog = action.dialog as { state?: unknown } | undefined;
+            if (dialog?.state === "open") return { ...action, state: {
+              documentId: "unavailable", revision: 0, kind: "unavailable", refsValid: false,
+            } };
             let state: c.BrowserStateUpdate;
             try {
               const existing = c.browserSnapshotResultSchema.safeParse(action.snapshot);

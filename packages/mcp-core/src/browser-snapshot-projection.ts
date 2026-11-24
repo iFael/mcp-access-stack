@@ -63,6 +63,12 @@ export function projectBrowserSnapshot(
   } else {
     selected = lines;
   }
+  // The authenticated frame summary is observational, not an actionable ref.
+  // Keep it in compact projections without allowing arbitrary page text to
+  // masquerade as an observed frame or an authoritative element reference.
+  if (filter === "interactive" && !refId && snapshot.frameSummary) {
+    selected.unshift(...snapshot.frameSummary.trim().split("\n"));
+  }
   let content = selected.join("\n");
   let truncated = false;
   if (maxChars !== undefined && content.length > maxChars) {

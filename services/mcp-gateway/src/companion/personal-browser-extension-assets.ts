@@ -1,4 +1,5 @@
 import { HANDOFF_EXTENSION_VERSION, HANDOFF_SECURE_CHANNEL_SCRIPT, HANDOFF_SECURE_CHANNEL_HTML, HANDOFF_WORKER_SOURCE } from "./personal-browser-secret-handoff-assets.js";
+import { browserDangerousActionClassifierSource } from "@vs-code-gpt/shared";
 import { PERSONAL_DOM_SETTLE_SOURCE } from "./personal-browser-dom-settle-assets.js";
 import { summarizeCdpAccessibility } from "./personal-browser-accessibility.js";
 
@@ -74,6 +75,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "chromeConfirmationV1",
   "snapshotRevisionV1",
   "frameSequenceMutationsV1",
+  "legacyPixelInspectionV1",
   "openShadowDomV1",
   "cdpAccessibilityV1",
   "closeTab",
@@ -119,6 +121,7 @@ const PROTOCOL_VERSION = ${PERSONAL_BROWSER_PROTOCOL_VERSION};
 const EXTENSION_VERSION = ${JSON.stringify(PERSONAL_BROWSER_EXTENSION_VERSION)};
 const CAPABILITIES = ${JSON.stringify(PERSONAL_BROWSER_CAPABILITIES)};
 const summarizeCdpAccessibility = (${summarizeCdpAccessibility.toString()});
+${browserDangerousActionClassifierSource()}
 const sanitizePersonalDiagnosticText = (${sanitizePersonalDiagnosticText.toString()});
 const BLOCKED_PRIVATE_ORIGINS = new Set(${JSON.stringify(blockedPrivateOrigins)});
 const PERSONAL_PREFIX = "personal:";
@@ -140,6 +143,7 @@ const personalNetworkCaptures = new Map();
 const personalDialogArms = new Map();
 const personalViewportSessions = new Map();
 const personalTaskDebuggers = new Map();
+const personalLegacyRefsByTab = new Map();
 const personalDebuggerTransitions = new Map();
 globalThis.__mcpV3PersonalDebuggerTransitions = personalDebuggerTransitions;
 globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
@@ -191,6 +195,7 @@ async function attachGuardedDebugger(target) {
     await attaching;
     if (!held) return true;
     holdPersonalTaskDebugger(target.tabId);
+    if (chrome.debugger.onEvent) await chrome.debugger.sendCommand(target, "Page.enable");
     return false;
   } finally {
     if (transitions?.get(key) === attaching) transitions.delete(key);
@@ -245,7 +250,33 @@ function holdPersonalTaskDebugger(chromeTabId) {
       else void releasePersonalTaskDebugger(chromeTabId);
     }, PERSONAL_DEBUGGER_IDLE_MS);
   };
+  held.dialog = undefined;
+  held.listener = (source, method, params) => {
+    if (source?.tabId !== chromeTabId) return;
+    if (method === "Page.javascriptDialogClosed") {
+      if (held.dialog?.state === "open" && held.dialog.dialogType !== "alert") held.dialog = undefined;
+      return;
+    }
+    if (method !== "Page.javascriptDialogOpening") return;
+    const type = String(params?.type || "");
+    const message = String(params?.message || "").slice(0, 2000);
+    if (!["alert", "confirm", "prompt", "beforeunload"].includes(type)) return;
+    const manuallyArmed = personalDialogArms.has(key);
+    const dialog = { state: "open", dialogType: type, message,
+      url: String(params?.url || ""), at: Date.now() };
+    held.dialog = dialog;
+    held.dialogHandling = undefined;
+    if (type === "alert" && !manuallyArmed) {
+      held.dialogHandling = chrome.debugger.sendCommand({ tabId: chromeTabId },
+        "Page.handleJavaScriptDialog", { accept: true }).then(() => {
+          dialog.state = "handled";
+        }, () => {
+          held.dialogWaiter?.(dialog);
+        });
+    } else held.dialogWaiter?.(dialog);
+  };
   personalTaskDebuggers.set(key, held);
+  chrome.debugger.onEvent?.addListener(held.listener);
   held.arm();
 }
 
@@ -267,6 +298,7 @@ async function releasePersonalTaskDebugger(chromeTabId) {
   if (!held) return;
   personalTaskDebuggers.delete(key);
   clearTimeout(held.timer);
+  if (held.listener) chrome.debugger.onEvent?.removeListener(held.listener);
   // A viewport, dialog, network capture or recording still on the tab takes the
   // debugger over and detaches it when it ends.
   const heir = personalViewportSessions.get(key) ?? personalDialogArms.get(key) ??
@@ -1362,12 +1394,35 @@ async function observePersonalDialog(input, signal) {
     ...(session?.open ? { dialogType: session.open.type, message: session.open.message } : {}),
     ...(session && !session.closing ? { expiresAt: session.expiresAt } : {}),
   });
-  if (input.action === "inspect") return describe(current);
+  if (input.action === "inspect") {
+    if (current) return describe(current);
+    const held = personalTaskDebuggers.get(key)?.dialog;
+    return held?.state === "open"
+      ? { tabId: input.tabId, state: "open", dialogType: held.dialogType, message: held.message }
+      : describe(undefined);
+  }
   if (input.action === "cancel") {
     await finalizePersonalDialog(chromeTabId, true);
     return describe(undefined);
   }
   if (input.action === "respond") {
+    const held = !current ? personalTaskDebuggers.get(key)?.dialog : undefined;
+    if (held?.state === "open" && held.message === input.expectedMessage &&
+        ["accept", "dismiss"].includes(input.response)) {
+      const tab = await chrome.tabs.get(chromeTabId);
+      const observed = personalTaskDebuggers.get(key);
+      if (!observed || !tab || (held.url && tab.url !== held.url) ||
+          (input.promptText !== undefined && held.dialogType !== "prompt")) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "Dialog page or expected input changed.");
+      }
+      await chrome.debugger.sendCommand({ tabId: chromeTabId }, "Page.handleJavaScriptDialog", {
+        accept: input.response === "accept",
+        ...(input.response === "accept" && held.dialogType === "prompt"
+          ? { promptText: input.promptText ?? "" } : {}),
+      });
+      observed.dialog = undefined;
+      return describe(undefined);
+    }
     if (!current || current.closing || !current.open ||
         typeof input.expectedMessage !== "string" ||
         current.open.message !== input.expectedMessage) {
@@ -1770,6 +1825,33 @@ async function navigate(input, signal) {
   return { tab: toBrowserTab(metadata, tab) };
 }
 
+// A FRAMESET has no actionable top-level accessibility tree. Surface a bounded
+// read-only summary for each scriptable child, without manufacturing top refs.
+function describePersonalFrameCompact() {
+  const url = location.origin + location.pathname;
+  const name = (window.name || "").slice(0, 100);
+  const title = (document.title || "").slice(0, 100);
+  const items = [];
+  for (const element of document.querySelectorAll(
+    "a,button,input,select,textarea,summary,[role='button'],[role='menuitem'],[onclick]"
+  )) {
+    if (items.length >= 30) break;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const style = getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    const tag = element.tagName.toLowerCase();
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    const label = (element.getAttribute("aria-label") || element.getAttribute("title") ||
+      (tag === "input" ? (["button", "submit", "image"].includes(type) ?
+        element.getAttribute("alt") || element.value : element.getAttribute("placeholder")) :
+        element.innerText || element.textContent) || "").replace(/\\s+/gu, " ").trim().slice(0, 100);
+    if (!label) continue;
+    items.push({ role: element.getAttribute("role") || tag, label });
+  }
+  return { url, name, title, items };
+}
+
 async function snapshot(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
@@ -1784,6 +1866,23 @@ async function snapshot(input, signal) {
     args: [generation, input.compact === true],
   });
   if (!injection?.result) throw coded("BROWSER_DISCONNECTED", "The page snapshot could not be read.");
+  let frameSummary = "";
+  const frames = await chrome.webNavigation?.getAllFrames?.({ tabId: chromeTabId }).catch(() => []);
+  if (frames?.length > 1) {
+    const descriptions = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId, allFrames: true }, func: describePersonalFrameCompact,
+    }).catch(() => []);
+    const children = descriptions.filter((entry) => entry.frameId !== 0 && entry.result).slice(0, 16);
+    if (children.length > 0) {
+      frameSummary = "\\n\\nThis page has frames (" + children.map((entry) =>
+        entry.result.name || String(entry.frameId)).join(", ") +
+        "). Use browser_screenshot or browser_dom_index for child-frame actions.\\n" +
+        children.map((entry) => "Frame " + JSON.stringify(entry.result.name || String(entry.frameId)) +
+          " " + JSON.stringify(entry.result.title || "") + " [" + entry.result.url + "]:\\n" +
+          entry.result.items.map((item) => "  Frame control: " + item.role + " " + JSON.stringify(item.label)).join("\\n"))
+          .join("\\n");
+    }
+  }
   let pointTarget;
   if (input.point) {
     const [target] = await chrome.scripting.executeScript({
@@ -1802,7 +1901,8 @@ async function snapshot(input, signal) {
     url: injection.result.url,
     ...(injection.result.title ? { title: injection.result.title } : {}),
     ...(injection.result.pageInstanceId ? { pageInstanceId: injection.result.pageInstanceId } : {}),
-    content: injection.result.content + (nativeRefs.length
+    ...(frameSummary ? { frameSummary: frameSummary.slice(0, 100000) } : {}),
+    content: frameSummary + injection.result.content + (nativeRefs.length
       ? "\\n\\nNative accessibility controls:\\n" +
         nativeRefs.map((r) => "- " + r.role + " " + JSON.stringify(r.name) + " [ref=" + r.ref + "]").join("\\n")
       : ""),
@@ -1968,10 +2068,94 @@ function probePersonalPixelTarget(x, y, expectedUrl) {
   return { x, y, width: innerWidth, height: innerHeight, hitId };
 }
 
+// Read-only hit-test down same-origin FRAMESET/iframe documents. An opaque,
+// ambiguous or cross-origin target is never approved by semantic classification.
+function inspectPersonalPixelSemanticTarget(expectedUrl, x, y) {
+  if (location.href !== expectedUrl) return { stale: true };
+  if (!Number.isInteger(x) || !Number.isInteger(y) ||
+      x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { unknown: true };
+  let doc = document;
+  let px = x;
+  let py = y;
+  const frames = [];
+  for (let depth = 0; depth < 16; depth += 1) {
+    const hit = doc.elementFromPoint(px, py);
+    if (!hit) return { unknown: true };
+    const tag = hit.tagName?.toLowerCase();
+    if (tag === "frame" || tag === "iframe") {
+      let child;
+      try { child = hit.contentDocument; } catch { return { unknown: true }; }
+      if (!child || child.readyState === "loading") return { unknown: true };
+      const rect = hit.getBoundingClientRect();
+      const style = doc.defaultView.getComputedStyle(hit);
+      if (style.transform !== "none" || rect.width <= 0 || rect.height <= 0 ||
+          rect.width < hit.clientWidth || rect.height < hit.clientHeight) return { unknown: true };
+      px -= rect.left + hit.clientLeft;
+      py -= rect.top + hit.clientTop;
+      frames.push((hit.getAttribute("name") || hit.id || String(frames.length)).slice(0, 100));
+      doc = child;
+      continue;
+    }
+    const element = hit.closest?.("a,button,input,summary,[onclick],[role='button'],[role='link'],[role='menuitem'],[tabindex]") || null;
+    if (!element || !element.isConnected || element.disabled ||
+        element.getAttribute("aria-disabled") === "true") return { unknown: true };
+    const controlTag = element.tagName.toLowerCase();
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    const name = (element.getAttribute("aria-label") || element.getAttribute("title") ||
+      ((controlTag === "input") ? (["submit", "button", "image"].includes(type)
+        ? element.value || element.getAttribute("alt") : element.getAttribute("placeholder")) :
+        element.innerText || element.textContent) || "").replace(/\\s+/gu, " ").trim().slice(0, 200);
+    if (!name) return { unknown: true };
+    const role = element.getAttribute("role") || (controlTag === "a" ? "link" : type ? controlTag + ":" + type : controlTag);
+    const form = element.form || element.closest("form");
+    const submitLike = type === "submit" || type === "image" ||
+      (controlTag === "button" && (!type || type === "submit") && Boolean(form));
+    globalThis.__mcpV3SemanticPixelElements ??= new WeakMap();
+    let elementToken = globalThis.__mcpV3SemanticPixelElements.get(element);
+    if (!elementToken) {
+      // randomUUID is secure-context-only; legacy HTTP frames still expose getRandomValues.
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      elementToken = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+      globalThis.__mcpV3SemanticPixelElements.set(element, elementToken);
+    }
+    const frameUrl = doc.location.origin + doc.location.pathname;
+    return { frame: frames.join(" > ").slice(0, 200), role: role.slice(0, 100), name,
+      tag: controlTag, type, submitLike, elementToken, frameUrl: frameUrl.slice(0, 2048),
+      frameTitle: (doc.title || "").slice(0, 200),
+      formMethod: form ? (element.getAttribute("formmethod") || form.getAttribute("method") || "get").toLowerCase().slice(0, 20) : "" };
+  }
+  return { unknown: true };
+}
+
+// The validated transport schema can reorder descriptor properties. Bind every
+// field and reject extra or missing fields, regardless of serialization order.
+function samePersonalPixelSemanticTarget(actual, expected) {
+  if (!actual || !expected) return false;
+  const keys = Object.keys(expected);
+  return keys.length === Object.keys(actual).length &&
+    keys.every((key) => Object.hasOwn(actual, key) && actual[key] === expected[key]);
+}
+
 async function click(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "click", false);
+  if (input.phase === "inspect-pixel") {
+    const tab = await chrome.tabs.get(chromeTabId);
+    if (input.guard?.url !== tab.url) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Pixel preflight requires the observed tab URL.");
+    }
+    const [probe] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: inspectPersonalPixelSemanticTarget,
+      args: [tab.url, input.x, input.y],
+    });
+    return { tabId: input.tabId, completed: true,
+      ...(probe?.result && !probe.result.unknown && !probe.result.stale
+        ? { inspected: probe.result } : {}) };
+  }
   const pixel = input.ref === undefined && input.guard?.pixel === true &&
     input.guard.x === input.x && input.guard.y === input.y;
   if (!input.guard || (!pixel && (!input.ref || input.guard.ref !== input.ref))) {
@@ -1992,6 +2176,15 @@ async function click(input, signal) {
     if (!point || point.stale || point.outside || point.empty) {
       throw coded("BROWSER_CONFIRMATION_INVALID", "Pixel target is stale, empty or outside the observed page.");
     }
+    if (input.guard.inspected) {
+      const [semantic] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: inspectPersonalPixelSemanticTarget,
+        args: [input.guard.url, input.x, input.y],
+      });
+      if (!samePersonalPixelSemanticTarget(semantic?.result, input.guard.inspected)) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The classified pixel target changed before dispatch.");
+      }
+    }
   } else if (!input.ref.startsWith("ax-")) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
@@ -2008,20 +2201,61 @@ async function click(input, signal) {
     throwIfAborted(signal, "click", false);
     if (!pixel && input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     else point = await revalidatePersonalClickAfterAttach(chromeTabId, target, input, point, pixel, attached, signal);
+    if (pixel && input.guard.inspected) {
+      const [semantic] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: inspectPersonalPixelSemanticTarget,
+        args: [input.guard.url, input.x, input.y],
+      });
+      if (!samePersonalPixelSemanticTarget(semantic?.result, input.guard.inspected)) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The classified pixel target changed after debugger attachment.");
+      }
+    }
     const button = input.button ?? "left";
     const clickCount = input.clickCount ?? 1;
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
     const modifiers = (input.modifiers ?? []).reduce((mask, part) => mask | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 }[part] ?? 0), 0);
+    const clickStartedAt = Date.now();
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, modifiers,
     });
+    // Hover handlers can replace the hit target. Bind the final click to the
+    // exact observed element, not merely a matching label in the same frame.
+    if (pixel && input.guard.inspected) {
+      const [semantic] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: inspectPersonalPixelSemanticTarget,
+        args: [input.guard.url, input.x, input.y],
+      });
+      if (!samePersonalPixelSemanticTarget(semantic?.result, input.guard.inspected)) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The classified pixel target changed after hover.");
+      }
+    }
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mousePressed", x: point.x, y: point.y, button, buttons, clickCount, modifiers,
     });
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, clickCount, modifiers,
-    });
-    return { tabId: input.tabId, completed: true };
+    const held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
+    let interrupted = false;
+    let notify;
+    const opened = new Promise((resolve) => { notify = resolve; });
+    if (held) held.dialogWaiter = notify;
+    try {
+      const released = chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, clickCount, modifiers,
+      });
+      interrupted = await Promise.race([released.then(() => false), opened.then(() => true)]);
+      if (held?.dialogHandling && held.dialog?.at >= clickStartedAt) await held.dialogHandling;
+    } finally {
+      if (held?.dialogWaiter === notify) delete held.dialogWaiter;
+    }
+    const dialog = held?.dialog;
+    return { tabId: input.tabId, completed: true,
+      ...(interrupted ? { unverified: true } : {}),
+      ...(dialog && dialog.at >= clickStartedAt ? { dialog: {
+        state: dialog.state, dialogType: dialog.dialogType, message: dialog.message,
+      } } : {}),
+      ...(pixel && input.guard.inspected ? { clicked: {
+        frame: input.guard.inspected.frame, role: input.guard.inspected.role,
+        name: input.guard.inspected.name,
+      } } : {}) };
   } catch (error) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
@@ -2033,14 +2267,26 @@ async function click(input, signal) {
 async function hover(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
-  if (!input.guard || input.guard.ref !== input.ref) {
-    throw coded("BROWSER_CONFIRMATION_INVALID", "Hover requires a guard from the current snapshot.");
+  const pixel = !input.ref && input.guard?.pixel === true &&
+    input.guard.x === input.x && input.guard.y === input.y;
+  if (!input.guard || (!pixel && input.guard.ref !== input.ref)) {
+    throw coded("BROWSER_CONFIRMATION_INVALID", "Hover requires a bound reference or screenshot pixel.");
   }
   let point;
-  if (!input.ref.startsWith("ax-")) {
+  if (pixel) {
+    const tab = await chrome.tabs.get(chromeTabId);
+    if (tab.url !== input.guard.url) throw coded("BROWSER_CONFIRMATION_INVALID", "Page changed before hover.");
+    const [probe] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: probePersonalPixelTarget,
+      args: [input.x, input.y, input.guard.url],
+    });
+    point = probe?.result;
+    if (!point || point.stale || point.outside || point.empty) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Hover pixel is stale or outside the viewport.");
+    }
+  } else if (!input.ref.startsWith("ax-")) {
     const [injection] = await chrome.scripting.executeScript({
-      target: { tabId: chromeTabId },
-      func: probeGuardedElement,
+      target: { tabId: chromeTabId }, func: probeGuardedElement,
       args: [input.ref, input.guard, false, input.x ?? null, input.y ?? null],
     });
     point = injection?.result;
@@ -2051,7 +2297,12 @@ async function hover(input, signal) {
   let attached = false;
   try {
     attached = await attachGuardedDebugger(target);
-    if (input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+    if (!pixel && input.ref.startsWith("ax-")) {
+      point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+    } else if (pixel) {
+      point = await revalidatePersonalClickAfterAttach(chromeTabId, target, input,
+        point, pixel, attached, signal);
+    }
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, button: "none",
     });
@@ -2272,6 +2523,9 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   }
   let element = ref ? globalThis.__mcpV3OwnedRefElements?.get(ref) : document.activeElement;
   if (!ref) {
+    // The focused control of a FRAMESET lives in the active child document.
+    // Ignore stale focus kept by inactive frames.
+    if (document.hasFocus?.() === false) return { ready: false };
     for (let depth = 0; depth < 4 && element?.shadowRoot?.activeElement; depth += 1) {
       element = element.shadowRoot.activeElement;
     }
@@ -2303,6 +2557,9 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
     }
     globalThis.__mcpV3EditorMutation = record;
     return { ready: true, alreadyEqual: value === expectedText,
+      ...((element.onkeyup || element.onkeydown || element.onkeypress ||
+        element.hasAttribute?.("onkeyup") || element.hasAttribute?.("onkeydown") ||
+        element.hasAttribute?.("onkeypress")) ? { keyHandlers: true } : {}),
       ...(element.isContentEditable && host.querySelector?.('[contenteditable="false"]')
         ? { protectedTokens: true } : {}) };
   }
@@ -2337,6 +2594,7 @@ async function fill(input, signal) {
   let attached = false;
   try {
     attached = await attachGuardedDebugger(target);
+    let keyEvents = false;
     if (!input.ref.startsWith("ax-")) {
       // Revalidate and focus after attaching the debugger: its infobar can
       // change the viewport or the currently focused editor.
@@ -2352,6 +2610,7 @@ async function fill(input, signal) {
         args: ["before", input.ref, input.value],
       });
       if (before?.result?.ready !== true) throw coded("STATE_NOT_REACHED", "The requested field is not editable.");
+      keyEvents = before.result.keyHandlers === true;
       if (before.result.protectedTokens === true) {
         throw coded("ACTION_BLOCKED_BY_POLICY",
           "This rich editor contains protected tokens. Click the insertion point and use browser_type; browser_fill could delete the tokens.");
@@ -2385,7 +2644,8 @@ async function fill(input, signal) {
       { type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
       { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
     ]) await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", event);
-    await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+    if (keyEvents) await insertPersonalTextWithKeys(target, input.value, signal);
+    else await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
     if (!input.ref.startsWith("ax-")) {
       let verified = false;
       for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -2621,6 +2881,36 @@ function imeComposedCharacter(character) {
   return /[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Bopomofo}]/u.test(character);
 }
 
+// Use native keyboard events for legacy controls whose filters depend on keyup.
+async function insertPersonalTextWithKeys(target, text, signal) {
+  if (Array.from(text).length > 2000 || /[\\r\\n]/u.test(text)) {
+    throw coded("LIMIT_EXCEEDED", "Legacy key-event input must be at most 2,000 characters without Enter.");
+  }
+  for (const character of text) {
+    throwIfAborted(signal, "fill", true);
+    const key = physicalTypingKey(character);
+    if (!key) {
+      await chrome.debugger.sendCommand(target, "Input.insertText", { text: character });
+      continue;
+    }
+    const args = { key: key.key, code: key.code,
+      windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
+      modifiers: key.modifiers };
+    await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+      ...args, type: "keyDown", text: character, unmodifiedText: character,
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { ...args, type: "keyUp" });
+  }
+}
+
+function personalFocusedFieldNeedsKeys(expectedUrl) {
+  if (location.href !== expectedUrl) return false;
+  const element = document.activeElement;
+  return Boolean(element && (element.onkeyup || element.onkeydown || element.onkeypress ||
+    element.hasAttribute?.("onkeyup") || element.hasAttribute?.("onkeydown") ||
+    element.hasAttribute?.("onkeypress")));
+}
+
 async function typeText(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
@@ -2639,15 +2929,15 @@ async function typeText(input, signal) {
     attached = await attachGuardedDebugger(target);
     const verifyTypedChange = input.text.length > 0 && !input.submit && !/[\\r\\n\\t]/u.test(input.text);
     if (verifyTypedChange) {
-      const [before] = await chrome.scripting.executeScript({
-        target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+      var focused = (await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, allFrames: true }, func: observePersonalEditableMutation,
         args: ["before", null, null],
-      });
-      if (before?.result?.ready !== true) {
-        throw coded("STATE_NOT_REACHED", "No editable field is focused. Click the editor before typing.");
+      })).filter((entry) => entry.result?.ready === true);
+      if (focused.length !== 1) {
+        throw coded("STATE_NOT_REACHED", "No unique editable field is focused. Click the editor before typing.");
       }
     }
-    if (input.slowly) {
+    if (input.slowly || focused?.[0]?.result?.keyHandlers === true) {
       const processKey = { key: "Process", code: "", windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 };
       const chars = Array.from(input.text);
       for (let index = 0; index < chars.length; index += 1) {
@@ -2695,11 +2985,12 @@ async function typeText(input, signal) {
     if (verifyTypedChange) {
       let changed = false;
       for (let attempt = 0; attempt < 4; attempt += 1) {
-        const [after] = await chrome.scripting.executeScript({
-          target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
-          args: ["after", null, null],
+        const observed = await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId, frameIds: [focused[0].frameId] },
+          func: observePersonalEditableMutation, args: ["after", null, null],
         });
-        changed = after?.result?.ready === true && after.result.changed === true;
+        changed = observed[0]?.documentId === focused[0].documentId &&
+          observed[0]?.result?.ready === true && observed[0].result.changed === true;
         if (changed) break;
         await delay(100, signal);
       }
@@ -3147,19 +3438,32 @@ function probeDirectFrameElement(expectedParentUrl, expectedChildUrl, localPoint
 
 function probeDirectFrameControl(expectedUrl, selector, text, match, index, filling) {
   if (location.href !== expectedUrl) return { stale: true };
-  const candidates = selector
-    ? Array.from(document.querySelectorAll(selector)).slice(0, 201)
-    : Array.from(document.querySelectorAll("button,a,summary,input[type=submit],[role=button]")).slice(0, 201);
-  if (candidates.length > 200) return { ambiguous: true };
-  const matched = candidates.filter((node) => {
-    if (text == null) return true;
-    const label = (node.innerText || node.textContent || node.value || "").trim();
-    return match === "contains" ? label.includes(text) : label === text;
+  // Match the requested label before applying the bound, otherwise a large
+  // legacy menu fails simply because its first 200 links are unrelated.
+  const candidates = document.querySelectorAll(selector ||
+    "button,a,summary,input[type=submit],input[type=button],input[type=image],[role=button],[onclick]");
+  const matched = [];
+  for (const node of candidates) {
+    if (text != null) {
+      const type = (node.getAttribute("type") || "").toLowerCase();
+      const label = (node.getAttribute("aria-label") || node.getAttribute("title") ||
+        (node.tagName === "INPUT" && ["submit", "button", "reset", "image"].includes(type)
+          ? node.getAttribute("alt") || node.value : node.innerText || node.textContent) || "").replace(/\\s+/gu, " ").trim();
+      if (!(match === "contains" ? label.includes(text) : label === text)) continue;
+    }
+    matched.push(node);
+  }
+  const visibleMatches = matched.filter((node) => {
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
   });
-  if (matched.length === 0) return { missing: true };
-  if (index == null && matched.length !== 1) return { ambiguous: true };
-  if (index != null && (index < 0 || index >= matched.length)) return { missing: true };
-  const element = matched[index ?? 0];
+  const eligible = visibleMatches.length ? visibleMatches : matched;
+  if (eligible.length > 200) return { ambiguous: true };
+  if (eligible.length === 0) return { missing: true };
+  if (index == null && eligible.length !== 1) return { ambiguous: true };
+  if (index != null && (index < 0 || index >= eligible.length)) return { missing: true };
+  const element = eligible[index ?? 0];
   const tag = element.tagName.toLowerCase();
   const type = (element.getAttribute("type") || "").toLowerCase();
   if (element.disabled || element.getAttribute("aria-disabled") === "true") return { disabled: true };
@@ -3278,7 +3582,12 @@ async function directFrameAction(input, signal, filling) {
       await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
         type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
       });
-      await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+      const [keyEvents] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, frameIds: [frame.frameId] },
+        func: personalFocusedFieldNeedsKeys, args: [frame.result.url],
+      });
+      if (keyEvents?.result === true) await insertPersonalTextWithKeys(target, input.value, signal);
+      else await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
     }
     return { tabId: input.tabId, completed: true };
   } catch (error) {
@@ -3492,55 +3801,76 @@ function collectPersonalLegacyIndex(expectedUrl, options) {
     "[class~='button']", "[class~='btn']", "[tabindex]:not([tabindex='-1'])",
     "[onclick]", "[data-action]",
   ].join(",");
-  const candidates = Array.from(root.querySelectorAll(selector));
-  const capped = candidates.length > 5000;
-  const results = [];
-  for (const element of candidates.slice(0, 5000)) {
-    const tag = element.tagName.toLowerCase();
-    const style = getComputedStyle(element);
+  const attr = (element, name, cap = 256) =>
+    (element.getAttribute(name) || "").slice(0, cap);
+  const matches = [];
+  for (const element of root.querySelectorAll(selector)) {
     const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
     const visible = style.display !== "none" && style.visibility !== "hidden" &&
       rect.width > 0 && rect.height > 0;
     if (options.visibleOnly && !visible) continue;
-    const attr = (name, cap = 256) => (element.getAttribute(name) || "").slice(0, cap);
-    const type = attr("type", 100).toLowerCase();
-    const role = attr("role", 100);
-    // Never inspect .value, even for non-password controls. It can contain PII.
-    const label = attr("aria-label", 500) || attr("title", 500) ||
+    const tag = element.tagName.toLowerCase();
+    const type = attr(element, "type", 100).toLowerCase();
+    const role = attr(element, "role", 100);
+    // Never inspect field values; only a button's visible label may be indexed.
+    const label = attr(element, "aria-label", 500) || attr(element, "title", 500) ||
       (tag === "input" || tag === "textarea" || tag === "select"
-        ? attr("placeholder", 500)
+        ? attr(element, "placeholder", 500)
         : (element.innerText || element.textContent || "").replace(/\\s+/gu, " ").trim().slice(0, 500));
-    const id = attr("id");
-    const name = attr("name");
-    const searchable = [label, id, name, role, type, tag].join(" ").toLocaleLowerCase();
-    if (options.query && !searchable.includes(options.query.toLocaleLowerCase())) continue;
+    const id = attr(element, "id");
+    const name = attr(element, "name");
+    if (options.query && ![label, id, name, role, type, tag].join(" ").toLowerCase()
+      .includes(options.query.toLowerCase())) continue;
+    matches.push({ element, tag, type, role, label, id, name, visible });
+  }
+  // Closed menu nodes never hide active controls at the tail of the document.
+  if (!options.visibleOnly) matches.sort((a, b) => Number(b.visible) - Number(a.visible));
+  const capped = matches.length > 5000;
+  const boundedCount = Math.min(matches.length, 5000);
+  const results = [];
+  for (const { element, tag, type, role, label, id, name, visible }
+    of matches.slice(options.offset || 0, Math.min(boundedCount,
+      (options.offset || 0) + (options.limit || 500)))) {
     const uniqueSelector = () => {
+      // Only build selectors for the requested page; verify ID uniqueness.
       if (id && CSS?.escape) {
         const byId = "#" + CSS.escape(id);
         if (document.querySelectorAll(byId).length === 1) return byId;
       }
       const parts = [];
-      for (let node = element; node && node.nodeType === 1 && parts.length < 12; node = node.parentElement) {
-        const siblings = node.parentElement
-          ? Array.from(node.parentElement.children).filter((other) => other.tagName === node.tagName)
-          : [node];
-        parts.unshift(node.tagName.toLowerCase() + ":nth-of-type(" + (siblings.indexOf(node) + 1) + ")");
-        const proposal = parts.join(" > ");
-        if (document.querySelectorAll(proposal).length === 1) return proposal;
+      for (let node = element; node && node.nodeType === 1 && parts.length < 20;
+        node = node.parentElement) {
+        let position = 1;
+        for (let previous = node.previousElementSibling; previous;
+          previous = previous.previousElementSibling) {
+          if (previous.tagName === node.tagName) position += 1;
+        }
+        parts.unshift(node.tagName.toLowerCase() + ":nth-of-type(" + position + ")");
       }
-      return null;
+      const path = parts.join(" > ");
+      const candidates = document.querySelectorAll(path);
+      return candidates.length === 1 && candidates[0] === element ? path : null;
     };
     const path = uniqueSelector();
     if (!path) continue;
+    globalThis.__mcpV3LegacyIndexElements ??= new WeakMap();
+    let elementToken = globalThis.__mcpV3LegacyIndexElements.get(element);
+    if (elementToken === undefined) {
+      elementToken = (globalThis.__mcpV3LegacyIndexCounter || 0) + 1;
+      globalThis.__mcpV3LegacyIndexCounter = elementToken;
+      globalThis.__mcpV3LegacyIndexElements.set(element, elementToken);
+    }
     let href;
     if (tag === "a" && element.getAttribute("href") !== null) {
       try {
         const url = new URL(element.getAttribute("href"), location.href);
-        if (url.protocol === "https:" || url.protocol === "http:") href = (url.origin + url.pathname).slice(0, 2000);
+        if (url.protocol === "https:" || url.protocol === "http:")
+          href = (url.origin + url.pathname).slice(0, 2000);
       } catch {}
     }
     results.push({
-      tag, text: label, visible,
+      tag, text: label, visible, elementToken,
       enabled: !element.disabled && element.getAttribute("aria-disabled") !== "true",
       selector: path,
       ...(id ? { id } : {}),
@@ -3548,15 +3878,15 @@ function collectPersonalLegacyIndex(expectedUrl, options) {
       ...(type ? { type } : {}),
       ...(role ? { role } : {}),
       ...(href ? { href } : {}),
-      ...(attr("target") ? { target: attr("target") } : {}),
-      ...(attr("onclick") ? { onclickSignature: "inline-handler" } : {}),
-      ...(attr("aria-label", 500) ? { ariaLabel: attr("aria-label", 500) } : {}),
-      ...(attr("title", 500) ? { title: attr("title", 500) } : {}),
-      ...(attr("alt", 500) ? { alt: attr("alt", 500) } : {}),
+      ...(attr(element, "target") ? { target: attr(element, "target") } : {}),
+      ...(attr(element, "onclick") ? { onclickSignature: "inline-handler" } : {}),
+      ...(attr(element, "aria-label", 500) ? { ariaLabel: attr(element, "aria-label", 500) } : {}),
+      ...(attr(element, "title", 500) ? { title: attr(element, "title", 500) } : {}),
+      ...(attr(element, "alt", 500) ? { alt: attr(element, "alt", 500) } : {}),
       ancestors: [],
     });
   }
-  return { items: results, truncated: capped, totalCount: results.length };
+  return { items: results, truncated: capped, totalCount: boundedCount };
 }
 
 async function domIndex(input, signal) {
@@ -3589,7 +3919,7 @@ async function domIndex(input, signal) {
       func: collectPersonalLegacyIndex,
       args: [frame.url, {
         rootSelector: input.rootSelector, query: input.query,
-        visibleOnly: input.visibleOnly === true,
+        visibleOnly: input.visibleOnly !== false, offset, limit,
       }],
     });
   } catch {
@@ -3604,23 +3934,32 @@ async function domIndex(input, signal) {
   const source = result.result.items;
   const profile = await profilePage({ tabId: input.tabId }, signal, graph);
   const seen = new Set();
-  const items = source.slice(offset, offset + limit).map((item) => {
-    const ref = "lref_" + personalLegacySignature([
-      profile.pageSignature, profile.frameGraphSignature, frame.frameId, frame.documentId || "",
-      item.selector, item.tag, item.type || "", item.role || "", item.text,
-      item.href || "", item.enabled, item.visible,
-    ]);
-    if (seen.has(ref)) throw coded("LOCATOR_AMBIGUOUS", "Legacy element index ref collided.");
+  const refs = personalLegacyRefsByTab.get(chromeTabId) || new Map();
+  if (!frame.documentId) throw coded("FRAME_NOT_READY", "Frame document identity unavailable.");
+  if (refs.size + source.length > 10000) refs.clear();
+  const items = source.map(({ elementToken, ...item }) => {
+    if (!Number.isSafeInteger(elementToken) || elementToken < 1) {
+      throw coded("FRAME_NOT_READY", "Legacy index element identity unavailable.");
+    }
+    const identity = { documentId: frame.documentId, frameId: frame.frameId,
+      frameUrl: frame.url, framePath: [...framePath], selector: item.selector, elementToken };
+    const ref = "lref_" + personalLegacySignature(identity);
+    const prior = refs.get(ref);
+    if (seen.has(ref) || (prior && JSON.stringify(prior) !== JSON.stringify(identity))) {
+      throw coded("LOCATOR_AMBIGUOUS", "Legacy element index ref collided.");
+    }
     seen.add(ref);
+    refs.set(ref, identity);
     return { ...item, ref, framePath: [...framePath] };
   });
+  personalLegacyRefsByTab.set(chromeTabId, refs);
   throwIfAborted(signal, "domIndex", false);
   return {
     tabId: input.tabId, framePath,
     pageSignature: profile.pageSignature, frameGraphSignature: profile.frameGraphSignature,
-    items, truncated: Boolean(result.result.truncated || offset + limit < source.length),
-    offset, totalCount: source.length,
-    ...(offset + limit < source.length ? { nextOffset: offset + limit } : {}),
+    items, truncated: Boolean(result.result.truncated || offset + limit < result.result.totalCount),
+    offset, totalCount: result.result.totalCount,
+    ...(offset + limit < result.result.totalCount ? { nextOffset: offset + limit } : {}),
     telemetry: { totalMs: Math.max(0, performance.now() - start),
       frameResolutionMs: Math.max(0, performance.now() - start),
       indexMs: Math.max(0, performance.now() - start), candidateCount: source.length, retries: 0 },
@@ -3657,9 +3996,10 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
       else if (locator.selector) candidates = Array.from(document.querySelectorAll(locator.selector));
       else if (locator.id) candidates = Array.from(document.querySelectorAll("[id]")).filter((e) => e.id === locator.id);
       else if (locator.name) candidates = Array.from(document.querySelectorAll("[name]")).filter((e) => e.getAttribute("name") === locator.name);
-      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable],[onclick],[class~='button'],[class~='btn'],[tabindex]:not([tabindex='-1']),[data-action]")).slice(0, 2001);
+      else candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,summary,[role],[contenteditable],[onclick],[class~='button'],[class~='btn'],[tabindex]:not([tabindex='-1']),[data-action]"));
     } catch { return { invalidSelector: true }; }
-    if (candidates.length > 2000) return { ambiguous: true };
+    // Filter before bounding the matches. Hidden legacy submenus may contain
+    // thousands of unrelated controls preceding the requested menu entry.
     candidates = candidates.filter((element) => {
       if (locator.id && element.id !== locator.id) return false;
       if (locator.name && element.getAttribute("name") !== locator.name) return false;
@@ -3675,7 +4015,13 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
         const wanted = locator.text.replace(/\\s+/gu, " ").trim();
         if (locator.exact === false ? !actual.includes(wanted) : actual !== wanted) return false;
       }
-      if (locator.ancestorText && !element.parentElement?.innerText?.includes(locator.ancestorText)) return false;
+      if (locator.ancestorText) {
+        let matched = false;
+        for (let parent = element.parentElement, depth = 0; parent && depth < 12 && parent !== document.body; parent = parent.parentElement, depth += 1) {
+          if (parent.innerText?.includes(locator.ancestorText)) { matched = true; break; }
+        }
+        if (!matched) return false;
+      }
       return true;
     });
     if (step.rootSelector) {
@@ -3685,15 +4031,30 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
     }
     // A legacy menu cell with an onclick often wraps a link with the same
     // text; keep the innermost match instead of reporting ambiguity.
+    const visibleCandidates = candidates.filter(visible);
+    if (visibleCandidates.length > 0) candidates = visibleCandidates;
+    if (candidates.length > 2000) return { ambiguous: true };
     if (locator.text) {
-      candidates = candidates.filter((element) =>
-        !candidates.some((other) => other !== element && element.contains(other)));
+      const matched = new Set(candidates);
+      const containers = new Set();
+      for (const element of candidates) {
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          if (matched.has(parent)) containers.add(parent);
+        }
+      }
+      candidates = candidates.filter((element) => !containers.has(element));
     }
     if (locator.index !== undefined) {
       candidates = candidates[locator.index] ? [candidates[locator.index]] : [];
-    } else if (candidates.length > 1) return { ambiguous: true };
+    } else if (candidates.length > 1) return { ambiguous: true,
+      choices: candidates.slice(0, 8).map((node) => ({ label: label(node).slice(0, 100),
+        id: (node.id || "").slice(0, 100), ancestor: (node.parentElement?.innerText || "").trim().slice(0, 100) })) };
   }
   const element = locator ? candidates[0] : document.body;
+  if (step.expectedElementToken !== undefined &&
+      globalThis.__mcpV3LegacyIndexElements?.get(element) !== step.expectedElementToken) {
+    return { found: false };
+  }
   const exists = !!element;
   const isVisible = exists && visible(element);
   const enabled = exists && !element.disabled && element.getAttribute("aria-disabled") !== "true";
@@ -3709,6 +4070,9 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
       role: element.getAttribute("role") || (type ? tag + ":" + type : tag),
       submitLike: type === "submit" || type === "image" ||
         (tag === "button" && (!type || type === "submit") && !!element.form),
+      formMethod: (element.getAttribute("formmethod") ||
+        ((element.form || element.closest?.("form")) ?
+          (element.form || element.closest?.("form")).getAttribute("method") || "get" : "")).toLowerCase(),
     };
     if (step.describeOnly) return { found: true, target };
     if (!enabled) return { disabled: true };
@@ -3739,7 +4103,9 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
     // Remember the resolved element in this extension world only, so focus
     // and select results can be verified without re-resolving the locator.
     globalThis.__mcpV3LegacyActionTarget = element;
-    return { found: true, target, point: { x, y }, editable,
+    const keyEvents = Boolean(element.onkeyup || element.onkeydown || element.onkeypress ||
+      element.hasAttribute?.("onkeyup") || element.hasAttribute?.("onkeydown") || element.hasAttribute?.("onkeypress"));
+    return { found: true, target, point: { x, y }, editable, keyEvents,
       viewport: { width: innerWidth, height: innerHeight }, ...(option ? { option } : {}) };
   }
   const pageText = (document.body?.innerText || "").slice(0, 50000);
@@ -4001,18 +4367,23 @@ async function probePersonalLegacyTarget(input, chromeTabId, step, describeOnly,
     }
     const frame = matches[0];
     let selector;
+    let expectedElementToken;
     if (step.locator?.ref) {
-      const fresh = await domIndex({ tabId: input.tabId, framePath, limit: 2000 }, signal);
-      const refs = fresh.items.filter((item) => item.ref === step.locator.ref);
-      if (refs.length !== 1) throw coded("LOCATOR_NOT_FOUND", "Legacy element reference is stale or invalid.");
-      selector = refs[0].selector;
+      const cached = personalLegacyRefsByTab.get(chromeTabId)?.get(step.locator.ref);
+      if (!cached || !frame.documentId || cached.documentId !== frame.documentId ||
+          cached.frameId !== frame.frameId || cached.frameUrl !== frame.url ||
+          JSON.stringify(cached.framePath) !== JSON.stringify(framePath)) {
+        throw coded("LOCATOR_NOT_FOUND", "Legacy element reference is stale or invalid.");
+      }
+      selector = cached.selector;
+      expectedElementToken = cached.elementToken;
     }
     let observation;
     try {
       [observation] = await chrome.scripting.executeScript({
         target: { tabId: chromeTabId, frameIds: [frame.frameId] },
         func: probePersonalLegacyReadStep,
-        args: [frame.url, { ...step, describeOnly }, selector ?? null],
+        args: [frame.url, { ...step, describeOnly, expectedElementToken }, selector ?? null],
       });
     } catch {
       throw coded("FRAME_NOT_READY", "Legacy frame document is not accessible.");
@@ -4024,7 +4395,7 @@ async function probePersonalLegacyTarget(input, chromeTabId, step, describeOnly,
     }
     const observed = observation.result;
     if (observed?.invalidSelector) throw coded("INVALID_ARGUMENT", "Legacy locator selector is not valid.");
-    if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator or option matched several candidates.");
+    if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator or option matched several candidates. " + JSON.stringify(observed.choices || []));
     if (observed?.missingOption) throw coded("INVALID_ARGUMENT", "Requested select option does not exist.");
     if (!observed?.found) {
       throw coded("LOCATOR_NOT_FOUND", "Legacy action target is missing, disabled, obscured, outside the viewport or not editable.");
@@ -4048,6 +4419,15 @@ async function preflightPersonalLegacyTargets(input, chromeTabId, signal) {
     try {
       resolved = await probePersonalLegacyTarget(input, chromeTabId, step, true, Date.now(), signal, false);
     } catch (error) {
+      const deferred = step.action === "click" && typeof step.locator?.text === "string" &&
+        input.steps.slice(0, index).some((earlier) => earlier.action === "waitFor" &&
+          earlier.locator?.text === step.locator.text &&
+          JSON.stringify(earlier.framePath || []) === JSON.stringify(step.framePath || []));
+      if (deferred && ["FRAME_NOT_READY", "LOCATOR_NOT_FOUND"].includes(error?.code)) {
+        targets.push({ index, label: step.locator.text, role: "deferred",
+          submitLike: false, deferred: true });
+        continue;
+      }
       if (!["FRAME_NOT_READY", "LOCATOR_NOT_FOUND"].includes(error?.code)) throw error;
       throw coded(error.code, "Click/Enter target of step " + index +
         " must exist when the sequence starts so it can be confirmed; split the sequence after navigation. " +
@@ -4094,8 +4474,17 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
     const observed = resolved?.observed;
     if (step.action === "click" || enter) {
       const target = observed?.target ?? { label: "keyboard:Enter", role: "keyboard", submitLike: true };
-      if (!expected || expected.label !== target.label || expected.role !== target.role ||
-          expected.submitLike !== target.submitLike) {
+      if (expected?.deferred) {
+        const pageContext = { url: resolved.frame.url, title: resolved.frame.data?.title };
+        const dangerous = target.submitLike || !target.label ||
+          classifyPageContext(pageContext) || classifyDangerousAction({ ref: "",
+            role: target.role, name: target.label }, pageContext) ||
+          classifyDangerousLabel(foldText(target.label));
+        if (dangerous || target.label !== expected.label) {
+          throw coded("ACTION_BLOCKED_BY_POLICY", "Deferred legacy target requires fresh observation and confirmation. Do not replay earlier completed steps.");
+        }
+      } else if (!expected || expected.label !== target.label || expected.role !== target.role ||
+          expected.submitLike !== target.submitLike || expected.formMethod !== target.formMethod) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "The legacy target of step " + index + " changed after preflight.");
       }
     }
@@ -4152,7 +4541,8 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
         if (!(await verify("focus"))) throw coded("FRAME_NOT_READY", "The legacy field did not receive native focus.");
         await dispatchKey({ key: "a", code: "KeyA", keyCode: 65, modifiers: 2 });
         await dispatchKey({ key: "Backspace", code: "Backspace", keyCode: 8, modifiers: 0 });
-        await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: step.value });
+        if (observed?.keyEvents) await insertPersonalTextWithKeys(debuggee, step.value, signal);
+        else await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: step.value });
       } else if (step.action === "select") {
         if (!(await verify("value", observed.option.value))) {
           await clickPoint();
@@ -4229,7 +4619,8 @@ async function frameSequence(input, signal) {
   if (expected.size !== targets.length || targets.some((target) => {
     const confirmed = expected.get(target.index);
     return !confirmed || confirmed.label !== target.label || confirmed.role !== target.role ||
-      confirmed.submitLike !== target.submitLike;
+      confirmed.submitLike !== target.submitLike || confirmed.formMethod !== target.formMethod ||
+      Boolean(confirmed.deferred) !== Boolean(target.deferred);
   })) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Legacy click/Enter targets changed since preflight; nothing was executed.");
   }
@@ -4285,20 +4676,23 @@ async function frameSequence(input, signal) {
       }
       const frame = candidates[0];
       let selector;
+      let expectedElementToken;
       if (step.locator?.ref) {
-        // Only lref_ values from the live frame index can resolve. Never
-        // interpret a snapshot AX ref or a forged textual ref as an element.
-        const fresh = await domIndex({ tabId: input.tabId, framePath, limit: 2000 }, signal);
-        const matches = fresh.items.filter((item) => item.ref === step.locator.ref);
-        if (matches.length !== 1) throw coded("LOCATOR_NOT_FOUND", "Legacy element reference is stale or invalid.");
-        selector = matches[0].selector;
+        const cached = personalLegacyRefsByTab.get(chromeTabId)?.get(step.locator.ref);
+        if (!cached || !frame.documentId || cached.documentId !== frame.documentId ||
+            cached.frameId !== frame.frameId || cached.frameUrl !== frame.url ||
+            JSON.stringify(cached.framePath) !== JSON.stringify(framePath)) {
+          throw coded("LOCATOR_NOT_FOUND", "Legacy element reference is stale or invalid.");
+        }
+        selector = cached.selector;
+        expectedElementToken = cached.elementToken;
       }
       let observation;
       try {
         [observation] = await chrome.scripting.executeScript({
           target: { tabId: chromeTabId, frameIds: [frame.frameId] },
           func: probePersonalLegacyReadStep,
-          args: [frame.url, step, selector ?? null],
+          args: [frame.url, { ...step, expectedElementToken }, selector ?? null],
         });
       } catch {
         if (step.action !== "waitFor") throw coded("FRAME_NOT_READY", "Legacy frame document is not accessible.");
@@ -4314,7 +4708,7 @@ async function frameSequence(input, signal) {
       }
       const observed = observation.result;
       if (observed?.invalidSelector) throw coded("INVALID_ARGUMENT", "Legacy locator selector is not valid.");
-      if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator matched several elements.");
+      if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator matched several elements. " + JSON.stringify(observed.choices || []));
       if (observed?.tooLarge) throw coded("LIMIT_EXCEEDED", "Legacy extraction exceeds its bounded output.");
       if (step.action === "waitFor" && !observed?.satisfied) {
         await delay(150, signal);
@@ -4388,7 +4782,9 @@ async function navigatePath(input, signal) {
         const step = { action: "click", ...scope, locator: { text: label } };
         const described = await probePersonalLegacyTarget(input, chromeTabId, step, true, Date.now(), signal, mutated);
         const target = described.observed.target;
-        if (target.submitLike && input.authorized !== true) {
+        const safeQuery = target.formMethod === "get" &&
+          /^(pesquisar|filtrar|consultar|exibir)$/iu.test(target.label);
+        if (target.submitLike && !safeQuery && input.authorized !== true) {
           throw coded("ACTION_BLOCKED_BY_POLICY", "Legacy path level " + level +
             " is a form submit control; use browser_frame_sequence so the submit can be confirmed.");
         }
@@ -4446,7 +4842,7 @@ async function sequence(input, signal, timing) {
     if (step.action === "navigate") value = await navigate({ tabId: input.tabId, url: step.url }, signal);
     else if (step.action === "click") value = await click({ tabId: input.tabId, ref: step.ref, guard: step.guard, button: step.button, clickCount: step.clickCount, modifiers: step.modifiers }, signal);
     else if (step.action === "fill") value = await fill({ tabId: input.tabId, ref: step.ref, value: step.value, guard: step.guard }, signal);
-    else if (step.action === "hover") value = await hover({ tabId: input.tabId, ref: step.ref, guard: step.guard }, signal);
+    else if (step.action === "hover") value = await hover({ tabId: input.tabId, ref: step.ref, x: step.x, y: step.y, guard: step.guard }, signal);
     else if (step.action === "scroll") value = await scroll({ tabId: input.tabId, direction: step.direction, amount: step.amount, ref: step.ref, guard: step.guard }, signal);
     else if (step.action === "drag") value = await drag({ tabId: input.tabId, from: step.from, to: step.to, steps: step.steps, fromGuard: step.fromGuard, toGuard: step.toGuard }, signal);
     else if (step.action === "formInput") value = await formInput({ tabId: input.tabId, ref: step.ref, value: step.value, guard: step.guard }, signal);
@@ -6164,6 +6560,7 @@ async function updateMetadata(chromeTabId, metadata) {
 }
 
 async function removeOwnedTab(chromeTabId) {
+  personalLegacyRefsByTab.delete(chromeTabId);
   axTargetsByTab.delete(chromeTabId);
   await clearPersonalConsoleHistory(String(chromeTabId));
   await stopPersonalNetworkCapture(chromeTabId);
@@ -6835,6 +7232,7 @@ chrome.debugger?.onDetach?.addListener((source) => {
   const held = personalTaskDebuggers.get(key);
   if (held) {
     clearTimeout(held.timer);
+    if (held.listener) chrome.debugger.onEvent?.removeListener(held.listener);
     personalTaskDebuggers.delete(key);
   }
   personalViewportSessions.delete(key);

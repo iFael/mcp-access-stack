@@ -255,12 +255,23 @@ export const browserFrameSequenceStepResultSchema = z
   })
   .strict();
 
+// Kept here to avoid a circular import of modern browser-contracts.
+const legacyActionStateSchema = z.object({
+  documentId: z.string().min(1).max(128),
+  revision: z.number().int().nonnegative(),
+  baseRevision: z.number().int().nonnegative().optional(),
+  kind: z.enum(["full", "delta", "unchanged", "unavailable"]),
+  snapshot: z.string().max(2_000_000).optional(),
+  refsValid: z.boolean(),
+}).strict();
+
 export const browserFrameSequenceResultSchema = z
   .object({
     tabId: tabIdSchema,
     completed: z.literal(true),
     steps: z.array(browserFrameSequenceStepResultSchema).max(20),
     telemetry: legacyTelemetrySchema,
+    state: legacyActionStateSchema.optional(),
   })
   .strict();
 export type BrowserFrameSequenceResult = z.infer<typeof browserFrameSequenceResultSchema>;
@@ -373,6 +384,7 @@ export const browserNavigatePathResultSchema = z
       )
       .max(10),
     destinationReady: z.boolean(),
+    state: legacyActionStateSchema.optional(),
     segments: z
       .array(
         z

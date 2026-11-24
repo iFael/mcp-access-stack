@@ -7,6 +7,8 @@ import {
   BrowserConfirmationRegistry,
   BrowserInteractionContextService,
   type BrowserClickInput,
+  type BrowserActionResult,
+  type BrowserHoverInput,
   type BrowserDialogInput,
   type BrowserDialogResult,
   type BrowserDragInput,
@@ -67,6 +69,8 @@ export interface PersonalLegacyFrameTarget {
   label: string;
   role: string;
   submitLike: boolean;
+  deferred?: boolean;
+  formMethod?: string;
 }
 
 export class PersonalBrowserActionPolicy {
@@ -187,7 +191,8 @@ export class PersonalBrowserActionPolicy {
   guardPixelClick(
     input: BrowserClickInput,
     screenshotUrl: string,
-  ): PersonalActionGuard {
+    inspected?: BrowserActionResult["inspected"],
+  ): PersonalActionGuard & { inspected?: typeof inspected } {
     if (input.ref || input.x === undefined || input.y === undefined ||
         !Number.isInteger(input.x) || !Number.isInteger(input.y)) {
       throw new AppError("INVALID_ARGUMENT", "A physical pixel click requires exact viewport coordinates and no ref.");
@@ -198,17 +203,57 @@ export class PersonalBrowserActionPolicy {
     }
     const target = createHash("sha256").update(JSON.stringify([
       page.url, input.x, input.y, input.button ?? "left",
-      input.clickCount ?? 1, [...(input.modifiers ?? [])].sort(),
+      input.clickCount ?? 1, [...(input.modifiers ?? [])].sort(), inspected ?? null,
     ])).digest("hex");
-    // Without a semantic ref, the click could hit a sensitive control even on
-    // an otherwise ordinary page: a screenshot cannot authorize it by itself.
-    this.authorize(
-      input.confirmationId,
-      this.interactions.prepareConfirmation(
+    const ordinaryClick = (input.button ?? "left") === "left" &&
+      (input.clickCount ?? 1) === 1 && (input.modifiers ?? []).length === 0;
+    const role = inspected?.role.replace(/:(?:submit|image)$/u, "");
+    const frameContext = inspected ? { tabId: input.tabId, url: inspected.frameUrl,
+      title: inspected.frameTitle } : undefined;
+    const identifiedRisk = inspected && ordinaryClick
+      ? this.interactions.prepareDangerousTarget(
+          frameContext ?? this.pageTab(input.tabId, page), inspected.name, "pixel-click", role,
+        )?.category
+      : undefined;
+    // A GET form can be navigational, but a POST submit is not proven read-only
+    // merely because its caption says "Pesquisar" or "Consultar".
+    const queryLabel = Boolean(inspected && /^(pesquisar|filtrar|consultar|exibir)$/iu.test(inspected.name));
+    const safeQuery = inspected?.formMethod === "get" && queryLabel;
+    const category = identifiedRisk ?? (frameContext && this.interactions.pageRiskCategory(frameContext)) ??
+      this.interactions.pageRiskCategory(page) ??
+      (inspected && ordinaryClick && inspected.submitLike && !safeQuery
+        ? "submit-form" : undefined);
+    if (category) {
+      // A verified legacy POST query may use an existing task-scoped site
+      // submit grant, just like a semantic form control. Never infer read-only
+      // semantics solely from the caption, or extend that grant to blind clicks.
+      const action = ordinaryClick && inspected?.submitLike && queryLabel &&
+        inspected.formMethod === "post" && category === "submit-form" &&
+        !this.interactions.pageRiskCategory(page) &&
+        !(frameContext && this.interactions.pageRiskCategory(frameContext))
+        ? "pixel-semantic-query" : "pixel-click";
+      this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
+        { tabId: input.tabId, url: page.url }, category,
+        action, "sha256:" + target,
+      ));
+    } else if (!inspected || !ordinaryClick) {
+      // Unclassified pixels retain the existing bounded one-use safeguard.
+      this.authorize(input.confirmationId, this.interactions.prepareConfirmation(
         { tabId: input.tabId, url: page.url },
-        this.interactions.pageRiskCategory(page) ?? "submit-form", "pixel-click", "sha256:" + target,
-      ),
-    );
+        this.interactions.pageRiskCategory(page) ?? "submit-form",
+        "pixel-click", "sha256:" + target,
+      ));
+    }
+    return { url: page.url, pixel: true, x: input.x, y: input.y,
+      ...(inspected && ordinaryClick ? { inspected } : {}) };
+  }
+
+  guardPixelHover(input: BrowserHoverInput, screenshotUrl: string): PersonalActionGuard {
+    const page = this.requirePage(input.tabId);
+    if (input.ref || input.x === undefined || input.y === undefined ||
+        !Number.isInteger(input.x) || !Number.isInteger(input.y) || page.url !== screenshotUrl) {
+      throw new AppError("BROWSER_CONFIRMATION_INVALID", "Pixel hover requires fresh screenshot coordinates.");
+    }
     return { url: page.url, pixel: true, x: input.x, y: input.y };
   }
 
@@ -342,8 +387,9 @@ export class PersonalBrowserActionPolicy {
       else if (step.action === "fill") guarded.push({ ...step, guard: this.guardFill({ ...step, tabId: input.tabId }) });
       else if (step.action === "press") guarded.push({ ...step, guard: this.guardPress({ ...step, tabId: input.tabId }) });
       else if (step.action === "hover") {
-        if (!step.ref) throw new AppError("INVALID_ARGUMENT", "Resolve hover coordinates against a fresh snapshot before sequencing.");
-        guarded.push({ ...step, guard: this.guardReference(input.tabId, step.ref) });
+        guarded.push({ ...step, guard: step.ref
+          ? this.guardReference(input.tabId, step.ref)
+          : this.guardPixelHover({ ...step, tabId: input.tabId }, this.requirePage(input.tabId).url) });
       }
       else if (step.action === "scroll") guarded.push({ ...step, guard: step.ref
         ? this.guardReference(input.tabId, step.ref) : this.guardPage(input.tabId) });
@@ -377,10 +423,32 @@ export class PersonalBrowserActionPolicy {
         throw new AppError("RELAY_PROTOCOL_ERROR", "Legacy preflight target does not match a click or key step.");
       }
       if (step.action === "press") validateBrowserKeySequence(step.key);
+      // A deferred target is only dispatched after a preceding waitFor. The
+      // extension checks its actual semantics before input and rejects submit
+      // or sensitive controls instead of authorizing an unseen target.
+      if (target.deferred) {
+        if (step.action !== "click" || !step.locator?.text || target.label !== step.locator.text ||
+            !input.steps.slice(0, target.index).some((earlier) => earlier.action === "waitFor" &&
+              earlier.locator?.text === step.locator?.text &&
+              JSON.stringify(earlier.framePath ?? []) === JSON.stringify(step.framePath ?? []))) {
+          throw new AppError("RELAY_PROTOCOL_ERROR", "Deferred target is not bound to a preceding wait.");
+        }
+        if (this.interactions.prepareDangerousTarget(tab, target.label, "legacy-click") ||
+            this.interactions.pageRiskCategory(tab)) {
+          throw new AppError("ACTION_BLOCKED_BY_POLICY", "Sensitive deferred target requires observation before execution.");
+        }
+        continue;
+      }
       const action = `legacy-${step.action}`;
       const scope = `${(step.framePath ?? []).join("/")}|${target.role}:${target.label}`;
-      const category = this.interactions.prepareDangerousTarget(tab, target.label, action, target.role)?.category ??
-        (target.submitLike || step.action === "press" ? this.interactions.pageRiskCategory(tab) ?? "submit-form" : undefined);
+      const semanticRole = target.role.replace(/:(?:submit|image)$/u, "");
+      const labelRisk = this.interactions.prepareDangerousTarget(tab, target.label,
+        action, semanticRole)?.category;
+      const safeQuery = target.formMethod === "get" &&
+        /^(pesquisar|filtrar|consultar|exibir)$/iu.test(target.label);
+      const category = labelRisk ?? ((target.submitLike || step.action === "press")
+        ? this.interactions.pageRiskCategory(tab) : undefined) ??
+        ((target.submitLike && !safeQuery) || step.action === "press" ? "submit-form" : undefined);
       if (!category) continue;
       required.push({
         confirmationId: step.confirmationId,
