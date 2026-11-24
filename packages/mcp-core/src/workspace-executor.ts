@@ -100,6 +100,7 @@ export interface WorkspaceExecutor {
   ): Promise<OracleListInstancesResult>;
   oracleDiskAudit(input: OracleDiskAuditInput, context?: OperationContext): Promise<OracleDiskAuditResult>;
   oracleDiskAuditProvision(input: OracleDiskAuditProvisionInput, context?: OperationContext): Promise<OracleDiskAuditProvisionResult>;
+  oracleAptMaintenance(input: import("./oracle-apt-contracts.js").OracleAptMaintenanceInput, context?: OperationContext): Promise<import("./oracle-apt-contracts.js").OracleAptMaintenanceResult>;
   getReleaseState(
     input: GetReleaseStateInput,
     context?: OperationContext,

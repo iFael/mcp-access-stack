@@ -61,6 +61,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   oracle_list_instances: "",
   oracle_disk_audit: "If nextStart is non-null, repeat with the same group and nextStart. Unavailable privileged access requires the host policy installer, not sudo via shell.",
   oracle_disk_audit_provision: "If the root bootstrap is absent, it must be installed by an authorized host administrator; never use sudo via run_command. After provisioning, call oracle_disk_audit and reconcile its pages.",
+  oracle_apt_maintenance: "Plan first; apply only with explicit maintenance authorization, observed plan digest and one operationId. Read status with the same ID until terminal. Missing root helper requires an authorized host administrator; never elevate run_command or retry an uncertain apply.",
   service_get_status: "service_start only when it is inactive and should run.",
   service_start: "service_get_status to see it running.",
 

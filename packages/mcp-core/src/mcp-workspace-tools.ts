@@ -90,6 +90,7 @@ import {
 import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-prune-contracts.js";
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
+import { oracleAptMaintenanceInputSchema, oracleAptMaintenanceResultSchema } from "./oracle-apt-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
@@ -270,6 +271,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "oracle_list_instances",
   "oracle_disk_audit",
   "oracle_disk_audit_provision",
+  "oracle_apt_maintenance",
   "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
@@ -1648,6 +1650,35 @@ export function registerWorkspaceTools(
             content: [{ type: "text", text: `Oracle disk provision: ${structuredContent.status}.` }],
             structuredContent,
           };
+        } catch (error) {
+          return toolError(error);
+        }
+      },
+    );
+  }
+
+  if (shouldInclude("oracle_apt_maintenance", include)) {
+    server.registerTool(
+      "oracle_apt_maintenance",
+      {
+        title: "Plan or execute bounded Oracle APT maintenance",
+        description: "Oracle-only fixed-scope maintenance: plan repair of missing matching Oracle kernel modules or installation of three fixed Chromium libraries; apply only the exact observed plan SHA and a UUID operation ID, then read status with the same ID. Requires an independently installed root-owned helper. Rejects arbitrary commands, packages, removals and upgrade plans; no reboot or automatic retry.",
+        inputSchema: oracleAptMaintenanceInputSchema,
+        outputSchema: oracleAptMaintenanceResultSchema,
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const structuredContent = oracleAptMaintenanceResultSchema.parse(
+            await withToolOperationContext(
+              options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+              (context) => executor.oracleAptMaintenance(input, context),
+            ),
+          );
+          return { content: [{ type: "text", text: `Oracle APT maintenance: ${structuredContent.status}.` }], structuredContent };
         } catch (error) {
           return toolError(error);
         }
@@ -4100,6 +4131,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   oracleListInstances: "oracle_list_instances",
   oracleDiskAudit: "oracle_disk_audit",
   oracleDiskAuditProvision: "oracle_disk_audit_provision",
+  oracleAptMaintenance: "oracle_apt_maintenance",
   oracleReleaseAdvance:"release_orchestrator",
   mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",

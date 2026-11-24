@@ -33,6 +33,9 @@ import {
   type OracleDiskAuditInput,
   type OracleDiskAuditResult,
   oracleDiskAuditProvisionInputSchema,
+  oracleAptMaintenanceInputSchema,
+  type OracleAptMaintenanceInput,
+  type OracleAptMaintenanceResult,
   type OracleDiskAuditProvisionInput,
   type OracleDiskAuditProvisionResult,
   serviceStartInputSchema,
@@ -222,6 +225,7 @@ import { LinuxServiceControlService } from "./service-control/service.js";
 import { OracleInstanceInventoryService } from "./oracle/oracle-instance-inventory.js";
 import { OracleDiskAuditService } from "./oracle/oracle-disk-audit.js";
 import { OracleDiskAuditProvisionService } from "./oracle/oracle-disk-audit-provision.js";
+import { OracleAptMaintenanceService } from "./oracle/oracle-apt-maintenance.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import {
   BackgroundTaskManager,
@@ -834,6 +838,19 @@ export class LocalAgent {
       (parsed) => ({ targetResource: "oracle:disk-audit-provision", query: parsed.action }),
       (_workspace, parsed, activeContext) =>
         new OracleDiskAuditProvisionService().execute(parsed, activeContext.signal),
+    );
+  }
+
+  async oracleAptMaintenance(
+    input: OracleAptMaintenanceInput,
+    context: OperationContext = {},
+  ): Promise<OracleAptMaintenanceResult> {
+    return this.runValidatedAudited(
+      "oracleAptMaintenance", input.action === "apply" ? "shell" : "read",
+      oracleAptMaintenanceInputSchema, input, context,
+      (parsed) => ({ targetResource: "oracle:apt-maintenance", query: parsed.action === "plan" ? parsed.operation : parsed.operationId }),
+      (_workspace, parsed, activeContext) =>
+        new OracleAptMaintenanceService().execute(parsed, activeContext.signal),
     );
   }
 

@@ -575,6 +575,8 @@ jobs:
         run: |
           bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
           bash deploy/linux/Test-McpAccessStackOperation.sh
+          bash -n deploy/linux/Install-McpV3AptMaintenancePolicy.sh
+          python3 -I -B tooling/oracle-apt-maintenance.test.py
 
   pr-runtime-assurance-core:
     needs: impact
@@ -770,6 +772,8 @@ jobs:
         run: |
           bash deploy/linux/Test-McpEdgeConnectorRuntime.sh
           bash deploy/linux/Test-McpAccessStackOperation.sh
+          bash -n deploy/linux/Install-McpV3AptMaintenancePolicy.sh
+          python3 -I -B tooling/oracle-apt-maintenance.test.py
 
   main-browser:
     name: main-browser

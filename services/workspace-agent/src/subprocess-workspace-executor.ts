@@ -81,6 +81,11 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("oracleDiskAuditProvision"));
   }
 
+  oracleAptMaintenance(...args: Parameters<WorkspaceExecutor["oracleAptMaintenance"]>) {
+    return this.fallback?.oracleAptMaintenance(...args) ??
+      Promise.reject(this.notImplemented("oracleAptMaintenance"));
+  }
+
   getReleaseState(...args: Parameters<WorkspaceExecutor["getReleaseState"]>) {
     return this.fallback?.getReleaseState(...args) ??
       Promise.reject(this.notImplemented("getReleaseState"));
