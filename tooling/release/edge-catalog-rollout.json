@@ -4,7 +4,7 @@
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
   "previousRevision": "6cb0993d6d142cda3cc664d790144d4474eabbb9628f898f0e57fabc55c5f583",
   "previousToolCount": 133,
-  "targetRevision": "b2908d3bbb1d0941f628f2a3b591a01a556f71c85baef16226ef24cc072ab759",
+  "targetRevision": "291cab69e37c15fcf13998ea75dced027f86525227ec67ef21dacaed011fd64c",
   "targetToolCount": 134,
   "requiredTools": [
     "memory_context",
