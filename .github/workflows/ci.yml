@@ -202,7 +202,7 @@ jobs:
         run: node tooling/ci/resolve-impact.test.mjs
 
       - name: Test exact release tag bootstrap (no network or GitHub mutation)
-        run: node --test tooling/release/bootstrap-release-tag.test.mjs
+        run: node --test tooling/release/bootstrap-release-tag.test.mjs tooling/release/download-gitleaks.test.mjs
 
       - name: Test Oracle Linux-only attested source distribution (no publishing)
         run: node --test tooling/release/Verify-OracleLinuxSourceArtifact.test.mjs
