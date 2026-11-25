@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.11");
+    expect(manifest.version).toBe("1.17.12");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -3899,7 +3899,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.11");
+    expect(parsedManifest.version).toBe("1.17.12");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -4421,7 +4421,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const record = vm.runInContext("recordPersonalApprovalRequest", context) as (message: Record<string, unknown>) => Promise<void>;
     const grant = vm.runInContext("grantPersonalSiteApproval", context) as
       (chromeTabId: number, rememberScript?: boolean) => Promise<boolean>;
-    const grantConsultation = vm.runInContext("grantPersonalSharedConsultation", context) as
+    const grantSharedAccess = vm.runInContext("grantPersonalSharedAccess", context) as
       (tabId: number, origin: string) => Promise<boolean>;
     const clearTask = vm.runInContext("clearPersonalTaskApprovals", context) as
       (taskId: string | undefined, chromeTabIds: number[]) => Promise<void>;
@@ -4509,13 +4509,17 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect((sent.at(-1) as typeof report).autoSites).toEqual([]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 9 })).resolves.toMatchObject({ autoEligible: false, auto: false });
 
-    // An explicit share grants only consultation, for the same origin and tab.
-    await expect(grantConsultation(7, "https://shop.example")).resolves.toBe(false);
-    await expect(grantConsultation(8, "https://other.example")).resolves.toBe(false);
-    await expect(grantConsultation(8, "https://docs.example")).resolves.toBe(true);
-    expect(sent.at(-1)).toMatchObject({ grants: [], consultationGrants: [{ origin: "https://docs.example", tabId: "personal:8" }] });
+    // Explicit toolbar sharing grants consultations and JavaScript, not other categories.
+    await expect(grantSharedAccess(7, "https://shop.example")).resolves.toBe(false);
+    await expect(grantSharedAccess(8, "https://other.example")).resolves.toBe(false);
+    await expect(grantSharedAccess(8, "https://docs.example")).resolves.toBe(true);
+    expect(sent.at(-1)).toMatchObject({ grants: [{ origin: "https://docs.example", category: "execute-script", tabId: "personal:8" }], consultationGrants: [{ origin: "https://docs.example", tabId: "personal:8" }] });
+    await expect(grantSharedAccess(8, "https://docs.example")).resolves.toBe(true);
+    expect((sent.at(-1) as typeof report).grants).toHaveLength(1);
     await clearTab(8);
     expect(sent.at(-1)).not.toHaveProperty("consultationGrants");
+    expect((sent.at(-1) as typeof report).grants).toEqual([]);
+    expect(local.has("mcpV3RememberedJavaScriptOrigins")).toBe(false);
 
     // Remembering JavaScript requires the explicit second button on a Chrome notification.
     await ask("personal:7", "https://shop.example", "execute-script");

@@ -19,6 +19,32 @@ function prepare() {
 }
 
 describe("personal browser authorization", () => {
+  it("authorizes scripts on the explicitly shared tab and origin without granting typed writes", () => {
+    const policy = prepare();
+    const script = { tabId: sample.tabId, function: "() => document.title" };
+    const grants = [{ origin: "https://example.com", category: "execute-script" as const, tabId: sample.tabId }];
+    policy.setSiteApprovals({ grants, autoSites: [] });
+    expect(policy.guardEvaluate(script)).toEqual({ url: sample.url });
+    expect(() => policy.guardClick({ tabId: sample.tabId, ref: "p-1" }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    expect(() => policy.guardUpload({ tabId: sample.tabId, selector: "input[type=file]",
+      files: [{ name: "x.txt", contentBase64: "eA==" }] }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    policy.observeTab({ tabId: "personal:8", url: sample.url, taskId: "task-1" });
+    policy.observeSnapshot({ ...sample, tabId: "personal:8" });
+    expect(() => policy.guardEvaluate({ ...script, tabId: "personal:8" }))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    policy.observeTab({ tabId: sample.tabId, url: "https://other.example.com/" });
+    policy.observeSnapshot({ ...sample, url: "https://other.example.com/" });
+    expect(() => policy.guardEvaluate(script))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+    policy.observeTab({ tabId: sample.tabId, url: sample.url });
+    policy.observeSnapshot(sample);
+    policy.setSiteApprovals({ grants: [], autoSites: [] });
+    expect(() => policy.guardEvaluate(script))
+      .toThrow(expect.objectContaining({ code: "ACTION_REQUIRES_CONFIRMATION" }));
+  });
+
   it("scopes native consultation authorization to the explicitly shared origin and tab", () => {
     const policy = new PersonalBrowserActionPolicy();
     const tabId = "personal:7";
