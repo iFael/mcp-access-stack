@@ -1763,7 +1763,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "the tool its nextStep names; mcp_update does the whole update by itself.",
+      "io.github.ifael/next-step": "the tool its nextStep names; mcp_fluxo handles the whole authorized release operation.",
       "securitySchemes": [
         {
           "scopes": [
@@ -1779,7 +1779,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps. nextStep names the tool for the next lifecycle phase; get_operation_guide topic=release has the full order. Next: the tool its nextStep names; mcp_update does the whole update by itself.",
+    "description": "Reads the local MCP Access Stack execution-node lifecycle state and reports whether the active release contains the signed typed-release bootstraps. nextStep names the tool for the next lifecycle phase; get_operation_guide topic=release has the full order. Next: the tool its nextStep names; mcp_fluxo handles the whole authorized release operation.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2338,7 +2338,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "Reuse the same planId; for releases reconcile the same updateId with mcp_fluxo operation=update_mcp action=read.",
+      "io.github.ifael/next-step": "Reuse the same planId; for releases reconcile the same updateId via mcp_fluxo action=read with the same operation.",
       "openai/outputTemplate": "ui://mcp-v3/progress-v14.html",
       "openai/toolInvocation/invoked": "Fluxo",
       "openai/toolInvocation/invoking": "Abrindo Fluxo",
@@ -2360,7 +2360,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Single Fluxo card for every MCP V3 job. Call action=open once per conversation (title and steps optional), or action=show with planId to recover it. Use browser_progress_update to update the existing card without remounting. Native tools contribute observed progress, including correlated runtime outcomes. For an authorized MCP release only, set operation=update_mcp, workspaceId=mcp-access-stack and action=start with exact expectedMainSha; read, confirm and resume use the same updateId and the native release ledger. Never start a second release to recover an uncertain outcome. The Edge handles plan actions; release permissions and confirmations remain unchanged. Next: Reuse the same planId; for releases reconcile the same updateId with mcp_fluxo operation=update_mcp action=read.",
+    "description": "Single Fluxo card for every MCP V3 job. Call action=open once per conversation (title and steps optional), or action=show with planId to recover it. Use browser_progress_update to update the existing card without remounting. Native tools contribute observed progress, including correlated runtime outcomes. For an authorized MCP release only, set operation=update_mcp, workspaceId=mcp-access-stack and action=start with exact expectedMainSha; read, confirm and resume use the same updateId and the native release ledger. Never start a second release to recover an uncertain outcome. The Edge handles plan actions; release permissions and confirmations remain unchanged. Next: Reuse the same planId; for releases reconcile the same updateId via mcp_fluxo action=read with the same operation.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -31548,15 +31548,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "b80c4bc87be21846604ea9ffb4c39c8dd09ff1aaa45350b3e00fd965a16eaf60",
-  "serverVersion": "0.4.0-catalog.cb80c4bc87be2.s811b25e3744b",
+  "contractRevision": "7d83d35f3e4d81dd4727b404790c0cc8fab901201842b67936b02dc88fa8f3c5",
+  "serverVersion": "0.4.0-catalog.c7d83d35f3e4d.s811b25e3744b",
   "toolCount": 135,
   "toolSetRevision": "811b25e3744b41d7f968d9c7883a5a109e5eede784aac4730c01b31b9117e059"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.cb80c4bc87be2.s811b25e3744b"
+  "version": "0.4.0-catalog.c7d83d35f3e4d.s811b25e3744b"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

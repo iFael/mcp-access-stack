@@ -52,9 +52,9 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   write_background_task_stdin: "read_background_task_output for its answer.",
 
   // Releases and the MCP update
-  get_release_state: "the tool its nextStep names; mcp_update does the whole update by itself.",
+  get_release_state: "the tool its nextStep names; mcp_fluxo handles the whole authorized release operation.",
   release_orchestrator: "reconcile an uncertain result with the same operationId, never dispatch again.",
-  mcp_fluxo: "Reuse the same planId; for releases reconcile the same updateId with mcp_fluxo operation=update_mcp action=read.",
+  mcp_fluxo: "Reuse the same planId; for releases reconcile the same updateId via mcp_fluxo action=read with the same operation.",
   mcp_update: "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
   prepare_release: "end your answer and wait to be woken, or wait_background_task with the taskId; then get_release_state and promote_release once the user agrees.",
   promote_release: "get_release_state until the candidate is empty (the swap may restart the connection).",
