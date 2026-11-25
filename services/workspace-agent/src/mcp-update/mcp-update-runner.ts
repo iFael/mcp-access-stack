@@ -275,6 +275,12 @@ export class McpUpdateRunner {
       throw new StopUpdate("EDGE_STAGE_RECONCILIATION_REQUIRED",
         "The failed Edge stage may have uploaded a version. Reconcile Cloudflare inventory; do not dispatch again.");
     }
+    // Public release dispatch is immutable and tag-scoped. A terminal failed
+    // release requires a corrected MAIN and a new tag, not a new operation ID.
+    if (record.step === "connector_release" && record.error?.code === "WORKFLOW_FAILED") {
+      throw new StopUpdate("PUBLIC_RELEASE_REQUIRES_NEW_MAIN",
+        "The public release failed. Publish a corrected MAIN with a new tag; the original release identity is preserved.");
+    }
     const { error, ...rest } = record;
     const run = STEP_RUN[record.step];
     const data = { ...rest.data };

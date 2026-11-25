@@ -265,25 +265,20 @@ describe("the autonomous MCP update on the execution node", () => {
     expect(env.progress.at(-1)!.steps[4]!.state).toBe("failed");
   });
 
-  it("is resumed from the workflow that failed, which it dispatches again, and from nothing before it", async () => {
+  it("preserves a failed immutable public release and requires a corrected MAIN", async () => {
     const env = world();
-    let fail = true;
     const reconcile = env.port.reconcile;
-    env.port.reconcile = async (call) => call.workflow === "release.yml" && fail
+    env.port.reconcile = async (call) => call.workflow === "release.yml"
       ? { status: "observed", runId: 7, state: "completed", conclusion: "failure" }
       : reconcile(call);
     const updates = runner(env.port);
     const failed = await updates.settled((await updates.start({ mainSha: MAIN, planId: PLAN })).updateId);
-    expect(failed.status).toBe("failed");
+    expect(failed).toMatchObject({ status: "failed", step: "connector_release", error: { code: "WORKFLOW_FAILED" } });
     await expect(updates.resume("upd_00000000-0000-4000-8000-000000000999")).rejects.toThrow();
-    fail = false;
-    expect(await updates.resume(failed.updateId)).toMatchObject({ status: "running", step: "connector_release" });
-    const done = await updates.settled(failed.updateId);
-    expect(done.status).toBe("succeeded");
-    expect(done.error).toBeUndefined();
-    expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(2);
+    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "PUBLIC_RELEASE_REQUIRES_NEW_MAIN" });
+    expect(await updates.read(failed.updateId)).toEqual(failed);
+    expect(env.calls.filter((call) => call === "dispatch release.yml")).toHaveLength(1);
     expect(env.calls.filter((call) => call === "dispatch release-tag-bootstrap.yml")).toHaveLength(1);
-    await expect(updates.resume(failed.updateId)).rejects.toMatchObject({ code: "UPDATE_NOT_FAILED" });
   });
 
   it("is resumed after a failed Edge activation from a new stage of the same MAIN", async () => {

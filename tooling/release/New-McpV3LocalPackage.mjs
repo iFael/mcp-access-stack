@@ -14,6 +14,7 @@ import {
 import path from "node:path";
 import process from "node:process";
 import { createHash } from "node:crypto";
+import { downloadGitleaks } from "./download-gitleaks.mjs";
 
 const WORKSPACES = [
   "services/workspace-agent",
@@ -305,13 +306,7 @@ async function installPinnedGitleaks(stage, platformId) {
     throw new Error(`No pinned Gitleaks asset for ${platformId}.`);
   }
   const url = `https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${descriptor.asset}`;
-  const response = await fetch(url, {
-    headers: { "user-agent": "mcp-v3-release-builder" },
-  });
-  if (!response.ok) {
-    throw new Error(`Gitleaks download failed with HTTP ${response.status}.`);
-  }
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await downloadGitleaks(url);
   const digest = createHash("sha256").update(bytes).digest("hex");
   if (digest !== descriptor.sha256) {
     throw new Error(`Gitleaks ${GITLEAKS_VERSION} failed SHA-256 verification.`);
