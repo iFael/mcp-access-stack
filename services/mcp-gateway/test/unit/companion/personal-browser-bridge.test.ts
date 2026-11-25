@@ -1359,8 +1359,8 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
-  it("rebinds a safe SPA click after pushState only for the same document identity", async () => {
-    for (const stableDocument of [true, false]) {
+  it.each(["stale_page", "stale_ref"])("rebinds a safe %s click only for the same document and element identity", async (reason) => {
+    for (const [stableDocument, stableElement] of [[true, true], [false, true], [true, false]]) {
       const { bridge, extension, close } = await startAuthenticatedBridge();
       const tabId = "personal:7";
       const urls = ["https://app.example/settings", "https://app.example/settings/general"];
@@ -1374,8 +1374,8 @@ describe("PersonalBrowserBridge", () => {
           extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
             result: { tabId, url: urls[Number(newer)],
               pageInstanceId: stableDocument || !newer ? "same-page" : "new-page",
-              content: '- link "Help" [ref=p-help]',
-              refs: [{ ref: "p-help", role: "link", name: "Help" }] },
+              content: '- link "Help" [ref=' + (stableElement || !newer ? "p-help" : "p-replacement") + ']',
+              refs: [{ ref: stableElement || !newer ? "p-help" : "p-replacement", role: "link", name: "Help" }] },
           }));
         }
         if (message.operation === "click") {
@@ -1383,14 +1383,14 @@ describe("PersonalBrowserBridge", () => {
           const first = clicks.length === 1;
           extension.send(JSON.stringify({ type: "response", id: message.id, ok: !first,
             ...(first ? { error: { code: "BROWSER_CONFIRMATION_INVALID",
-              message: "Target preflight: stale_page. No click was dispatched." } }
+              message: "Target preflight: " + reason + ". No click was dispatched." } }
               : { result: { tabId, completed: true } }) }));
         }
       };
       extension.on("message", respond);
       try {
         await bridge.snapshot({ tabId });
-        if (stableDocument) {
+        if (stableDocument && stableElement) {
           await expect(bridge.click({ tabId, ref: "p-help" })).resolves.toMatchObject({ completed: true });
           expect(clicks).toHaveLength(2);
           expect(clicks[0]).toMatchObject({ guard: { url: urls[0] } });
@@ -1982,6 +1982,28 @@ describe("PersonalBrowserBridge", () => {
     } finally {
       await close();
     }
+  });
+
+  it("reports the last allowlisted Chrome phase even when a snapshot never responds", async () => {
+    const events: Record<string, unknown>[] = [];
+    const { bridge, extension, close } = await startAuthenticatedBridge(e => events.push(e));
+    try {
+      const requestPromise = nextWireMessage(extension, m => m.type === "request" && m.operation === "snapshot");
+      const call = bridge.snapshot({ tabId: "personal:7" }, {
+        deadline: { requestedTimeoutMs: 500, effectiveTimeoutMs: 500,
+          deadlineAt: new Date(Date.now() + 500).toISOString() },
+      });
+      const assertion = expect(call).rejects.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN" });
+      const request = await requestPromise;
+      extension.send(JSON.stringify({ type: "request-phase", id: request.id, phase: "snapshot-script" }));
+      extension.send(JSON.stringify({ type: "request-phase", id: request.id, phase: "secret-page-content" }));
+      await assertion;
+      expect(events).toContainEqual(expect.objectContaining({
+        event: "mcp_v3_personal_browser_operation_stopped", phase: "snapshot-script",
+        bridgeRequestId: request.id, connected: true, errorCode: "EXECUTION_OUTCOME_UNKNOWN",
+      }));
+      expect(JSON.stringify(events)).not.toContain("secret-page-content");
+    } finally { await close(); }
   });
 
   it("isolates pending calls by connection generation", async () => {

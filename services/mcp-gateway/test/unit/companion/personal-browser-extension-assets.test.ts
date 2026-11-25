@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.12");
+    expect(manifest.version).toBe("1.17.13");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -531,6 +531,40 @@ describe("personal browser extension assets", () => {
     expect(probe(url, { action: "click", locator }, undefined)).toMatchObject({ obscured: true });
     expect(probe("https://other.example/", { action: "click", locator }, undefined))
       .toMatchObject({ stale: true });
+  });
+
+  it("resolves an indexed Monaco input to its visible editor surface for a guarded click only", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://example.test/";
+    const input = fakeElement({ tagName: "TEXTAREA", attributes: { "aria-label": "Expression" } });
+    const editor = fakeElement({ tagName: "DIV" });
+    const visual = fakeElement({ tagName: "SPAN" });
+    const button = fakeElement({ tagName: "BUTTON" });
+    const overlay = fakeElement({ tagName: "DIV" });
+    Object.assign(input, { isConnected: true, contains: () => false,
+      closest: (selector: string) => selector.includes(".monaco-editor") ? editor : null,
+      getBoundingClientRect: () => ({ left: 701, top: 1, width: 1, height: 1 }) });
+    Object.assign(editor, { isConnected: true,
+      contains: (node: unknown) => [input, visual, button].includes(node as typeof input),
+      getBoundingClientRect: () => ({ left: 700, top: 0, width: 400, height: 30 }) });
+    Object.assign(visual, { closest: (selector: string) => selector.includes(".monaco-editor") ? editor : null });
+    Object.assign(button, { closest: (selector: string) => selector.includes("button") ? button : editor });
+    let hit: unknown = visual;
+    const tokens = new WeakMap([[input, 1]]);
+    const ctx = vm.createContext({ location: { href: url }, innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      __mcpV3LegacyIndexElements: tokens,
+      document: { body: {}, querySelectorAll: () => [input], elementFromPoint: () => hit } });
+    vm.runInContext(extractFunction(serviceWorker, "probePersonalLegacyReadStep"), ctx);
+    const probe = vm.runInContext("probePersonalLegacyReadStep", ctx) as (...args: unknown[]) => unknown;
+    const step = { action: "click", locator: { ref: "lref_12345678" }, expectedElementToken: 1 };
+    expect(probe(url, step, "#editor-input")).toMatchObject({ found: true, point: { x: 750, y: 15 } });
+    expect(probe(url, { ...step, expectedElementToken: 2 }, "#editor-input")).toMatchObject({ found: false });
+    expect(probe(url, { ...step, action: "fill", value: "new" }, "#editor-input")).toMatchObject({ obscured: true });
+    hit = button;
+    expect(probe(url, step, "#editor-input")).toMatchObject({ obscured: true });
+    hit = overlay;
+    expect(probe(url, step, "#editor-input")).toMatchObject({ obscured: true });
   });
 
   it("recognizes only native consultation submits and binds the form action without exposing routing parameters", () => {
@@ -1674,6 +1708,114 @@ describe("personal browser extension assets", () => {
     expect(timing.snapshotMs).toBe(7);
   });
 
+  it("serializes optional scroll coordinates and preserves explicit zero coordinates", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: Array<Record<string, unknown>> = [];
+    const context = vm.createContext({
+      innerWidth: 800, innerHeight: 600,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async ({ func, args }: {
+          func: (...args: Array<number | null>) => unknown; args: Array<number | null>;
+        }) => {
+          if (args.some((arg) => arg === undefined)) throw new Error("Value is unserializable.");
+          return [{ result: func(...args) }];
+        } },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, _method: string, params: Record<string, unknown>) => {
+            commands.push(params);
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "scroll"), context);
+    const scroll = vm.runInContext("scroll", context) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", guard: { url: "https://example.com/" }, direction: "right", amount: 300 };
+    await expect(scroll(input)).resolves.toMatchObject({ completed: true });
+    await expect(scroll({ ...input, x: 0 })).resolves.toMatchObject({ completed: true });
+    await expect(scroll({ ...input, direction: "up", x: 0, y: 0 })).resolves.toMatchObject({ completed: true });
+    await expect(scroll({ ...input, x: 800, y: 0 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(scroll({ ...input, guard: { url: "https://other.example/" } })).rejects.toMatchObject({
+      code: "BROWSER_CONFIRMATION_INVALID",
+    });
+    expect(commands).toEqual([
+      { type: "mouseWheel", x: 400, y: 300, deltaX: 300, deltaY: 0 },
+      { type: "mouseWheel", x: 0, y: 300, deltaX: 300, deltaY: 0 },
+      { type: "mouseWheel", x: 0, y: 0, deltaX: 0, deltaY: -300 },
+    ]);
+  });
+
+  it("does not dispatch a scroll after its deadline expires during debugger attachment", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const controller = new AbortController();
+    const commands: string[] = [];
+    const phases: string[] = [];
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw Object.assign(new Error("deadline"), { code: "OPERATION_CANCELLED" }); },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
+        debugger: {
+          attach: async () => { controller.abort(); },
+          detach: async () => { commands.push("detach"); },
+          sendCommand: async (_target: unknown, name: string) => { commands.push(name); },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "scroll"), context);
+    const scroll = vm.runInContext("scroll", context) as
+      (input: unknown, signal: AbortSignal, phase: (value: string) => void) => Promise<unknown>;
+    await expect(scroll({ tabId: "personal:7", guard: { url: "https://example.com/" },
+      direction: "right", amount: 300 }, controller.signal, value => phases.push(value)))
+      .rejects.toMatchObject({ code: "OPERATION_CANCELLED" });
+    expect(commands).toEqual(["detach"]);
+    expect(phases).toEqual(["scroll-preflight", "debugger-attach", "debugger-detach"]);
+  });
+
+  it("ignores obsolete socket callbacks and aborts requests on connection replacement or loss", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const connections: FakeSocket[] = [];
+    class FakeSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = 0;
+      onopen?: () => void;
+      onclose?: () => void;
+      onmessage?: (event: { data: string }) => void;
+      constructor() { connections.push(this); }
+    }
+    const pending = new Map<string, AbortController>();
+    const context = vm.createContext({ WebSocket: FakeSocket, BRIDGE_URL: "ws://localhost/",
+      inFlightRequests: pending, endAllPersonalRecordings: () => undefined,
+      clearTimeout: () => undefined, setTimeout: () => 1 });
+    vm.runInContext("let socket; let reconnectTimer;", context);
+    vm.runInContext(extractFunction(serviceWorker, "connect"), context);
+    const connect = vm.runInContext("connect", context) as () => void;
+    connect();
+    const first = connections[0]!;
+    first.readyState = 2;
+    const oldRequest = new AbortController();
+    pending.set("old", oldRequest);
+    connect();
+    const second = connections[1]!;
+    expect(oldRequest.signal.aborted).toBe(true);
+    second.readyState = 1;
+    const newRequest = new AbortController();
+    pending.set("new", newRequest);
+    first.onclose?.();
+    expect(vm.runInContext("socket", context)).toBe(second);
+    expect(newRequest.signal.aborted).toBe(false);
+    second.onclose?.();
+    expect(newRequest.signal.aborted).toBe(true);
+    expect(vm.runInContext("socket", context)).toBeUndefined();
+  });
+
   it("generates the extension mutation queue from the shared mutation contract", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     expect(serviceWorker).toContain(
@@ -1983,7 +2125,7 @@ describe("personal browser extension assets", () => {
       attributes: { "aria-label": "Editor content;Press Alt+F1 for Accessibility Options." } });
     const editor = fakeElement({ tagName: "DIV" });
     const visual = fakeElement({ tagName: "SPAN", text: "json(...)" });
-    const rect = { left: 0, top: 0, right: 100, bottom: 30, width: 100, height: 30 };
+    let rect = { left: 0, top: 0, right: 100, bottom: 30, width: 100, height: 30 };
     Object.assign(editor, {
       isConnected: true, matches: (selector: string) => selector.includes(".monaco-editor"),
       querySelector: () => textarea,
@@ -2023,6 +2165,15 @@ describe("personal browser extension assets", () => {
     expect(ref.role).toBe("textbox");
     expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
       .toMatchObject({ x: 50, y: 15 });
+    rect = { left: 700, top: 0, right: 1100, bottom: 30, width: 400, height: 30 };
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ x: 750, y: 15 });
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false, 900, 15))
+      .toMatchObject({ error: "point_outside_target" });
+    rect = { left: 810, top: 0, right: 910, bottom: 30, width: 100, height: 30 };
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ error: "point_outside_target" });
+    rect = { left: 0, top: 0, right: 100, bottom: 30, width: 100, height: 30 };
     const point = inspect(50, 15);
     expect(point).toMatchObject({ ref: expect.stringMatching(/^p-editor-/u), role: "textbox", name: "" });
     expect(probe(point!.ref, { ...point, url: "https://example.test/" }, false, 50, 15))
@@ -3926,7 +4077,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.12");
+    expect(parsedManifest.version).toBe("1.17.13");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
