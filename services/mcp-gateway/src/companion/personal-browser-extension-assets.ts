@@ -2113,10 +2113,17 @@ function inspectPersonalPixelSemanticTarget(expectedUrl, x, y) {
       if (!child || child.readyState === "loading") return { unknown: true };
       const rect = hit.getBoundingClientRect();
       const style = doc.defaultView.getComputedStyle(hit);
+      // As in probePersonalChildFramePoint, compare the visual border box to
+      // integer layout dimensions with tolerance for Chrome's fractional rounding.
       if (style.transform !== "none" || rect.width <= 0 || rect.height <= 0 ||
-          rect.width < hit.clientWidth || rect.height < hit.clientHeight) return { unknown: true };
-      px -= rect.left + hit.clientLeft;
-      py -= rect.top + hit.clientTop;
+          !(Math.abs(rect.width - hit.offsetWidth) <= 2 &&
+            Math.abs(rect.height - hit.offsetHeight) <= 2)) return { unknown: true };
+      px -= rect.left + hit.clientLeft + (parseFloat(style.paddingLeft) || 0);
+      py -= rect.top + hit.clientTop + (parseFloat(style.paddingTop) || 0);
+      const viewport = child.defaultView;
+      if (!viewport || !(px >= 0 && py >= 0 && px < viewport.innerWidth && py < viewport.innerHeight)) {
+        return { unknown: true };
+      }
       frames.push((hit.getAttribute("name") || hit.id || String(frames.length)).slice(0, 100));
       doc = child;
       continue;

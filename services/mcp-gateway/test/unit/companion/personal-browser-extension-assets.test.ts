@@ -1191,21 +1191,25 @@ describe("personal browser extension assets", () => {
     });
     let control = anchor();
     const child = {
-      readyState: "complete", title: "Menu",
+      readyState: "complete", title: "Menu", defaultView: { innerWidth: 200, innerHeight: 300 },
       location: { origin: "http://legacy.example", pathname: "/menu" },
       elementFromPoint: (x: number, y: number) => {
         expect([x, y]).toEqual([40, 30]);
         return control;
       },
     };
+    let rect = { left: 10, top: 20, width: 200, height: 300 };
+    let transform = "none";
+    let padding = "0px";
     const frame = {
       tagName: "FRAME", contentDocument: child, clientWidth: 200, clientHeight: 300, clientLeft: 0, clientTop: 0,
-      getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 300 }),
+      offsetWidth: 200, offsetHeight: 300,
+      getBoundingClientRect: () => rect,
       getAttribute: (name: string) => name === "name" ? "Menu" : null,
     };
     const ctx = vm.createContext({
       location: { href: url }, innerWidth: 800, innerHeight: 600,
-      document: { elementFromPoint: () => frame, defaultView: { getComputedStyle: () => ({ transform: "none" }) } },
+      document: { elementFromPoint: () => frame, defaultView: { getComputedStyle: () => ({ transform, paddingLeft: padding, paddingTop: padding }) } },
       // Insecure HTTP pages expose getRandomValues, but not randomUUID.
       crypto: { getRandomValues: (bytes: Uint8Array) => { bytes.fill(++token); return bytes; } },
     });
@@ -1215,6 +1219,29 @@ describe("personal browser extension assets", () => {
     const first = hit(url, 50, 50);
     expect(first).toMatchObject({ frame: "Menu", role: "link", name: "Itens", frameUrl: "http://legacy.example/menu" });
     expect(hit(url, 50, 50)).toEqual(first);
+    // Reproduce the fractional frame dimensions measured in real Chrome.
+    rect = { ...rect, width: 199.59375, height: 299.600036 };
+    expect(hit(url, 50, 50)).toEqual(first);
+    rect = { ...rect, width: 200.4, height: 300.4 };
+    expect(hit(url, 50, 50)).toEqual(first);
+    rect = { ...rect, width: 180 };
+    expect(hit(url, 50, 50)).toEqual({ unknown: true });
+    rect = { ...rect, width: 220 };
+    expect(hit(url, 50, 50)).toEqual({ unknown: true });
+    rect = { ...rect, width: 200, height: 300 };
+    transform = "scale(1.1)";
+    expect(hit(url, 50, 50)).toEqual({ unknown: true });
+    transform = "none";
+    expect(hit(url, 5, 5)).toEqual({ unknown: true });
+    expect(hit(url, 211, 321)).toEqual({ unknown: true });
+    padding = "7px";
+    Object.assign(frame, { clientLeft: 3, clientTop: 3, offsetWidth: 220, offsetHeight: 320 });
+    rect = { ...rect, width: 220, height: 320 };
+    expect(hit(url, 60, 60)).toEqual(first);
+    expect(hit(url, 15, 25)).toEqual({ unknown: true });
+    padding = "0px";
+    Object.assign(frame, { clientLeft: 0, clientTop: 0, offsetWidth: 200, offsetHeight: 300 });
+    rect = { ...rect, width: 200, height: 300 };
     const parsed = browserActionResultSchema.parse({ tabId: "personal:7", completed: true, inspected: first }).inspected;
     expect(JSON.stringify(first)).not.toBe(JSON.stringify(parsed));
     vm.runInContext(extractFunction(serviceWorker, "samePersonalPixelSemanticTarget"), ctx);

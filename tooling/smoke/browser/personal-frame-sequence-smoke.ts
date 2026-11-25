@@ -124,6 +124,11 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("ime").textContent += "[" + event.data + "]";
       });
     </script>`,
+  "pixel-site.test/": () => `<!doctype html><title>Fractional frame</title><body style="margin:0">
+    <iframe name="fractional" src="/child" style="display:block;width:300.6px;height:400.6px;border:0"></iframe>`,
+  "pixel-site.test/child": () => `<!doctype html><title>Menu</title><body style="margin:0">
+    <input id="search" placeholder="Buscar menu" style="width:150px;height:30px">
+    <button id="danger" onclick="document.body.dataset.deleted='yes'">Excluir registros</button>`,
   "consult-site.test/MisterT.asp": (url) => url.searchParams.get("R") === "42"
     ? `<!doctype html><title>Resultados</title><p id="result">Consulta concluída</p>`
     : `<!doctype html><title>Itens do Estoque</title><form method="post" action="/MisterT.asp?CTRL=fixture&R=42">
@@ -405,7 +410,46 @@ async function main(): Promise<void> {
     report("MisterT-like large frameset regression", { indexElapsed, clicked: clicked.clicked,
       alert: alertResult.dialog, destination: verifiedGrid.steps.at(-1)?.value });
 
-    // A real toolbar share grants the native consultation only, not arbitrary POST writes.
+    // Real fractional geometry: Chrome rounds the layout dimensions to integers.
+    const pixelUrl = `http://pixel-site.test:${sitePort}/`;
+    const pixelTab = (await bridge.open({ url: pixelUrl, taskId: "personal-frame-smoke" })).tab.tabId;
+    const pixelPage = context.pages().find((candidate) => candidate.url() === pixelUrl);
+    if (!pixelPage) throw new Error("Fractional frame fixture is missing.");
+    const pixelInput = pixelPage.frameLocator("iframe").locator("#search");
+    await pixelInput.waitFor();
+    const geometry = await pixelPage.locator("iframe").evaluate((element) => {
+      const host = element as { getBoundingClientRect: () => { width: number; height: number };
+        clientWidth: number; clientHeight: number };
+      const rect = host.getBoundingClientRect();
+      return { width: rect.width, height: rect.height, clientWidth: host.clientWidth, clientHeight: host.clientHeight };
+    });
+    if (!(geometry.width < geometry.clientWidth || geometry.height < geometry.clientHeight)) {
+      throw new Error("Fractional fixture did not reproduce the old strict comparison.");
+    }
+    await bridge.snapshot({ tabId: pixelTab });
+    await bridge.screenshot({ tabId: pixelTab });
+    const pixelBox = await pixelInput.boundingBox();
+    if (!pixelBox) throw new Error("Fractional frame target is missing.");
+    const fractionalClick = await bridge.click({ tabId: pixelTab,
+      x: Math.round(pixelBox.x + pixelBox.width / 2), y: Math.round(pixelBox.y + pixelBox.height / 2) });
+    if (fractionalClick.clicked?.frame !== "fractional" || fractionalClick.clicked.name !== "Buscar menu" ||
+        !(await pixelInput.evaluate((element) => element === (element as { ownerDocument: { activeElement: unknown } }).ownerDocument.activeElement))) {
+      throw new Error("Fractional frame click did not identify and focus the intended input.");
+    }
+    await bridge.screenshot({ tabId: pixelTab });
+    const dangerBox = await pixelPage.frameLocator("iframe").locator("#danger").boundingBox();
+    if (!dangerBox) throw new Error("Fractional destructive fixture target is missing.");
+    const deniedFractional = bridge.click({ tabId: pixelTab,
+      x: Math.round(dangerBox.x + dangerBox.width / 2), y: Math.round(dangerBox.y + dangerBox.height / 2) })
+      .then(() => "allowed", (error: { code?: string }) => error.code);
+    await decideChromeNotification("mcp-action:", 1);
+    if (await deniedFractional !== "ACTION_BLOCKED_BY_POLICY" ||
+        await pixelPage.frameLocator("iframe").locator("body").getAttribute("data-deleted") !== null) {
+      throw new Error("Fractional geometry must not authorize destructive clicks.");
+    }
+    report("fractional frame geometry", { geometry, clicked: fractionalClick.clicked });
+
+    // A real toolbar share grants consultation and scripts, not typed POST writes.
     const consultationPage = await context.newPage();
     await consultationPage.goto(`http://consult-site.test:${sitePort}/MisterT.asp`);
     const consultationChromeId = await extensionWorker.evaluate(`(async () => {
@@ -414,6 +458,12 @@ async function main(): Promise<void> {
       return tab.id;
     })()`) as number;
     const consultationTab = "personal:" + consultationChromeId;
+    await bridge.snapshot({ tabId: consultationTab });
+    const sharedScript = await bridge.evaluate({ tabId: consultationTab, function: "() => document.title" });
+    if (sharedScript.value !== "Itens do Estoque") {
+      throw new Error("Toolbar sharing did not authorize a script on the shared origin.");
+    }
+    report("shared JavaScript authorization", { value: sharedScript.value });
     const consultaIndex = await bridge.domIndex!({ tabId: consultationTab, query: "Pesquisar", limit: 5 });
     if (consultaIndex.items.length !== 1 || consultaIndex.items[0]?.text !== "Pesquisar") {
       throw new Error("Native submit label is missing from the legacy index.");
