@@ -2544,20 +2544,34 @@ async function scroll(input, signal, reportPhase) {
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll target is stale or obscured.");
   } else if (!input.ref) {
-    const [injection] = await chrome.scripting.executeScript({
-      target: { tabId: chromeTabId },
-      func: (x, y) => {
-        const px = x ?? Math.floor(innerWidth / 2);
-        const py = y ?? Math.floor(innerHeight / 2);
-        if (!Number.isInteger(px) || !Number.isInteger(py) ||
-            px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) return null;
-        return { x: px, y: py };
-      },
-      args: [input.x ?? null, input.y ?? null],
-    });
-    point = injection?.result;
-    if (!point) {
-      throw coded("INVALID_ARGUMENT", "Scroll coordinates are outside the current CSS viewport.");
+    // A newly activated headful tab can briefly have an empty CSS viewport.
+    // Poll only geometry, never replay the wheel event, and bind every probe
+    // to the guarded page before accepting a point.
+    for (let attempt = 0; attempt <= 20; attempt += 1) {
+      throwIfAborted(signal, "scroll", false);
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId },
+        func: (x, y, expectedUrl) => {
+          if (location.href !== expectedUrl) return { stale: true };
+          if (!(innerWidth > 0 && innerHeight > 0)) return { unsized: true };
+          const px = x ?? Math.floor(innerWidth / 2);
+          const py = y ?? Math.floor(innerHeight / 2);
+          if (!Number.isInteger(px) || !Number.isInteger(py) ||
+              px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) return null;
+          return { x: px, y: py };
+        },
+        args: [input.x ?? null, input.y ?? null, input.guard.url],
+      });
+      const observed = injection?.result;
+      if (observed?.stale) throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll page changed before dispatch.");
+      if (observed?.unsized) {
+        if (attempt === 20) throw coded("STATE_NOT_REACHED", "Scroll viewport is not ready. Observe the tab before retrying.");
+        await delay(100, signal);
+        continue;
+      }
+      if (!observed) throw coded("INVALID_ARGUMENT", "Scroll coordinates are outside the current CSS viewport.");
+      point = observed;
+      break;
     }
   }
   throwIfAborted(signal, "scroll", false);

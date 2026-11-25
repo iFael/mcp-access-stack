@@ -1712,14 +1712,14 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<Record<string, unknown>> = [];
     const context = vm.createContext({
-      innerWidth: 800, innerHeight: 600,
+      innerWidth: 800, innerHeight: 600, location: { href: "https://example.com/" },
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
         scripting: { executeScript: async ({ func, args }: {
-          func: (...args: Array<number | null>) => unknown; args: Array<number | null>;
+          func: (...args: unknown[]) => unknown; args: unknown[];
         }) => {
           if (args.some((arg) => arg === undefined)) throw new Error("Value is unserializable.");
           return [{ result: func(...args) }];
@@ -1747,6 +1747,53 @@ describe("personal browser extension assets", () => {
       { type: "mouseWheel", x: 0, y: 300, deltaX: 300, deltaY: 0 },
       { type: "mouseWheel", x: 0, y: 0, deltaX: 0, deltaY: -300 },
     ]);
+  });
+
+  it("waits for a newly opened tab to have a nonempty viewport without dispatching duplicate scrolls", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const commands: unknown[] = [];
+    let attempts = 0;
+    let readyAfter = 2;
+    let url = "https://example.com/";
+    const context = vm.createContext({
+      innerWidth: 0, innerHeight: 0, location: { href: url },
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, delay: async () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url }) },
+        scripting: { executeScript: async ({ func, args }: {
+          func: (...args: unknown[]) => unknown; args: unknown[];
+        }) => {
+          attempts++;
+          context.innerWidth = attempts > readyAfter ? 800 : 0;
+          context.innerHeight = attempts > readyAfter ? 600 : 0;
+          return [{ result: func(...args) }];
+        } },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, _method: string, params: unknown) => { commands.push(params); },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "scroll"), context);
+    const scroll = vm.runInContext("scroll", context) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", guard: { url }, direction: "right", amount: 300 };
+    await expect(scroll(input)).resolves.toMatchObject({ completed: true });
+    expect(attempts).toBe(3);
+    expect(commands).toEqual([{ type: "mouseWheel", x: 400, y: 300, deltaX: 300, deltaY: 0 }]);
+    attempts = 0;
+    readyAfter = 1000;
+    await expect(scroll(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(attempts).toBeLessThanOrEqual(21);
+    expect(commands).toHaveLength(1);
+    attempts = 0;
+    readyAfter = 0;
+    await expect(scroll({ ...input, x: 800 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(attempts).toBe(1);
+    context.location.href = "https://other.example/";
+    await expect(scroll(input)).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(commands).toHaveLength(1);
   });
 
   it("does not dispatch a scroll after its deadline expires during debugger attachment", async () => {
@@ -2713,7 +2760,7 @@ describe("personal browser extension assets", () => {
     await expect(scroll({ tabId: "personal:7", x: 160, y: 250,
       direction: "down", amount: 300, guard: { url: "https://example.com/" },
     })).resolves.toMatchObject({ completed: true });
-    expect(origins).toEqual([[160, 250]]);
+    expect(origins).toEqual([[160, 250, "https://example.com/"]]);
     expect(emitted).toEqual([{ type: "mouseWheel", x: 160, y: 250, deltaX: 0, deltaY: 300 }]);
     await expect(scroll({ tabId: "personal:7", x: 850, y: 250,
       direction: "up", amount: 50, guard: { url: "https://example.com/" },
