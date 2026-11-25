@@ -76,7 +76,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Cut over (only with the user's explicit go-ahead): promote_release with the candidate releaseId. The connector reconnects during the swap; then call get_release_state until candidate is empty and active is the new release.",
     ],
     rules: [
-      "When the user asks to update or publish MCP V3 on the execution node, mcp_update action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: call it with expectedMainSha (it shows the plan card by itself), end your answer and wait to be woken. When it stops with an error, find and fix its cause yourself and call mcp_update action=resume, which continues from that step, without waiting for the user; then tell them what failed and what you did. Do the steps by hand only when the user asks for that.",
+      "When the user asks to update or publish MCP V3 on the execution node, mcp_fluxo operation=update_mcp action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: call it with expectedMainSha (it shows the plan card by itself), end your answer and wait to be woken. When it stops with an error, find and fix its cause yourself and call mcp_fluxo operation=update_mcp action=resume, which continues from that step, without waiting for the user; then tell them what failed and what you did. Do the steps by hand only when the user asks for that.",
       "Use the nextStep returned by get_release_state when unsure which phase comes next.",
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
@@ -85,7 +85,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Each main commit gets at most one public release: if release.yml already ran for that SHA, the dispatch returns outcome_unknown without starting a run. A new release needs a new main commit and a new tag.",
     ],
     tools: [
-      "mcp_update",
+      "mcp_fluxo",
       "github_get_commit_checks",
       "github_workflow_operation",
       "github_read",
@@ -135,7 +135,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Never start, enable, change or register a Scheduled Task, not even the updater: the task starts itself, and endpoint protection kills the companion when it starts one.",
       "If nothing changed after 15 minutes, report it to the user; an updater task installed before the 5-minute check only runs daily until the user re-runs Install-McpV3LocalUpdateTask.ps1 -Force from the Windows console.",
       "The publication runs once per CI run: a second dispatch for the same ciRunId is refused, and a failed one is diagnosed with github_read before anything else.",
-      "mcp_update publishes and installs the companion after the execution node; follow these steps by hand only when it stops with COMPANION_NOT_ANSWERING (a companion without companion-update-v1) or the user asks for that.",
+      "mcp_fluxo operation=update_mcp publishes and installs the companion after the execution node; follow these steps by hand only when it stops with COMPANION_NOT_ANSWERING (a companion without companion-update-v1) or the user asks for that.",
       "main must not move between the check and the publication; if it did, start again from the new main CI.",
     ],
     tools: [
@@ -267,7 +267,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Delete authorized UI items with browser_click on a fresh semantic ref. On ACTION_REQUIRES_CONFIRMATION, show the exact deletion to the user; after approval, repeat the identical click with the returned confirmationId, then verify the result. Site-wide approval never bypasses delete-or-cancel confirmation.",
       "For an editor stuck loading or frames that fail, use browser_profile_page to inspect the actual frame graph and readiness. Use browser_snapshot/browser_find for modern refs or browser_dom_index/browser_frame_sequence for legacy lref_ refs, never interchange them. On FRAME_NOT_READY or LOCATOR_NOT_FOUND, re-observe and wait; do not attempt a different destructive route.",
       "Login, CAPTCHA or a step only the user should do: browser_wait with forUser and a short reason.",
-      "Every job using MCP V3 gets one browser_progress card; update that card with browser_progress_update instead of opening duplicates. Never ask for a browser plan or site approval just to access the web or use browser tools.",
+      "Every job using MCP V3 gets one mcp_fluxo card; update that card with browser_progress_update instead of opening duplicates. Never ask for a browser plan or site approval just to access the web or use browser tools.",
       "The user can write to you while you work, from the MCP V3 reply card in ChatGPT. Their messages arrive with the result of your next call (browser, files, commands, git). To ask them something without ending your turn, browser_user_messages with question and the taskId, then keep working and read the answer with browser_user_messages (waitMs to wait for it). When they must choose before you can go on, pass options too (A to D) and end your turn: they get one notification on the PC and the answer comes back into this conversation; never wait in a loop for it.",
       "Finish: browser_finish_task; pause=true instead when you will come back to the same tabs, then resume with browser_open and the original taskId.",
     ],
@@ -330,13 +330,9 @@ export const MCP_AGENT_INSTRUCTIONS =
   "and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell " +
   "to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and " +
   "GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, " +
-  "read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 " +
-  "(an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the " +
-  "first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a " +
-  "step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the " +
-  "planId to mcp_update action=start); then, whenever " +
-  "a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), " +
-  "ending with every step in its final state. A card shows where its call is made, so write your text first and end " +
-  "every answer with the cards: browser_progress with only that planId, and nothing " +
-  "after it. The progress card displays only steps, without a message field. Consult PR metadata through " +
+  "read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: " +
+  "call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, " +
+  "and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. " +
+  "For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. " +
+  "Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through " +
   "github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

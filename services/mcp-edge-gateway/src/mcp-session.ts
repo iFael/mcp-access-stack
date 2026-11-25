@@ -11,6 +11,7 @@ import {
   WAKE_EVENTS_CAPABILITY,
   WAKE_EVENTS_FEATURE,
   PROGRESS_FEATURE,
+  PERSISTENT_PROGRESS_FEATURE,
   UPDATE_WAKE_CAPABILITY,
   UPDATE_WAKE_FEATURE,
   COMPANION_UPDATE_CAPABILITY,
@@ -173,6 +174,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
   private readonly accountStore: EdgeAccountStore;
   private readonly repositoryControlPlane: EdgeRepositoryControlPlane;
   private readonly progressPlans: ProgressPlans;
+  private readonly genericReleaseCalls = new WeakSet<object>();
   private contractRolloutState!: McpContractRolloutStateV1;
   private hasPersistedContractRolloutState = false;
   private activeMcpCatalog: EdgeMcpCatalog | null = null;
@@ -1032,6 +1034,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     }
 
     if (parsed.type === "connector-wake-event") {
+      this.ctx.waitUntil(this.progressPlans.finishPersistent(parsed.event).catch(() => undefined));
       this.relayWakeEvent(parsed.event);
       return;
     }
@@ -1178,6 +1181,15 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       this.activeMcpCatalog,
       {
         handle: async (body, principal, request) => {
+          // Preserve the deployed release protocol during the catalog transition.
+          // The old executor still validates the entire strict release input.
+          if (isRecord(body) && isRecord(body.params) && body.params.name === "mcp_fluxo" &&
+              isRecord(body.params.arguments) && body.params.arguments.operation === "update_mcp") {
+            this.genericReleaseCalls.add(body);
+            const { operation: _operation, ...releaseInput } = body.params.arguments;
+            body.params.name = "mcp_update";
+            body.params.arguments = releaseInput;
+          }
           // Release-plan binding remains fail-closed. Progress on ordinary
           // tools is presentation-only, so its failure must not block execution.
           if (isRecord(body) && isRecord(body.params) && body.params.name === "mcp_update") {
@@ -1199,6 +1211,9 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       async (body, principal, response, request) => {
         try {
           await this.progressPlans.finishTool(body, principal.userId, response);
+          if (isRecord(body) && this.genericReleaseCalls.has(body)) {
+            response = await this.progressPlans.stampReleaseCard(response, principal.userId);
+          }
         } catch {
           console.warn(JSON.stringify({ event: "mcp_auto_progress_finish_failed" }));
         }
@@ -3331,6 +3346,11 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
       return;
     }
 
+    if (parsed.type === "companion-wake-event") {
+      if (!attachment.ready || !attachment.deviceId) return;
+      await this.progressPlans.finishPersistent(parsed.event, attachment.userId).catch(() => undefined);
+      return;
+    }
     if (parsed.type === "companion-progress") {
       if (!attachment.ready || !attachment.deviceId) return;
       await this.progressPlans.applyUpdate(parsed.update, attachment.userId).catch(() => false);
@@ -3405,7 +3425,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         type: "companion-registered",
         protocolVersion: COMPANION_PROTOCOL_VERSION,
         deviceId: device.id,
-        features: ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE, COMPANION_AUDIT_FEATURE],
+        features: ["userMessagesV1", PROGRESS_FEATURE, COMPANION_UPDATE_FEATURE, COMPANION_AUDIT_FEATURE, PERSISTENT_PROGRESS_FEATURE],
       }));
       return;
     }

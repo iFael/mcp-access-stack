@@ -23,6 +23,14 @@ describe("wake events from the execution node", () => {
       .toEqual({ type: "edge-hello", protocolVersion: EDGE_PROTOCOL_VERSION });
   });
 
+  it("accepts owner-scoped companion terminal progress only when negotiated", () => {
+    const message = { type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event };
+    expect(parseCompanionToEdgeMessage(JSON.stringify(message))).toEqual(message);
+    expect(parseCompanionToEdgeMessage(JSON.stringify({ ...message, event: { ...event, state: "running" } }))).toBeNull();
+    expect(parseCompanionToEdgeMessage(JSON.stringify({ ...message, event: { kind: "update", updateId: "upd_00000000-0000-4000-8000-000000000001", workspaceId: "w", state: "succeeded" } }))).toBeNull();
+    expect(parseEdgeToCompanionMessage(JSON.stringify({ type: "companion-registered", protocolVersion: COMPANION_PROTOCOL_VERSION, deviceId: "dev_00000000-0000-4000-8000-000000000001", features: ["persistentProgressV1"] }))).toMatchObject({ features: ["persistentProgressV1"] });
+  });
+
   it("include the end of an MCP update, which only an Edge that offers updateWakeV1 is told", () => {
     const update = { kind: "update", updateId: "upd_00000000-0000-4000-8000-000000000001", workspaceId: "mcp-access-stack", state: "failed" };
     expect(parseConnectorToEdgeMessage(JSON.stringify({ type: "connector-wake-event", protocolVersion: EDGE_PROTOCOL_VERSION, event: update })))

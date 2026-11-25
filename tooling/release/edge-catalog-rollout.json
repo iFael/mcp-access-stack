@@ -2,10 +2,10 @@
   "worker": "mcp-access-stack",
   "mode": "catalog",
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
-  "previousRevision": "291cab69e37c15fcf13998ea75dced027f86525227ec67ef21dacaed011fd64c",
+  "previousRevision": "9e4afb29c41bbe0ed1206e0b07b23e3c3612749ecb71ee663360e91a4f3e6e9a",
   "previousToolCount": 134,
-  "targetRevision": "9e4afb29c41bbe0ed1206e0b07b23e3c3612749ecb71ee663360e91a4f3e6e9a",
-  "targetToolCount": 134,
+  "targetRevision": "7d83d35f3e4d81dd4727b404790c0cc8fab901201842b67936b02dc88fa8f3c5",
+  "targetToolCount": 135,
   "requiredTools": [
     "memory_context",
     "memory_update",
@@ -33,6 +33,7 @@
     "git_create_worktree",
     "git_remove_worktree",
     "rename_repository",
-    "http_get"
+    "http_get",
+    "mcp_fluxo"
   ]
 }

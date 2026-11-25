@@ -136,9 +136,11 @@ describe("the plan card", () => {
     expect((await result(await plans.handle(call("browser_progress_read", { planId: "plan_00000000-0000-4000-8000-000000000007" }), "user_1")))
       .structuredContent).toMatchObject({ title: "Atualizando o MCP", steps: [{ text: "Pré-checagem", state: "done" }] });
 
-    // A plan the agent passed, another action, another tool or no user: nothing changes.
+    // A foreign or unknown plan cannot be bound to a release.
+    await expect(plans.startTool(call("mcp_update", { action: "start", planId: "plan_00000000-0000-4000-8000-000000000001" }), "user_1")).rejects.toThrow("not owned");
+    // An owned plan, another action, another tool or no user: nothing changes.
     for (const other of [
-      call("mcp_update", { action: "start", planId: "plan_00000000-0000-4000-8000-000000000001" }),
+      call("mcp_update", { action: "start", planId: "plan_00000000-0000-4000-8000-000000000007" }),
       call("mcp_update", { action: "read" }),
       call("browser_open", { url: "https://example.com" }),
     ]) {
@@ -204,6 +206,55 @@ describe("automatic progress across MCP tools", () => {
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_2"))).isError).toBe(true);
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-b"), "user_1"))).isError).toBe(true);
     expect(storage.values.size).toBeGreaterThan(0);
+  });
+
+  it("opens one generic Fluxo and correlates an early CI terminal event without changing manual steps", async () => {
+    const plans = new ProgressPlans(memory());
+    const open = sessionTool("mcp_fluxo", "fluxo");
+    open.params.arguments = { action: "open", title: "Investigar", steps: [{ text: "Investigar", state: "doing" }] };
+    const first = await result(await plans.handle(open, "owner"));
+    const second = await result(await plans.handle(open, "owner"));
+    expect(second.structuredContent?.planId).toBe(first.structuredContent?.planId);
+    const watchId = "11111111-1111-4111-8111-111111111111";
+    const watch = sessionTool("github_start_commit_checks_watch", "fluxo");
+    await plans.startTool(watch, "owner");
+    await plans.finishPersistent({ kind: "checks", watchId, workspaceId: "w", repository: "r", commitSha: "a".repeat(40), state: "passed" });
+    await plans.finishTool(watch, "owner", response({ status: "started", watch: { id: watchId, workspaceId: "w", state: "watching" } }));
+    const read = await result(await plans.handle(call("browser_progress_read", { planId: first.structuredContent?.planId }), "owner"));
+    expect(read.structuredContent).toMatchObject({ steps: [{ text: "Investigar", state: "doing" }], observedSteps: expect.arrayContaining([{ text: `CI — ${watchId}`, state: "done" }]) });
+    expect((await result(await plans.handle(call("mcp_fluxo", { action: "open", operation: "update_mcp" }), "owner"))).isError).toBe(true);
+  });
+
+  it("stamps a generic release card only for its owner and keeps the same plan", async () => {
+    let now = "2026-11-19T14:00:00.000Z";
+    const plans = new ProgressPlans(memory(), () => new Date(now));
+    const open = sessionTool("mcp_fluxo", "release-stamp");
+    open.params.arguments = { action: "open" };
+    const first = await result(await plans.handle(open, "owner"));
+    const planId = first.structuredContent?.planId;
+    now = "2026-11-19T14:01:00.000Z";
+    const update = response({ update: { planId, status: "running" } });
+    expect(await plans.stampReleaseCard(update, "other")).toBe(update);
+    const stamped = await result(await plans.stampReleaseCard(update, "owner"));
+    expect(stamped.structuredContent).toMatchObject({ update: { planId }, shownAt: now });
+    expect((await result(await plans.handle(call("browser_progress_read", { planId }), "owner"))).structuredContent).toMatchObject({ planId, shownAt: now });
+  });
+
+  it("does not let a companion terminal event modify another owner plan", async () => {
+    const plans = new ProgressPlans(memory());
+    const open = sessionTool("mcp_fluxo", "owner-isolation");
+    open.params.arguments = { action: "open" };
+    const first = await result(await plans.handle(open, "owner"));
+    const taskId = "11111111-1111-4111-8111-111111111111";
+    const task = sessionTool("start_background_task", "owner-isolation");
+    await plans.startTool(task, "owner");
+    await plans.finishTool(task, "owner", response({ task: { id: taskId, workspaceId: "w", state: "running" } }));
+    await plans.finishPersistent({ kind: "task", taskId, workspaceId: "w", state: "failed" }, "other");
+    const current = await result(await plans.handle(call("browser_progress_read", { planId: first.structuredContent?.planId }), "owner"));
+    expect(current.structuredContent?.observedSteps).toEqual(expect.arrayContaining([expect.objectContaining({ text: `Tarefa — ${taskId}`, state: "doing" })]));
+    await plans.finishPersistent({ kind: "task", taskId, workspaceId: "w", state: "succeeded" }, "owner");
+    const finished = await result(await plans.handle(call("browser_progress_read", { planId: first.structuredContent?.planId }), "owner"));
+    expect(finished.structuredContent?.observedSteps).toEqual(expect.arrayContaining([expect.objectContaining({ text: `Tarefa — ${taskId}`, state: "done" })]));
   });
 
   it("reports live tool activity on an explicit card without rewriting its planned steps", async () => {
@@ -337,7 +388,7 @@ describe("the chat cards the Edge serves", () => {
     expect(resources[0]!.text).toContain("activityText(value, failed)");
     expect(resources[0]!.text).toContain("recentActivity(value)");
     expect(resources[0]!.text).toContain("ICONS.waiting");
-    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v13.html");
+    expect(resources[0]!.uri).toBe("ui://mcp-v3/progress-v14.html");
     // Polling must preserve existing rows instead of deleting/recreating the list.
     expect(resources[0]!.text).not.toContain('list.textContent = "";');
     expect(resources[0]!.text).toContain("list.replaceChild");

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { COMPANION_PROTOCOL_VERSION, COMPANION_AUDIT_FEATURE } from "@mcp-access-stack/edge-protocol";
+import { COMPANION_PROTOCOL_VERSION, COMPANION_AUDIT_FEATURE, PERSISTENT_PROGRESS_FEATURE } from "@mcp-access-stack/edge-protocol";
 import WebSocket, { WebSocketServer } from "ws";
 import { CompanionConnector } from "../../../src/companion/connector.js";
 import { CloudAuditQueue } from "../../../src/companion/cloud-audit-queue.js";
@@ -150,6 +150,8 @@ describe("CompanionConnector end-to-end", () => {
       },
     });
     expect(connector.diagnosticConnectionState).toBe("disconnected");
+    const terminalEvent = { kind: "task" as const, taskId: "11111111-1111-4111-8111-111111111111", workspaceId: "computer", state: "succeeded" as const };
+    connector.sendPersistentProgress(terminalEvent);
     const running = connector.run(controller.signal);
     const socket = await withTimeout(connection, "unaudited device connection");
     expect(connector.diagnosticConnectionState).toBe("connecting");
@@ -200,6 +202,9 @@ describe("CompanionConnector end-to-end", () => {
     }), "cloud audit acknowledgment");
     expect(cloudAudit.status.pending).toBe(0);
     expect(repositories.getDeviceId()).toBe(DEVICE_ID);
+    const progressPromise = waitForMessage(socket);
+    socket.send(JSON.stringify({ type: "companion-registered", protocolVersion: COMPANION_PROTOCOL_VERSION, deviceId: DEVICE_ID, features: [COMPANION_AUDIT_FEATURE, PERSISTENT_PROGRESS_FEATURE] }));
+    expect(await withTimeout(progressPromise, "negotiated persistent progress")).toMatchObject({ type: "companion-wake-event", event: terminalEvent });
 
     workspaceReady = true;
     const recoveredReadyPromise = waitForMessage(socket);

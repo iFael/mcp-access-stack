@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -91,7 +91,7 @@ import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-p
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
 import { oracleAptMaintenanceInputSchema, oracleAptMaintenanceResultSchema } from "./oracle-apt-contracts.js";
-import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema } from "./mcp-update-contracts.js";
+import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema, mcpFluxoInputSchema, mcpFluxoResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
 import {
@@ -264,6 +264,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "get_release_state",
   "release_orchestrator",
   "mcp_update",
+  "mcp_fluxo",
   "prepare_release",
   "promote_release",
   "prune_releases",
@@ -1386,33 +1387,33 @@ export function registerWorkspaceTools(
     });
   }
 
-  if (shouldInclude("mcp_update", include)) {
-    server.registerTool("mcp_update", {
-      title: "Update MCP V3 on the execution node and Windows",
-      description:
-        "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. " +
-        "Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. " +
-        "Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. action=start moves a plan card step by step: pass the planId of the conversation's card when there is one, and the card takes the shape of the update; without it, the update opens its own. Its result carries the planId: as in every job, write your text first and end each answer about the update with browser_progress and only that planId, so the card, with the user's message field while the update runs, sits under your text. " +
-        "action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. " +
-        "action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. " +
-        "It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take.",
-      inputSchema: mcpUpdatePublishedInputSchema,
-      outputSchema: mcpUpdateResultSchema,
+  for (const name of ["mcp_fluxo", "mcp_update"] as const) {
+    if (!shouldInclude(name, include)) continue;
+    const generic = name === "mcp_fluxo";
+    server.registerTool<typeof mcpFluxoResultSchema | typeof mcpUpdateResultSchema, typeof mcpFluxoInputSchema | typeof mcpUpdatePublishedInputSchema>(name, {
+      title: generic ? "MCP Fluxo" : "MCP update (compatibility)",
+      description: generic
+        ? "Single Fluxo card for every MCP V3 job. Call action=open once per conversation (title and steps optional), or action=show with planId to recover it. Use browser_progress_update to update the existing card without remounting. Native tools contribute observed progress, including correlated runtime outcomes. For an authorized MCP release only, set operation=update_mcp, workspaceId=mcp-access-stack and action=start with exact expectedMainSha; read, confirm and resume use the same updateId and the native release ledger. Never start a second release to recover an uncertain outcome. The Edge handles plan actions; release permissions and confirmations remain unchanged."
+        : "Compatibility entry for MCP releases during catalog migration. Prefer mcp_fluxo operation=update_mcp. Retains the exact native release contract and ledger.",
+      inputSchema: generic ? mcpFluxoInputSchema : mcpUpdatePublishedInputSchema,
+      outputSchema: generic ? mcpFluxoResultSchema : mcpUpdateResultSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: false },
       _meta: { ...meta, ui: { resourceUri: PROGRESS_CARD_URI }, "openai/outputTemplate": PROGRESS_CARD_URI,
-        "openai/toolInvocation/invoking": "Atualizando o MCP", "openai/toolInvocation/invoked": "Atualização do MCP" },
-    }, async (input, extra) => {
+        "openai/toolInvocation/invoking": generic ? "Abrindo Fluxo" : "Atualizando o MCP", "openai/toolInvocation/invoked": generic ? "Fluxo" : "Atualização do MCP" },
+    }, async (input: z.infer<typeof mcpFluxoInputSchema> | z.infer<typeof mcpUpdatePublishedInputSchema>, extra: Parameters<ToolCallback<typeof mcpFluxoInputSchema>>[1]): Promise<CallToolResult> => {
       const authError = validateAuthentication(options, extra.authInfo);
       if (authError) return authError;
       try {
-        const parsed = mcpUpdateInputSchema.parse(input);
+        const { operation, ...releaseInput } = input as Record<string, unknown>;
+        if (generic && operation !== "update_mcp") throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Plan actions are handled by the Edge.");
+        const parsed = mcpUpdateInputSchema.parse(generic ? releaseInput : input);
         const structuredContent = mcpUpdateResultSchema.parse(await withToolOperationContext(
           options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
           (context) => executor.mcpUpdate(parsed, context)));
         const update = structuredContent.update;
         // Each answer names the exact next call, so the agent never has to look for it.
         const next = (action: string, extra: Record<string, string> = {}) => update === null ? "" :
-          ` Next: mcp_update ${JSON.stringify({ action, workspaceId: "mcp-access-stack", updateId: update.updateId, ...extra })}.`;
+          ` Next: ${name} ${JSON.stringify({ ...(generic ? { operation: "update_mcp" } : {}), action, workspaceId: "mcp-access-stack", updateId: update.updateId, ...extra })}.`;
         const text = update === null ? "No MCP update yet."
           : update.status === "running" ? `MCP update ${update.updateId} is running (${update.step}). End your answer; you are woken when it stops.${next("read")}`
             : update.status === "succeeded" ? `MCP update ${update.updateId} succeeded (${update.tag ?? "no tag"}).`

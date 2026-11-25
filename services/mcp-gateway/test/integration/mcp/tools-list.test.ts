@@ -54,7 +54,7 @@ describe("advanced browser tools list", () => {
       }
 
       const progress = listed.tools.find((tool) => tool.name === "browser_progress");
-      expect(progress?._meta?.["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v13.html");
+      expect(progress?._meta?.["openai/outputTemplate"]).toBe("ui://mcp-v3/progress-v14.html");
       expect(progress?.description).not.toContain("end every answer of the job with browser_progress");
       const snapshot = listed.tools.find((tool) => tool.name === "browser_snapshot");
       expect(snapshot?._meta).not.toHaveProperty("openai/outputTemplate");

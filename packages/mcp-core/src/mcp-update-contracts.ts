@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { browserProgressPlanSchema, browserProgressStepSchema } from "./browser-contracts.js";
 
 // mcp_update: the execution node publishes MAIN to itself and to the user's
 // Windows companion, step by step, and moves the plan card the agent opened. The agent starts it, ends its answer
@@ -89,3 +90,22 @@ export const mcpUpdateResultSchema = z.object({
   update: mcpUpdateRecordSchema.nullable(),
 }).strict();
 export type McpUpdateResult = z.infer<typeof mcpUpdateResultSchema>;
+
+/** Single public flow entry point; release execution retains its strict native contract. */
+export const mcpFluxoInputSchema = z.object({
+  action: z.enum(["open", "show", "update", "start", "read", "confirm", "resume"]),
+  operation: z.literal("update_mcp").optional(),
+  workspaceId: z.literal("mcp-access-stack").optional(),
+  expectedMainSha: SHA.optional(),
+  planId: PLAN_ID.optional(),
+  updateId: UPDATE_ID.optional(),
+  confirmationId: CONFIRMATION_ID.optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  steps: z.array(browserProgressStepSchema).min(1).max(20).optional(),
+}).strict();
+
+export const mcpFluxoResultSchema = browserProgressPlanSchema.partial().extend({
+  update: mcpUpdateRecordSchema.nullable().optional(),
+}).strict().refine((value) => value.update !== undefined
+  ? Object.keys(value).every((key) => key === "update" || key === "shownAt")
+  : browserProgressPlanSchema.safeParse(value).success, "Expected a native plan or a release result.");

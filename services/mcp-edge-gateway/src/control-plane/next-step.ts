@@ -7,8 +7,8 @@
 export const NEXT_STEP_META_KEY = "io.github.ifael/next-step";
 
 export const PLAN_CARD_REMINDER =
-  "Card: keep the existing card visible; update its planId with browser_progress_update when steps change. Open browser_progress only once at the start (or when the user explicitly requests it).";
-const CARD_TOOLS = /^browser_(progress|user_|plan$)/;
+  "Card: keep the existing card visible; update its planId with browser_progress_update when steps change. Open mcp_fluxo action=open once at the start if no card is mounted; recover with action=show only when needed.";
+const CARD_TOOLS = /^(browser_(progress|user_|plan$)|mcp_fluxo$|mcp_update$)/;
 
 export function nextStepsOf(manifest: readonly unknown[]): Map<string, string> {
   const steps = new Map<string, string>();
@@ -28,9 +28,10 @@ export async function attachNextStep(body: unknown, response: Response, steps: R
   if (lines.length === 0 || !(response.headers.get("content-type") ?? "").includes("application/json")) return response;
   let result: unknown;
   try { result = await response.clone().json(); } catch { return response; }
-  if (!isRecord(result) || !isRecord(result.result) || result.result.isError === true ||
-      !Array.isArray(result.result.content)) return response;
-  result.result.content = [...result.result.content, ...lines.map((text) => ({ type: "text", text }))];
+  if (!isRecord(result) || !isRecord(result.result) || !Array.isArray(result.result.content)) return response;
+  const guidance = result.result.isError === true ? lines.filter((line) => line.startsWith("Card:")) : lines;
+  if (guidance.length === 0) return response;
+  result.result.content = [...result.result.content, ...guidance.map((text) => ({ type: "text", text }))];
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   return new Response(JSON.stringify(result), { status: response.status, headers });

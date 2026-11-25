@@ -9,12 +9,12 @@
 // it took or has been running. Mount the card once per task and update its
 // existing rows; other MCP calls must not mount extra copies.
 
-import { parseProgressStep, type ProgressStep, type ProgressUpdate } from "@mcp-access-stack/edge-protocol";
+import { parseProgressStep, type ProgressStep, type ProgressUpdate, type WakeEvent } from "@mcp-access-stack/edge-protocol";
 import { CARD_BASE_CSS, CARD_FIT_SCRIPT, CARD_THEME_SCRIPT, CARD_MCP_APPS_SCRIPT } from "./card-style.js";
 import type { EdgeUiResource } from "./user-messages-card.js";
 
-export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v13.html";
-export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card"] as const;
+export const PROGRESS_CARD_URI = "ui://mcp-v3/progress-v14.html";
+export const PROGRESS_TOOLS = ["browser_progress", "browser_progress_update", "browser_progress_read", "browser_user_card", "mcp_fluxo"] as const;
 
 const PLAN_ID = /^plan_[0-9a-f-]{36}$/u;
 const MAX_PLANS = 20;
@@ -24,11 +24,21 @@ const USER_CARD_PREFIX = "user-card-shown:";
 const AUTO_PLAN_PREFIX = "progress-auto-plan:";
 const AUTO_SKIP = new Set([
   "browser_progress", "browser_progress_update", "browser_progress_read",
-  "browser_user_card", "browser_user_reply", "browser_user_messages", "mcp_update",
+  "browser_user_card", "browser_user_reply", "browser_user_messages", "mcp_update", "mcp_fluxo",
 ]);
 const SESSION_PLAN_PREFIX = "progress-plan-sessions:";
 const MAX_SESSION_PLANS = 100;
 const MAX_USER_CARDS = 50;
+const PERSISTENT_KEY = "progress-persistent-v1";
+const MAX_PERSISTENT = 200;
+const PERSISTENT_ID = /^[a-f0-9-]{36}$/u;
+interface PersistentObservation {
+  key: string;
+  text: string;
+  state: ProgressStep["state"];
+  ownerStates?: Record<string, ProgressStep["state"]>;
+  bindings: { userId: string; planId: string }[];
+}
 
 export const PROGRESS_CARD_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -136,7 +146,7 @@ export const PROGRESS_CARD_HTML = `<!doctype html>
   function render() {
     applyTheme();
     var value = data();
-    var steps = Array.isArray(value.steps) ? value.steps : [];
+    var steps = (Array.isArray(value.steps) ? value.steps : []).concat(Array.isArray(value.observedSteps) ? value.observedSteps : []);
     var done = 0;
     steps.forEach(function (step) { if (step && (step.state === "done" || step.state === "skipped")) done += 1; });
     var title = typeof value.title === "string" && value.title.trim() ? value.title : "Etapas";
@@ -237,6 +247,7 @@ export interface ProgressPlan {
   updatedAt: string;
   shownAt?: string;
   activity?: ProgressActivity;
+  observedSteps?: ProgressPlanStep[];
 }
 
 export interface ProgressStorage {
@@ -267,12 +278,43 @@ export class ProgressPlans {
 
   /** Answers the three progress tools, or null for any other request. */
   async handle(body: unknown, userId: string | undefined): Promise<Response | null> {
+    return this.serial("progress", () => this.handleInternal(body, userId));
+  }
+
+  private async handleInternal(body: unknown, userId: string | undefined): Promise<Response | null> {
     if (!isRecord(body) || body.jsonrpc !== "2.0" || body.method !== "tools/call") return null;
     if (!isRecord(body.params) || !(PROGRESS_TOOLS as readonly unknown[]).includes(body.params.name)) return null;
     const id = typeof body.id === "string" || typeof body.id === "number" ? body.id : null;
-    const name = body.params.name as (typeof PROGRESS_TOOLS)[number];
+    let name = body.params.name as (typeof PROGRESS_TOOLS)[number];
     // Every browser tool also takes deviceId and runtimeId; nothing here runs on a device.
-    const { deviceId: _deviceId, runtimeId: _runtimeId, ...args } = isRecord(body.params.arguments) ? body.params.arguments : {};
+    let { deviceId: _deviceId, runtimeId: _runtimeId, ...args } = isRecord(body.params.arguments) ? body.params.arguments : {};
+    const generic = name === "mcp_fluxo";
+    let automaticOpen = false;
+    if (generic) {
+      if (_deviceId !== undefined || _runtimeId !== undefined) return invalid(id, "mcp_fluxo");
+      const { action, ...fields } = args;
+      if (action === "open") {
+        name = "browser_progress";
+        if (Object.keys(fields).some((key) => key !== "title" && key !== "steps")) return invalid(id, "mcp_fluxo");
+        if (fields.steps === undefined && fields.title === undefined) {
+          automaticOpen = true;
+          const existing = userId && await this.planForSession(userId, progressSession(body));
+          if (existing) fields.planId = existing;
+          else {
+            fields.title = "Fluxo MCP";
+            fields.steps = [{ text: "Aguardando operação", state: "todo" }];
+          }
+        }
+      } else if (action === "show") {
+        name = "browser_progress";
+        if (Object.keys(fields).some((key) => key !== "planId")) return invalid(id, "mcp_fluxo");
+        if (fields.planId === undefined && userId) fields.planId = await this.planForSession(userId, progressSession(body));
+        if (typeof fields.planId !== "string" || !PLAN_ID.test(fields.planId)) return invalid(id, "mcp_fluxo");
+      } else if (action === "update") {
+        name = "browser_progress_update";
+      } else return invalid(id, "mcp_fluxo");
+      args = fields;
+    }
     if (!userId) return toolError(id, "IDENTITY_REQUIRED", "Reconnect MCP V3 to show the plan.");
     const key = `progress-plans:${userId}`;
     const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
@@ -310,7 +352,7 @@ export class ProgressPlans {
     if (name === "browser_progress") {
       const existingId = await this.planForSession(userId, progressSession(body));
       const automatic = existingId && await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existingId}`);
-      const existing = automatic ? plans.find((entry) => entry.planId === existingId) : undefined;
+      const existing = (generic || automatic) ? plans.find((entry) => entry.planId === existingId) : undefined;
       if (existing) {
         // Explicit planning adopts the automatically created card.
         plan = { ...existing, title: input.title!, steps: timed(existing.steps, input.steps, now),
@@ -320,11 +362,12 @@ export class ProgressPlans {
       } else {
         plan = await this.open(userId, plans, input.title!, input.steps);
       }
+      if (automaticOpen) await this.storage.put(`${AUTO_PLAN_PREFIX}${plan.planId}`, true);
       await this.bindSession(userId, progressSession(body), plan.planId);
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
-      plan = { ...current, ...(input.title === undefined ? {} : { title: input.title }), steps: timed(current.steps, input.steps, now), updatedAt: now };
+      plan = { ...current, ...(input.title === undefined ? {} : { title: input.title }), steps: timed(current.steps, input.steps, now), updatedAt: now, ...(generic ? { shownAt: now } : {}) };
       await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
     }
     const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
@@ -349,7 +392,7 @@ export class ProgressPlans {
   async startTool(body: unknown, userId: string | undefined): Promise<void> {
     const name = progressToolName(body);
     // One native entry point handles ordinary tool progress and update-plan binding.
-    if (name === "mcp_update") await this.bindUpdateToPlan(body, userId);
+    if (name === "mcp_update") await this.serial("progress", () => this.bindUpdateToPlan(body, userId));
     const session = progressSession(body);
     if (!name || !session || !userId) return;
     const phase = phaseForTool(name);
@@ -362,7 +405,7 @@ export class ProgressPlans {
     calls.set(body as object, this.now().getTime());
     this.inFlight.set(phaseKey, calls);
     try {
-      await this.serial(sessionKey, async () => {
+      await this.serial("progress", async () => {
       const existingId = await this.planForSession(userId, session);
       const key = `progress-plans:${userId}`;
       const plans = (await this.storage.get<ProgressPlan[]>(key)) ?? [];
@@ -377,14 +420,10 @@ export class ProgressPlans {
         return;
       }
       const automatic = await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existing.planId}`);
-      const current = existing.steps.find((step) => step.text === phase);
-      const steps = !automatic || current?.state === "doing" || (!current && existing.steps.length >= 20)
-        ? existing.steps
-        : current
-          ? existing.steps.map((step) => step.text === phase ? { text: phase, state: "doing" as const } : step)
-          : [...existing.steps, { text: phase, state: "doing" as const }];
+      const previous = automatic ? existing.steps : existing.observedSteps ?? [];
+      const steps = upsertObserved(previous.filter((step) => step.text !== "Aguardando operação"), { text: phase, state: "doing" }, now);
       await this.storage.put(key, plans.map((entry) => entry.planId === existing.planId
-        ? { ...entry, steps: timed(entry.steps, steps, now), activity, updatedAt: now } : entry));
+        ? { ...entry, ...(automatic ? { steps } : { observedSteps: steps }), activity, updatedAt: now } : entry));
       });
     } catch (error) {
       calls.delete(body as object);
@@ -411,16 +450,16 @@ export class ProgressPlans {
       : isRecord(content.update) && typeof content.update.status === "string"
         ? content.update.status : undefined;
     const nestedState = typeof content.state === "string" ? content.state
-      : isRecord(content.task) && typeof content.task.state === "string"
-        ? content.task.state : undefined;
+      : isRecord(content.watch) && typeof content.watch.state === "string" ? content.watch.state
+      : isRecord(content.task) && typeof content.task.state === "string" ? content.task.state : undefined;
     const failed = !response.ok || envelope.error !== undefined || result.isError === true ||
-      [status, nestedState].some((value) => ["failed", "failure", "error"].includes(value ?? "")) ||
+      [status, nestedState].some((value) => ["failed", "failure", "error", "timed_out", "cancelled", "canceled"].includes(value ?? "")) ||
       content.passed === false || (typeof content.failingCount === "number" && content.failingCount > 0) ||
       (typeof content.exitCode === "number" && content.exitCode !== 0);
     const pending = !failed && (
       !isRecord(parsed) ||
       [status, nestedState].some((value) => [
-        "running", "pending", "queued", "in_progress", "started",
+        "running", "pending", "queued", "in_progress", "started", "watching", "starting",
         "background_task_started", "handover_started", "confirmation_required",
         "needs_confirmation", "reconciliation_required", "outcome_unknown",
       ].includes(value ?? "")) ||
@@ -436,7 +475,7 @@ export class ProgressPlans {
     const anyFailure = this.observedFailures.has(phaseKey);
     if (remaining === 0) this.observedFailures.delete(phaseKey);
     const state: ProgressStep["state"] = remaining > 0 ? "doing" : anyFailure ? "failed" : pending ? "doing" : "done";
-    await this.serial(sessionKey, async () => {
+    await this.serial("progress", async () => {
       const planId = await this.planForSession(userId, session);
       if (!planId) return;
       const key = `progress-plans:${userId}`;
@@ -445,20 +484,81 @@ export class ProgressPlans {
       if (!current) return;
       const now = this.now().toISOString();
       const active = [...this.inFlight].some(([key, calls]) => key.startsWith(`${sessionKey}:`) && calls.size > 0);
-      const activity: ProgressActivity = { status: active ? "running" : pending ? "waiting" : "idle", observedAt: now };
+      const waiting = pending || current.observedSteps?.some((step) => step.state === "doing" && /^(CI|Tarefa) — /u.test(step.text));
+      const activity: ProgressActivity = { status: active ? "running" : waiting ? "waiting" : "idle", observedAt: now };
       const automatic = await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${planId}`);
       const detail = status === "confirmation_required" || status === "needs_confirmation"
         ? "Aguardando autorização" : status === "reconciliation_required" ||
           status === "outcome_unknown" ? "Aguardando reconciliação" :
           !isRecord(parsed) ? "Resultado não verificável" : undefined;
-      const steps = !automatic ? current.steps : current.steps.map((step) => step.text === phase
-        ? { text: phase, state, ...(pending && detail ? { detail } : {}) }
-        : step);
-      // A newer card folds earlier copies of the same task.
+      const previous = automatic ? current.steps : current.observedSteps ?? [];
+      const persistent = result.isError !== true && persistentFromResult(content);
+      // The invocation can complete while its separately identified operation is still running.
+      const phaseState = persistent && !failed && remaining === 0 ? "done" : state;
+      const steps = upsertObserved(previous, { text: phase, state: phaseState, ...(pending && detail ? { detail } : {}) }, now);
+      // Observing a tool does not mount a visual card or change its shownAt.
       await this.storage.put(key, plans.map((entry) => entry.planId === planId
-        ? { ...entry, steps: timed(entry.steps, steps, now), activity, updatedAt: now,
-          ...(automatic ? { shownAt: now } : {}) } : entry));
+        ? { ...entry, ...(automatic ? { steps } : { observedSteps: steps }), activity, updatedAt: now } : entry));
+      if (persistent) await this.observePersistent(persistent, { userId, planId });
     });
+  }
+
+  /** Correlate verified runtime outcomes, including events arriving before the tool response. */
+  async finishPersistent(event: WakeEvent, ownerUserId?: string): Promise<void> {
+    if (event.kind === "update") return;
+    const id = event.kind === "checks" ? event.watchId : event.taskId;
+    if (!PERSISTENT_ID.test(id)) return;
+    const text = event.kind === "checks" ? `CI — ${id}` : `Tarefa — ${id}`;
+    const state = event.state === "succeeded" || event.state === "passed" ? "done" : "failed";
+    await this.serial("progress", () => this.observePersistent({ key: `${event.kind}:${event.workspaceId}:${id}`, text, state }, undefined, ownerUserId));
+  }
+
+  private async observePersistent(observation: Omit<PersistentObservation, "bindings">, binding?: { userId: string; planId: string }, ownerUserId?: string): Promise<void> {
+    const records = await this.storage.get<PersistentObservation[]>(PERSISTENT_KEY) ?? [];
+    const previous = records.find((entry) => entry.key === observation.key);
+    // A late running response must never undo a terminal observation.
+    const state = ownerUserId ? previous?.state ?? "doing" : previous && previous.state !== "doing" && observation.state === "doing" ? previous.state : observation.state;
+    const ownerStates = ownerUserId ? Object.fromEntries(Object.entries({ ...previous?.ownerStates, [ownerUserId]: observation.state }).slice(-MAX_SESSION_PLANS)) : previous?.ownerStates;
+    const bindings = previous?.bindings ?? [];
+    const updated = { ...observation, state, ...(ownerStates ? { ownerStates } : {}), bindings: binding && !bindings.some((b) => b.userId === binding.userId && b.planId === binding.planId)
+      ? [...bindings, binding].slice(-MAX_SESSION_PLANS) : bindings };
+    await this.storage.put(PERSISTENT_KEY, [...records.filter((entry) => entry.key !== updated.key), updated].slice(-MAX_PERSISTENT));
+    for (const target of updated.bindings) {
+      const key = `progress-plans:${target.userId}`;
+      const plans = await this.storage.get<ProgressPlan[]>(key) ?? [];
+      const plan = plans.find((entry) => entry.planId === target.planId);
+      if (!plan || await this.storage.get<string>(`${OWNER_PREFIX}${target.planId}`) !== target.userId) continue;
+      const now = this.now().toISOString();
+      if (ownerUserId && target.userId !== ownerUserId) continue;
+      const targetState = state === "doing" ? updated.ownerStates?.[target.userId] ?? state : state;
+      const observedSteps = upsertObserved(plan.observedSteps ?? [], { text: updated.text, state: targetState }, now);
+      const activity = plan.activity?.status === "running" ? plan.activity : { status: observedSteps.some((step) => step.state === "doing") ? "waiting" as const : "idle" as const, observedAt: now };
+      await this.storage.put(key, plans.map((entry) => entry.planId === plan.planId ? { ...entry, observedSteps, updatedAt: now, activity } : entry));
+    }
+  }
+
+  /** Only a real visual tool invocation advances the card mounting timestamp. */
+  async stampReleaseCard(response: Response, userId: string | undefined): Promise<Response> {
+    if (!userId || !response.ok) return response;
+    let envelope: unknown;
+    try { envelope = await response.clone().json(); } catch { return response; }
+    if (!isRecord(envelope) || !isRecord(envelope.result) || envelope.result.isError === true || !isRecord(envelope.result.structuredContent)) return response;
+    const content = envelope.result.structuredContent;
+    if (!isRecord(content.update) || typeof content.update.planId !== "string") return response;
+    const planId = content.update.planId;
+    const shownAt = await this.serial("progress", async () => {
+      const key = `progress-plans:${userId}`;
+      const plans = await this.storage.get<ProgressPlan[]>(key) ?? [];
+      if (!plans.some((plan) => plan.planId === planId)) return undefined;
+      const now = this.now().toISOString();
+      await this.storage.put(key, plans.map((plan) => plan.planId === planId ? { ...plan, shownAt: now } : plan));
+      return now;
+    });
+    if (!shownAt) return response;
+    content.shownAt = shownAt;
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    return new Response(JSON.stringify(envelope), { status: response.status, headers });
   }
 
   /** Notes that a reply card of this task is shown now, and says when. */
@@ -481,8 +581,16 @@ export class ProgressPlans {
   private async bindUpdateToPlan(body: unknown, userId: string | undefined): Promise<void> {
     if (!userId || !isRecord(body) || body.method !== "tools/call" || !isRecord(body.params) || body.params.name !== "mcp_update") return;
     const args = body.params.arguments;
-    if (!isRecord(args) || args.action !== "start" || args.planId !== undefined) return;
+    if (!isRecord(args) || args.action !== "start") return;
     const session = progressSession(body);
+    if (args.planId !== undefined) {
+      if (typeof args.planId !== "string" || await this.storage.get<string>(`${OWNER_PREFIX}${args.planId}`) !== userId) {
+        throw new Error("Release plan is not owned by the authenticated user.");
+      }
+      await this.bindSession(userId, session, args.planId);
+      await this.storage.delete(`${AUTO_PLAN_PREFIX}${args.planId}`);
+      return;
+    }
     const existingId = await this.planForSession(userId, session);
     if (existingId) {
       // The update driver takes over the existing task card instead of opening a second one.
@@ -536,6 +644,10 @@ export class ProgressPlans {
    * nothing. ownerUserId, when known (a companion), must own the plan.
    */
   async applyUpdate(update: ProgressUpdate, ownerUserId?: string): Promise<boolean> {
+    return this.serial("progress", () => this.applyUpdateInternal(update, ownerUserId));
+  }
+
+  private async applyUpdateInternal(update: ProgressUpdate, ownerUserId?: string): Promise<boolean> {
     const userId = await this.storage.get<string>(`${OWNER_PREFIX}${update.planId}`);
     if (!userId || (ownerUserId !== undefined && ownerUserId !== userId)) return false;
     const key = `progress-plans:${userId}`;
@@ -563,6 +675,26 @@ function progressToolName(body: unknown): string | null {
   return body.params.name;
 }
 
+function upsertObserved(previous: ProgressPlanStep[], step: ProgressStep, now: string): ProgressPlanStep[] {
+  const exists = previous.some((entry) => entry.text === step.text);
+  const next = exists ? previous.map((entry) => entry.text === step.text ? step : entry) : [...previous, step];
+  // Retain running operations ahead of old completed observations.
+  const removable = next.findIndex((candidate) => candidate.state !== "doing" && candidate.text !== step.text);
+  const bounded = next.length <= 20 ? next : removable < 0 ? previous : next.filter((_entry, index) => index !== removable);
+  return timed(previous, bounded, now);
+}
+
+function persistentFromResult(content: Record<string, unknown>): Omit<PersistentObservation, "bindings"> | undefined {
+  const kind = isRecord(content.watch) ? "checks" : "task";
+  const record = kind === "checks" ? content.watch : content.task;
+  if (!isRecord(record) || typeof record.id !== "string" || !PERSISTENT_ID.test(record.id) || typeof record.workspaceId !== "string") return undefined;
+  const state = typeof record.state === "string" ? record.state : "";
+  const mapped = ["starting", "running", "watching"].includes(state) ? "doing"
+    : ["succeeded", "passed"].includes(state) ? "done"
+    : ["failed", "timed_out", "error", "cancelled"].includes(state) ? "failed" : undefined;
+  return mapped ? { key: `${kind}:${record.workspaceId}:${record.id}`, text: `${kind === "checks" ? "CI" : "Tarefa"} — ${record.id}`, state: mapped } : undefined;
+}
+
 function phaseForTool(name: string): string | null {
   if (AUTO_SKIP.has(name) || name.startsWith("companion_internal_")) return null;
   if (name.startsWith("browser_")) return "Pesquisa e navegação";
@@ -587,10 +719,11 @@ export function progressSession(body: unknown): string | undefined {
 export function timed(previous: readonly ProgressPlanStep[], next: readonly ProgressStep[], now: string): ProgressPlanStep[] {
   return next.map((step, index) => {
     const before = previous[index]?.text === step.text ? previous[index] : previous.find((entry) => entry.text === step.text);
+    const restarted = step.state === "doing" && before?.state !== "doing";
     const startedAt = step.state === "todo" || step.state === "skipped" ? undefined
-      : before?.startedAt ?? (step.state === "doing" || before?.state === "doing" ? now : undefined);
+      : restarted ? now : before?.startedAt ?? (step.state === "doing" || before?.state === "doing" ? now : undefined);
     const endedAt = step.state === "done" || step.state === "failed"
-      ? before?.endedAt ?? (startedAt === undefined ? undefined : now)
+      ? (before?.state === step.state ? before.endedAt : undefined) ?? (startedAt === undefined ? undefined : now)
       : undefined;
     return { ...step, ...(startedAt === undefined ? {} : { startedAt }), ...(endedAt === undefined ? {} : { endedAt }) };
   });
