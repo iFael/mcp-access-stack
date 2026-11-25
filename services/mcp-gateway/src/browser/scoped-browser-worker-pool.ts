@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   AppError,
   type BrowserExecutor,
+  type BrowserViewerControlInput,
   type OperationContext,
 } from "@vs-code-gpt/shared";
 import {
@@ -19,8 +20,10 @@ interface ScopedBrowserWorkerHandle {
     tabId: string;
     afterSeq: number;
     ownerScope: string;
+    controlId?: string;
     signal?: AbortSignal;
   }): Promise<BrowserLiveFramePayload | null>;
+  viewerControl?(input: BrowserViewerControlInput, ownerScope: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -44,6 +47,7 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
   private readonly retiringWorkers = new Map<string, Promise<void>>();
   private readonly activeInvocations = new Map<string, number>();
   private readonly pendingReleases = new Set<string>();
+  private readonly retainedScopes = new Set<string>();
   private readonly tabTaskScopes = new Map<string, Set<string>>();
   private readonly scopesRoot: string;
   private readonly maxScopes: number;
@@ -72,6 +76,7 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
     this.retiringWorkers.clear();
     this.activeInvocations.clear();
     this.pendingReleases.clear();
+    this.retainedScopes.clear();
     this.tabTaskScopes.clear();
     await Promise.allSettled([
       ...workers.map(async (workerPromise) => {
@@ -369,7 +374,7 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
   }
 
   async readLiveFrame(
-    input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
+    input: { taskId: string; tabId: string; afterSeq: number; controlId?: string; signal?: AbortSignal },
     context: Pick<OperationContext, "ownerScope">,
   ): Promise<BrowserLiveFramePayload | null> {
     const ownerScope = context.ownerScope?.trim();
@@ -402,8 +407,35 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
       tabId: input.tabId,
       afterSeq: input.afterSeq,
       ownerScope,
+      ...(input.controlId === undefined ? {} : { controlId: input.controlId }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
+  }
+
+  async viewerControl(input: BrowserViewerControlInput, context: Pick<OperationContext, "ownerScope">): Promise<void> {
+    const ownerScope = context.ownerScope?.trim();
+    const scopes = this.tabTaskScopes.get(tabTaskKey(input.taskId, input.tabId));
+    if (!ownerScope || !scopes || scopes.size !== 1 || !scopes.has(ownerScope)) {
+      throw new AppError("TASK_NOT_FOUND", "Manual control is unavailable for this task/tab.");
+    }
+    const workerPromise = this.workers.get(ownerScope);
+    if (!workerPromise) throw new AppError("TASK_NOT_FOUND", "The browser task has ended.");
+    // No auto-start and no fallbacks to another browser.
+    this.incrementActiveInvocation(ownerScope);
+    try {
+      const worker = await workerPromise;
+      if (!worker.viewerControl) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Manual control is unavailable.");
+      await worker.viewerControl(input, ownerScope);
+      // Commit retention before a concurrent task finish can retire the worker.
+      if (input.action === "release" && input.keepSession !== undefined) {
+        if (input.keepSession) this.retainedScopes.add(ownerScope);
+        else this.retainedScopes.delete(ownerScope);
+      }
+    } finally {
+      if (this.decrementActiveInvocation(ownerScope) === 0 && this.pendingReleases.has(ownerScope)) {
+        await this.releaseWorkerIfIdle(ownerScope);
+      }
+    }
   }
 
   private async invoke<T>(
@@ -473,6 +505,10 @@ export class ScopedBrowserWorkerPool implements BrowserExecutor {
   private async releaseWorkerIfIdle(ownerScope: string): Promise<void> {
     if ((this.activeInvocations.get(ownerScope) ?? 0) > 0) return;
     if (this.hasScopeBindings(ownerScope)) return;
+    if (this.retainedScopes.has(ownerScope)) {
+      this.pendingReleases.delete(ownerScope);
+      return;
+    }
 
     const workerPromise = this.workers.get(ownerScope);
     if (!workerPromise) {

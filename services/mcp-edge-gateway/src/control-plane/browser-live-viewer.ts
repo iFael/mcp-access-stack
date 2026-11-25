@@ -18,6 +18,7 @@ type ViewerSession = {
   userId: string;
   viewerDeviceId: string;
   credentialVersion: string;
+  controlId?: string;
   expiresAt: number;
 };
 
@@ -40,7 +41,9 @@ export type BrowserLiveViewerDependencies = {
     userId: string,
     scope: BrowserViewerScope,
     afterSeq: number,
+    controlId?: string,
   ): Promise<Response>;
+  control?(request: Request, userId: string, scope: Extract<BrowserViewerScope, { kind: "runtime" }>, body: string): Promise<Response>;
 };
 
 const COOKIE_NAME = "__Secure-mcpv3-viewer";
@@ -63,8 +66,37 @@ export class BrowserLiveViewer {
     const url = new URL(request.url);
     const parsed = parseViewerPath(url.pathname);
     if (!parsed) return new Response(null, { status: 404 });
-    const { scope, isFrame, pagePath } = parsed;
+    const { scope, isFrame, isControl, pagePath } = parsed;
     const session = await this.readSession(request, scope);
+
+    if (isControl) {
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      if (!session) return json({ error: "viewer_auth_required" }, 401);
+      if (scope.kind !== "runtime" || !session.controlId || !this.dependencies.control ||
+          request.headers.get("origin") !== url.origin ||
+          !(request.headers.get("content-type") ?? "").startsWith("application/json")) {
+        return json({ error: "manual_control_forbidden" }, 403);
+      }
+      if (!(await this.dependencies.authorizeSource(session.userId, scope))) {
+        return json({ error: "view_unavailable" }, 404);
+      }
+      const raw = await boundedManualBody(request);
+      if (raw === null) return json({ error: "invalid_manual_input" }, 413);
+      let input: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
+        input = parsed as Record<string, unknown>;
+      } catch { return json({ error: "invalid_manual_input" }, 400); }
+      if (typeof input.action !== "string" || !["take", "input", "release"].includes(input.action) ||
+          Object.keys(input).some((key) => key !== "action" && !(input.action === "input" && key === "event") &&
+            !(input.action === "release" && key === "keepSession" && typeof input.keepSession === "boolean"))) {
+        return json({ error: "invalid_manual_input" }, 400);
+      }
+      // Bind identity and task on the server. Never trust a user-supplied binding.
+      const body = JSON.stringify({ ...input, taskId: scope.taskId, tabId: scope.tabId, controlId: session.controlId });
+      return withPrivateHeaders(await this.dependencies.control(request, session.userId, scope, body));
+    }
 
     if (isFrame) {
       if (request.method !== "GET") return new Response(null, { status: 405 });
@@ -83,6 +115,7 @@ export class BrowserLiveViewer {
           session.userId,
           scope,
           Number(afterSeqText),
+          ...(scope.kind === "runtime" && this.dependencies.control && session.controlId ? [session.controlId] as const : []),
         ),
       );
     }
@@ -92,7 +125,7 @@ export class BrowserLiveViewer {
         if (!(await this.dependencies.authorizeSource(session.userId, scope))) {
           return new Response(null, { status: 404 });
         }
-        return html(viewerPage(), 200);
+        return html(viewerPage(scope.kind === "runtime" && !!this.dependencies.control && !!session.controlId), 200);
       }
       return html(loginPage(), 200);
     }
@@ -158,6 +191,7 @@ export class BrowserLiveViewer {
       userId: identity.userId,
       viewerDeviceId,
       credentialVersion: identity.credentialVersion,
+      ...(scope.kind === "runtime" && this.dependencies.control ? { controlId: crypto.randomUUID() } : {}),
       expiresAt: Date.now() + SESSION_MS,
     };
     const key = await sessionKey(token);
@@ -214,7 +248,7 @@ export class BrowserLiveViewer {
 
 function parseViewerPath(
   pathname: string,
-): { scope: BrowserViewerScope; isFrame: boolean; pagePath: string } | null {
+): { scope: BrowserViewerScope; isFrame: boolean; isControl: boolean; pagePath: string } | null {
   const raw = pathname.split("/").filter(Boolean);
   let segments: string[];
   try {
@@ -225,7 +259,8 @@ function parseViewerPath(
   if (segments[0] !== "viewer") return null;
 
   const isFrame = segments.at(-1) === "frame";
-  const base = isFrame ? segments.slice(0, -1) : segments;
+  const isControl = segments.at(-1) === "control";
+  const base = isFrame || isControl ? segments.slice(0, -1) : segments;
   if (base[1] === "runtime" && base.length === 6) {
     const [, , runtimeId, browserEpoch, taskId, tabId] = base;
     if (
@@ -250,6 +285,7 @@ function parseViewerPath(
     return {
       scope,
       isFrame,
+      isControl,
       pagePath: `/viewer/runtime/${encodeURIComponent(runtimeId)}/${encodeURIComponent(
         browserEpoch,
       )}/${encodeURIComponent(taskId)}/${encodeURIComponent(tabId)}`,
@@ -277,6 +313,7 @@ function parseViewerPath(
     return {
       scope,
       isFrame,
+      isControl,
       pagePath: `/viewer/device/${encodeURIComponent(deviceId)}/${encodeURIComponent(
         taskId,
       )}/${encodeURIComponent(tabId)}`,
@@ -306,12 +343,86 @@ function readCookie(request: Request, name: string): string | undefined {
     ?.slice(name.length + 1);
 }
 
+async function boundedManualBody(request: Request): Promise<string | null> {
+  const reader = request.body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let size = 0;
+  let text = "";
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) return text + decoder.decode();
+      size += next.value.byteLength;
+      if (size > 4096) {
+        await reader.cancel();
+        return null;
+      }
+      text += decoder.decode(next.value, { stream: true });
+    }
+  } catch { return null; }
+  finally { reader.releaseLock(); }
+}
+
 function loginPage(error = ""): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>body{font:16px system-ui;background:#171923;color:#f8f8ff;margin:3rem auto;max-width:24rem;padding:1rem}label{display:block;margin:1rem 0}input{box-sizing:border-box;width:100%;padding:.7rem;margin-top:.3rem}button{padding:.7rem 1rem}</style><h1>Browser live viewer</h1><p>Sign in to view this agent tab.</p>${error ? `<p role="alert">${error}</p>` : ""}<form method="post"><label>Access password<input name="owner_password" type="password" autocomplete="current-password" required></label><button type="submit">View tab</button></form></html>`;
 }
 
-function viewerPage(): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>html,body{margin:0;background:#111;color:#eee;font:14px system-ui}header{padding:.6rem 1rem;background:#222}main{height:calc(100vh - 3rem);display:grid;place-items:center}img{max-width:100vw;max-height:calc(100vh - 3rem);object-fit:contain}</style><header>Agent browser · read only <span id="status">Connecting…</span></header><main><img id="frame" alt="Live agent browser tab" draggable="false"></main><script>let seq=0,generation=0;const image=document.getElementById('frame'),status=document.getElementById('status');const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));async function poll(run){while(run===generation){try{const result=await fetch(location.pathname+'/frame?afterSeq='+seq,{cache:'no-store'});if(run!==generation)break;if(result.status===404||result.status===401){status.textContent='View ended';break}if(result.status===204){await pause(250);continue}if(result.ok){const frame=await result.json();if(frame.seq>seq){seq=frame.seq;image.src='data:image/jpeg;base64,'+frame.data;status.textContent='Live'}}else{status.textContent='Reconnecting…';await pause(1000)}}catch{status.textContent='Reconnecting…';await pause(1000)}}}document.addEventListener('visibilitychange',()=>{generation++;if(!document.hidden)poll(generation)});if(!document.hidden)poll(generation);</script></html>`;
+function viewerPage(manualEnabled = false): string {
+  const controls = manualEnabled
+    ? '<button id="take">Assumir controle</button><button id="release" disabled>Devolver ao agente</button><label><input type="checkbox" id="keepSession"> Manter sessão até o reinício do servidor</label><span id="manual">Login manual: assuma o controle e clique na página. Não devolva enquanto houver credenciais visíveis.</span>'
+    : '';
+  const manualScript = manualEnabled ? `
+    const take=document.getElementById('take'),release=document.getElementById('release'),manual=document.getElementById('manual');
+    let controlling=false,busy=false,queued=0,tail=Promise.resolve(),generationOfInput=0;
+    function updateControl(active,message){controlling=active;release.disabled=!active;manual.textContent=message;if(active)image.focus();}
+    async function command(action,event){
+      const response=await fetch(location.pathname+'/control',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(event?{action,event}:action==='release'?{action,keepSession:document.getElementById('keepSession').checked}:{action}),cache:'no-store'});
+      if(!response.ok)throw new Error('manual_control_unavailable');
+    }
+    take.onclick=async()=>{if(busy||queued)return;busy=true;take.disabled=true;
+      try{await command('take');generationOfInput++;updateControl(true,'Controle manual ativo. O agente está pausado.');}
+      catch{updateControl(false,'Não foi possível assumir. Aguarde operações pendentes ou tente retomar o controle.');}
+      finally{busy=false;take.disabled=false;}};
+    release.onclick=async()=>{if(busy)return;busy=true;release.disabled=true;
+      try{await tail;if(!controlling)return;await command('release');generationOfInput++;image.removeAttribute('src');seq=0;
+        updateControl(false,'Controle devolvido. O agente pode continuar com uma nova observação.');}
+      catch{updateControl(true,'Não foi possível devolver. Conclua ou limpe o login e tente novamente.');}
+      finally{busy=false;release.disabled=!controlling;}};
+    function enqueue(event){
+      if(!controlling||busy||document.hidden)return;
+      if(queued>=32){generationOfInput++;updateControl(false,'Fila de entrada cheia. Confira o estado da página antes de retomar.');return;}
+      const current=generationOfInput;queued++;
+      tail=tail.then(async()=>{if(!controlling||current!==generationOfInput)return;
+        try{await command('input',event);}catch{generationOfInput++;updateControl(false,'Entrada não confirmada. Observe o resultado e assuma novamente; nada será reenviado.');}
+      }).finally(()=>{queued--;});
+    }
+    function point(event){
+      if(!image.getAttribute('src')||!image.complete)return null;
+      const rect=image.getBoundingClientRect();
+      const x=(event.clientX-rect.left)/rect.width,y=(event.clientY-rect.top)/rect.height;
+      return x>=0&&x<1&&y>=0&&y<1?{x,y}:null;
+    }
+    image.addEventListener('click',event=>{if(!controlling)return;const p=point(event);if(p){image.focus();enqueue({kind:'click',...p});}});
+    image.addEventListener('wheel',event=>{if(!controlling)return;const p=point(event);if(!p)return;event.preventDefault();
+      const factor=event.deltaMode===1?16:event.deltaMode===2?600:1;
+      const clamp=value=>Math.round(Math.max(-2000,Math.min(2000,value*factor)));
+      enqueue({kind:'wheel',...p,dx:clamp(event.deltaX),dy:clamp(event.deltaY)});
+    },{passive:false});
+    image.addEventListener('keydown',event=>{
+      if(!controlling||event.isComposing)return;
+      const allowed=['Enter','Tab','Backspace','Delete','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'];
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='a'&&!event.altKey){event.preventDefault();enqueue({kind:'key',key:'ControlOrMeta+A'});return;}
+      if(event.ctrlKey||event.metaKey||event.altKey)return;
+      if(allowed.includes(event.key)){event.preventDefault();enqueue({kind:'key',key:event.key==='Tab'&&event.shiftKey?'Shift+Tab':event.key});return;}
+      if(Array.from(event.key).length===1){event.preventDefault();enqueue({kind:'text',text:event.key});}
+    });
+    image.addEventListener('paste',event=>{if(!controlling)return;event.preventDefault();
+      const text=event.clipboardData?.getData('text/plain');if(text&&text.length<=512&&!/[\\x00-\\x1f\\x7f]/.test(text))enqueue({kind:'text',text});
+    });
+  ` : '';
+  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP V3 live viewer</title><style>html,body{margin:0;background:#111;color:#eee;font:14px system-ui}header{padding:.6rem 1rem;background:#222;display:flex;flex-wrap:wrap;align-items:center;gap:.7rem}main{height:calc(100vh - 5rem);display:grid;place-items:center}img{max-width:100vw;max-height:calc(100vh - 5rem);object-fit:contain}button{padding:.45rem .8rem;cursor:pointer}button:disabled{opacity:.5;cursor:default}img:focus{outline:2px solid #64b5f6}#manual{flex-basis:100%}</style><header>Agent browser · ${manualEnabled ? "controle manual autenticado" : "read only"} <span id="status">Connecting…</span>${controls}</header><main><img id="frame" alt="Live agent browser tab" draggable="false" ${manualEnabled ? 'tabindex="0"' : ''}></main><script>let seq=0,generation=0;const image=document.getElementById('frame'),status=document.getElementById('status');const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));async function poll(run){while(run===generation){try{const result=await fetch(location.pathname+'/frame?afterSeq='+seq,{cache:'no-store'});if(run!==generation)break;if(result.status===404||result.status===401){image.removeAttribute('src');status.textContent='View ended';break}if(result.status===409){image.removeAttribute('src');status.textContent='Controle manual reservado';await pause(1000);continue}if(result.status===204){await pause(250);continue}if(result.ok){const frame=await result.json();if(frame.seq>seq){seq=frame.seq;image.src='data:image/jpeg;base64,'+frame.data;status.textContent='Live'}}else{status.textContent='Reconnecting…';await pause(1000)}}catch{status.textContent='Reconnecting…';await pause(1000)}}}document.addEventListener('visibilitychange',()=>{generation++;if(!document.hidden)poll(generation)});if(!document.hidden)poll(generation);${manualScript}</script></html>`;
 }
 
 function html(body: string, status: number): Response {

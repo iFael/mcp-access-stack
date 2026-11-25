@@ -165,6 +165,7 @@ import {
   type BrowserTaskLease,
 } from "../domain/browser-task-registry.js";
 import type { BrowserLiveFrame } from "./browser-live-frame-mailbox.js";
+import type { BrowserUserControlHandle } from "./browser-user-control.js";
 import {
   BrowserSitePolicyRegistry,
   isAuthorizedSiteSemanticActionAllowed,
@@ -2016,6 +2017,45 @@ export class BrowserRuntime implements BrowserExecutor {
 
   supportsLiveView(): boolean {
     return isDirectPlaywrightDriver(this.driver) && !this.shutdownRequested;
+  }
+
+  async beginViewerControl(taskId: string, tabId: string, ownerScope: string): Promise<BrowserUserControlHandle> {
+    if (!this.supportsLiveView() || !isDirectPlaywrightDriver(this.driver) ||
+        this.activeTraceTasks.size || this.activeVideoTasks.size || this.credentialActiveTabs.size) {
+      throw new AppError("TASK_SUSPENDED", "Stop diagnostic recording before manual authentication.");
+    }
+    const context = { ownerScope };
+    const task = this.taskRegistry.assertTabAccess(tabId, context);
+    if (task.taskId !== taskId) throw new AppError("TASK_NOT_FOUND", "Manual control is unavailable.");
+    const tab = this.tabsRegistry.assertMcpOwned(tabId);
+    if (this.sitePolicies.classify(normalizeUrl(tab.lockedUrl ?? tab.url ?? "about:blank")).kind !== "public") {
+      throw new AppError("ACTION_BLOCKED_BY_POLICY", "Manual control is not available for restricted private sites.");
+    }
+    const binding = this.bindings.get(tabId);
+    if (!binding) throw new AppError("STALE_TAB_ID", "Manual control is unavailable.");
+    const lease = this.taskRegistry.acquireForTask(taskId, context);
+    try {
+      this.interactionContext.clearReferences();
+      this.confirmations.discardTabs(this.tabsRegistry.list().map((item) => item.tabId));
+      const handle = this.driver.beginViewerControl(binding.remoteTabId);
+      const renew = () => this.taskRegistry.acquireForTask(taskId, context).release();
+      return {
+        renew,
+        input: async (event) => {
+          renew();
+          await handle.input(event);
+        },
+        release: async () => {
+          await handle.release();
+          this.interactionContext.clearReferences();
+          this.confirmations.discardTabs(this.tabsRegistry.list().map((item) => item.tabId));
+          lease.release();
+        },
+      };
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
   }
 
   async liveFrame(

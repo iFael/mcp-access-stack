@@ -11,6 +11,7 @@ import {
   createOperationDeadline,
   createOperationLifecycle,
   browserOperationInputSchemas,
+  browserViewerControlSchema,
   browserOperationRequestSchema,
   browserOperationResultSchemas,
   type BrowserIdempotencyMetrics,
@@ -24,6 +25,7 @@ import {
   type BrowserOperationalFailureLayer,
 } from "../infrastructure/browser-operation-telemetry.js";
 import { BrowserOperationQueue } from "../services/browser-operation-queue.js";
+import { BrowserUserControl } from "../services/browser-user-control.js";
 import { BrowserIdempotencyRegistry } from "../services/browser-idempotency-registry.js";
 import type { BrowserWorkerConfig } from "../config/browser-worker-config.js";
 import { isBrowserAdvancedOperation } from "../policies/browser-operation-policy.js";
@@ -34,6 +36,7 @@ export class BrowserWorkerApplication {
   private readonly operations: BrowserOperationQueue;
   private readonly idempotency: BrowserIdempotencyRegistry;
   private readonly telemetry: BrowserOperationTelemetry;
+  private readonly userControl = new BrowserUserControl();
 
   constructor(
     private readonly config: BrowserWorkerConfig,
@@ -79,6 +82,27 @@ export class BrowserWorkerApplication {
         ? json(response, 200, { version: 1 })
         : json(response, 503, { error: "live_view_unavailable" });
     }
+    if (request.method === "POST" && url.pathname === "/live/control") {
+      if (!authenticate(request, this.config.token)) return json(response, 401, { error: "unauthorized" });
+      const ownerScope = browserOwnerScope(request);
+      if (!ownerScope || this.config.headless !== true || !this.runtime.supportsLiveView()) {
+        return json(response, 403, { error: "manual_control_unavailable" });
+      }
+      try {
+        const parsed = browserViewerControlSchema.safeParse(await readJson(request, 8192));
+        if (!parsed.success) return json(response, 400, { error: "invalid_manual_input" });
+        await this.userControl.run(parsed.data, ownerScope,
+          () => this.runtime.beginViewerControl(parsed.data.taskId, parsed.data.tabId, ownerScope));
+        response.setHeader("cache-control", "no-store");
+        response.statusCode = 204;
+        response.end();
+        return;
+      } catch {
+        // This path can carry user-entered credentials. Never audit the body,
+        // input event or underlying browser error.
+        return json(response, 409, { error: "manual_control_unavailable_or_busy" });
+      }
+    }
     if (request.method === "GET" && url.pathname === "/live/frame") {
       if (!authenticate(request, this.config.token)) {
         response.setHeader("WWW-Authenticate", 'Bearer realm="browser-worker"');
@@ -92,12 +116,17 @@ export class BrowserWorkerApplication {
         return json(response, 400, { error: "invalid_request" });
       }
       try {
+        const ownerScope = browserOwnerScope(request);
+        const controlId = url.searchParams.get("controlId");
+        const stillAuthorized = this.userControl.frameGuard(ownerScope && controlId
+          ? { ownerScope, taskId, tabId, controlId } : undefined);
         const frame = await this.runtime.liveFrame(
           taskId,
           tabId,
           Number(afterSeqText),
-          browserOwnerScope(request),
+          ownerScope,
         );
+        if (!stillAuthorized()) return json(response, 409, { error: "manual_control_active" });
         response.setHeader("cache-control", "no-store");
         if (!frame) {
           response.statusCode = 204;
@@ -105,7 +134,10 @@ export class BrowserWorkerApplication {
           return;
         }
         return json(response, 200, frame);
-      } catch {
+      } catch (error) {
+        if (error instanceof AppError && error.code === "TASK_SUSPENDED") {
+          return json(response, 409, { error: "manual_control_active" });
+        }
         return json(response, 404, { error: "not_found" });
       }
     }
@@ -117,6 +149,13 @@ export class BrowserWorkerApplication {
       return json(response, 401, { error: "unauthorized" });
     }
 
+    let releaseRequest: () => void;
+    try {
+      releaseRequest = this.userControl.acquireAgent();
+    } catch (error) {
+      const appError = asAppError(error);
+      return json(response, statusFor(appError), { ok: false, error: appError.toJSON() });
+    }
     const startedAt = performance.now();
     const controller = new AbortController();
     const abortDisconnected = (): void => {
@@ -180,17 +219,20 @@ export class BrowserWorkerApplication {
               async () => {
                 executionStarted = true;
                 queueWaitOnFailureMs = Math.max(0, performance.now() - queueEnteredAt);
-                const lease = typeof this.runtime.acquireOperationLease === "function"
-                  ? this.runtime.acquireOperationLease(
-                      activeOperation,
-                      parsedInput,
-                      context,
-                    )
-                  : { release: () => undefined };
+                // An HTTP timeout can return before native browser work ends.
+                // Keep the independent execution gate until the actual work settles.
+                const releaseExecution = this.userControl.acquireAgent();
                 try {
-                  return await execute(this.runtime, activeOperation, parsedInput, context);
+                  const lease = typeof this.runtime.acquireOperationLease === "function"
+                    ? this.runtime.acquireOperationLease(activeOperation, parsedInput, context)
+                    : { release: () => undefined };
+                  try {
+                    return await execute(this.runtime, activeOperation, parsedInput, context);
+                  } finally {
+                    lease.release();
+                  }
                 } finally {
-                  lease.release();
+                  releaseExecution();
                 }
               },
               timeoutMs,
@@ -284,6 +326,7 @@ export class BrowserWorkerApplication {
         return json(response, statusFor(appError), { ok: false, error: appError.toJSON() });
       }
     } finally {
+      releaseRequest();
       request.removeListener("aborted", abortDisconnected);
       response.removeListener("close", abortClosedResponse);
     }

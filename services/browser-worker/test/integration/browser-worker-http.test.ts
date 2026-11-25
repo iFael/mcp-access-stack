@@ -59,6 +59,43 @@ describe("BrowserWorkerApplication", () => {
     })).status).toBe(503);
   });
 
+  it("isolates manual login from agent operations and from other viewer sessions", async () => {
+    const binding = { taskId: "task-one", tabId: "tab-one", controlId: "11111111-1111-4111-8111-111111111111" };
+    const manualInput = jest.fn(async () => undefined);
+    const release = jest.fn(async () => undefined);
+    const beginViewerControl = jest.fn(async (_taskId: string, _tabId: string, _ownerScope: string) => ({ input: manualInput, release }));
+    const runtime = {
+      supportsLiveView: () => true,
+      beginViewerControl,
+      liveFrame: async () => ({ seq: 7, data: "/9j/", width: 640, height: 360, capturedAt: 100 }),
+    } as unknown as BrowserRuntime;
+    const { baseUrl, token } = await startApplication(runtime, { headless: true });
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json", "x-mcp-owner-scope": "user:owner" };
+    const control = (body: unknown, useHeaders = headers) => fetch(new URL("/live/control", baseUrl), {
+      method: "POST", headers: useHeaders, body: JSON.stringify(body),
+    });
+    expect((await control({ ...binding, action: "take" }, { ...headers, authorization: "Bearer invalid" })).status).toBe(401);
+    expect((await control({ ...binding, action: "take" }, { ...headers, "x-mcp-owner-scope": "" })).status).toBe(403);
+    expect((await control({ ...binding, action: "take" })).status).toBe(204);
+    expect(beginViewerControl).toHaveBeenCalledWith("task-one", "tab-one", "user:owner");
+    const operation = await fetch(new URL("/operations", baseUrl), {
+      method: "POST", headers, body: JSON.stringify({ operation: "status", input: {} }),
+    });
+    expect((await operation.json()) as unknown).toMatchObject({ ok: false, error: { code: "TASK_SUSPENDED" } });
+    const frameUrl = new URL("/live/frame?taskId=task-one&tabId=tab-one", baseUrl);
+    expect((await fetch(frameUrl, { headers })).status).toBe(409);
+    frameUrl.searchParams.set("controlId", binding.controlId);
+    expect((await fetch(frameUrl, { headers })).status).toBe(200);
+    expect((await fetch(frameUrl, { headers: { ...headers, "x-mcp-owner-scope": "user:other" } })).status).toBe(409);
+    expect((await control({ ...binding, action: "input", event: { kind: "click", x: 1, y: 0 } })).status).toBe(400);
+    expect((await control({ ...binding, action: "input", event: { kind: "click", x: .5, y: .5 } })).status).toBe(204);
+    expect(manualInput).toHaveBeenCalledTimes(1);
+    expect((await control({ ...binding, action: "release", keepSession: true })).status).toBe(204);
+    expect(release).toHaveBeenCalledTimes(1);
+    frameUrl.searchParams.delete("controlId");
+    expect((await fetch(frameUrl, { headers })).status).toBe(200);
+  });
+
   it("serves live frames only with the worker token and an exact task/tab pair", async () => {
     const runtime = {
       liveFrame: async (taskId: string, tabId: string, afterSeq: number) => {

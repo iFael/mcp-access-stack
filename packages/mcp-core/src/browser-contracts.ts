@@ -244,6 +244,26 @@ export type BrowserTabResult = z.infer<typeof browserTabResultSchema>;
 const tabIdSchema = z.string().min(1).max(128);
 const confirmationIdSchema = z.string().min(1).max(128).optional();
 
+// Internal owner-viewer protocol, deliberately not a public MCP operation.
+const manualPoint = { x: z.number().min(0).lt(1), y: z.number().min(0).lt(1) };
+export const browserViewerInputEventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("click"), ...manualPoint }).strict(),
+  z.object({ kind: z.literal("wheel"), ...manualPoint,
+    dx: z.number().int().min(-2000).max(2000), dy: z.number().int().min(-2000).max(2000) }).strict(),
+  z.object({ kind: z.literal("key"), key: z.enum(["Enter", "Tab", "Shift+Tab", "Backspace",
+    "Delete", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End",
+    "PageUp", "PageDown", "ControlOrMeta+A"]) }).strict(),
+  z.object({ kind: z.literal("text"), text: z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/u) }).strict(),
+]);
+export type BrowserViewerInputEvent = z.infer<typeof browserViewerInputEventSchema>;
+const viewerBinding = { taskId: taskIdSchema, tabId: tabIdSchema, controlId: z.uuid() };
+export const browserViewerControlSchema = z.discriminatedUnion("action", [
+  z.object({ ...viewerBinding, action: z.literal("take") }).strict(),
+  z.object({ ...viewerBinding, action: z.literal("input"), event: browserViewerInputEventSchema }).strict(),
+  z.object({ ...viewerBinding, action: z.literal("release"), keepSession: z.boolean().optional() }).strict(),
+]);
+export type BrowserViewerControlInput = z.infer<typeof browserViewerControlSchema>;
+
 export const browserOpenAuthorizedSiteInputSchema = z
   .object({
     siteId: z.string().min(1).max(128),

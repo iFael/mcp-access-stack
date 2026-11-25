@@ -23,6 +23,7 @@ import {
   AppError,
   type BrowserDialogInput,
   type BrowserDialogResult,
+  type BrowserViewerInputEvent,
 } from "@vs-code-gpt/shared";
 import {
   normalizeBrowserDiagnosticPayload,
@@ -82,6 +83,7 @@ import {
   type BrowserLiveFrame,
 } from "../../services/browser-live-frame-mailbox.js";
 import { hasBrowserCaptchaChallenge } from "../../services/browser-captcha-detector.js";
+import type { BrowserUserControlHandle } from "../../services/browser-user-control.js";
 import {
   BrowserPageStabilizationService,
   type BrowserDocumentReadyState,
@@ -232,6 +234,8 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   private readonly observedDialogs = new WeakMap<Page, ObservedJsDialog>();
   private readonly viewportSessions = new WeakMap<Page, { session: CDPSession; original: { userAgent: string; platform: string; colorScheme: "light" | "dark" } }>();
   private readonly suppressedDiagnosticPages = new WeakSet<Page>();
+  private manualControlActive = false;
+  private readonly manualRequests = new WeakSet<Request>();
   private readonly pageAllowedOrigins = new WeakMap<Page, Map<string, number>>();
   private readonly pageRequestPolicies = new WeakMap<Page, AuthorizedSitePolicy>();
   private readonly pageSemanticPermitCounts = new WeakMap<Page, number>();
@@ -975,6 +979,71 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     return { tab, tabCount: tabs.length };
   }
 
+  beginViewerControl(remoteTabId: string): BrowserUserControlHandle {
+    const id = remoteTabId.includes(":page:") ? remoteTabId.slice(remoteTabId.indexOf(":page:") + 6) : remoteTabId;
+    const page = this.pagesById.get(id);
+    if (!page || page.isClosed() || this.crashedPages.has(page) || this.manualControlActive ||
+        this.traceActive || this.screencast) {
+      throw new AppError("TASK_SUSPENDED", "Manual control is unavailable.");
+    }
+    const assertPublicPage = () => {
+      const url = new URL(page.url());
+      if (!["http:", "https:"].includes(url.protocol) ||
+          this.privateOrigins.has(url.origin) || this.deniedOrigins.has(url.origin)) {
+        throw new AppError("ACTION_BLOCKED_BY_POLICY", "Manual control requires a public web page.");
+      }
+    };
+    assertPublicPage();
+    this.manualControlActive = true;
+    const clearObservations = () => {
+      for (const candidate of this.pagesById.values()) {
+        this.consoleEntries.set(candidate, []);
+        this.networkEntries.set(candidate, []);
+        this.snapshots.discard(candidate);
+      }
+    };
+    clearObservations();
+    return {
+      input: async (event: BrowserViewerInputEvent) => {
+        if (!this.manualControlActive || page.isClosed() || this.crashedPages.has(page)) {
+          throw new AppError("STALE_TAB_ID", "Manual control is unavailable.");
+        }
+        assertPublicPage();
+        if (event.kind === "text") {
+          await page.keyboard.insertText(event.text);
+        } else if (event.kind === "key") {
+          await page.keyboard.press(event.key);
+        } else {
+          const viewport = page.viewportSize();
+          if (!viewport) throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Manual viewport unavailable.");
+          const x = Math.min(viewport.width - 1, Math.floor(viewport.width * event.x));
+          const y = Math.min(viewport.height - 1, Math.floor(viewport.height * event.y));
+          if (event.kind === "click") await page.mouse.click(x, y);
+          else {
+            await page.mouse.move(x, y);
+            await page.mouse.wheel(event.dx, event.dy);
+          }
+        }
+      },
+      release: async () => {
+        // Return only when no populated password field remains visible.
+        // Inspect a boolean locally, never return or record any field value.
+        for (const candidate of this.pagesById.values()) {
+          if (candidate.isClosed()) continue;
+          for (const frame of candidate.frames()) {
+            const pendingSecret = await frame.locator('input[type="password"]:visible').evaluateAll(
+              (elements) => elements.some((element) => Boolean((element as unknown as { value?: string }).value)),
+            );
+            if (pendingSecret) throw new AppError("TASK_SUSPENDED", "Finish or clear the login before returning control.");
+          }
+        }
+        await Promise.all([...this.liveScreencasts.keys()].map((key) => this.stopLiveScreencast(key)));
+        clearObservations();
+        this.manualControlActive = false;
+      },
+    };
+  }
+
   async liveFrame(
     remoteTabId: string,
     afterSeq: number,
@@ -1687,6 +1756,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
     });
     page.on("console", (message) => this.recordConsole(page, message));
     page.on("pageerror", (error) => {
+      if (this.manualControlActive) return;
       this.pushConsole(page, `[error] pageerror ${error.message}`);
       this.snapshots.recordEvent(page, {
         type: "pageerror",
@@ -1704,6 +1774,10 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
       this.recordRequestFailure(page, request);
     });
     page.on("dialog", (dialog) => {
+      if (this.manualControlActive) {
+        void dialog.dismiss().catch(() => undefined);
+        return;
+      }
       this.snapshots.recordEvent(page, {
         type: "dialog",
         text: `${dialog.type()}: ${dialog.message()}`.slice(0, 10_000),
@@ -1711,6 +1785,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
       void dialog.dismiss().catch(() => undefined);
     });
     page.on("download", (download) => {
+      if (this.manualControlActive) return;
       this.snapshots.recordEvent(page, {
         type: "download",
         text: download.suggestedFilename().slice(0, 10_000),
@@ -1718,13 +1793,14 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
       });
     });
     page.on("filechooser", (chooser) => {
+      if (this.manualControlActive) return;
       this.pendingFileChoosers.set(page, chooser);
       this.snapshots.recordEvent(page, { type: "filechooser" });
     });
   }
 
   private recordConsole(page: Page, message: ConsoleMessage): void {
-    if (this.suppressedDiagnosticPages.has(page)) return;
+    if (this.manualControlActive || this.suppressedDiagnosticPages.has(page)) return;
     const level = normalizeConsoleLevel(message.type());
     const text = `[${level}] ${message.text()}`.slice(0, 10_000);
     this.pushConsole(page, text);
@@ -1742,6 +1818,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   }
 
   private recordRequest(page: Page, request: Request): void {
+    if (this.manualControlActive) { this.manualRequests.add(request); return; }
     if (this.suppressedDiagnosticPages.has(page)) return;
     const entries = this.networkEntries.get(page) ?? [];
     entries.push({ request, timestamp: new Date().toISOString() });
@@ -1757,7 +1834,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   }
 
   private recordResponse(page: Page, response: Response): void {
-    if (this.suppressedDiagnosticPages.has(page)) return;
+    if (this.manualControlActive || this.manualRequests.has(response.request()) || this.suppressedDiagnosticPages.has(page)) return;
     const entry = [...(this.networkEntries.get(page) ?? [])]
       .reverse()
       .find((candidate) => candidate.request === response.request());
@@ -1770,7 +1847,7 @@ export class DirectPlaywrightDriver implements BrowserAdvancedDriver {
   }
 
   private recordRequestFailure(page: Page, request: Request): void {
-    if (this.suppressedDiagnosticPages.has(page)) return;
+    if (this.manualControlActive || this.manualRequests.has(request) || this.suppressedDiagnosticPages.has(page)) return;
     const failure = request.failure()?.errorText ?? "request failed";
     const entry = [...(this.networkEntries.get(page) ?? [])]
       .reverse()
