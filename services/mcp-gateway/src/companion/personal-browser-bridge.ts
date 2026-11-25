@@ -62,6 +62,15 @@ const EXTENSION_RELOAD_MAX_ATTEMPTS = 3;
 const MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
 const ERROR_CODES = new Set<string>(errorCodes);
+// Internal, bounded diagnostics; no peer-provided page or command payloads.
+const PERSONAL_OPERATION_PHASES: Partial<Record<BrowserOperation, readonly string[]>> = {
+  snapshot: ["queued", "ownership", "snapshot-settle", "snapshot-script", "snapshot-frames",
+    "snapshot-frame-summary", "snapshot-point", "snapshot-ax"],
+  screenshot: ["queued", "ownership", "debugger-attach", "cdp-enable", "cdp-layout",
+    "cdp-dpr", "cdp-capture", "debugger-detach"],
+  scroll: ["queued", "ownership", "scroll-preflight", "debugger-attach", "scroll-ax",
+    "cdp-wheel", "debugger-detach"],
+};
 
 interface PendingCall {
   generation: number;
@@ -72,6 +81,8 @@ interface PendingCall {
   abort?: () => void;
   timing?: unknown;
   responseBytes?: number;
+  lastPhase?: string;
+  phaseStartedAt?: number;
 }
 
 export interface PersonalBrowserBridgeOptions {
@@ -387,14 +398,15 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       const changedTarget = error instanceof AppError &&
         error.code === "BROWSER_CONFIRMATION_INVALID" &&
         (error.message === "Target preflight: target_changed. No click was dispatched." ||
-         error.message === "Target preflight: stale_page. No click was dispatched.");
+         error.message === "Target preflight: stale_page. No click was dispatched." ||
+         error.message === "Target preflight: stale_ref. No click was dispatched.");
       if (changedTarget) {
         // A client-side pushState keeps the same document and live element.
         // Only rebound against a verified identical page instance; classify
         // the now-current URL, label and risk before one retry.
         const fresh = await this.snapshot({ tabId: input.tabId, forceFull: true }, context);
         if (!fresh.refs.some((reference) => reference.ref === ref) ||
-            (error.message.includes("stale_page") &&
+            ((error.message.includes("stale_page") || error.message.includes("stale_ref")) &&
               (!previousPageInstanceId || fresh.pageInstanceId !== previousPageInstanceId))) throw error;
         const rebound = await this.guardWithChromeConfirmation(
           (confirmationId) => this.actions.guardClick({
@@ -1368,7 +1380,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         if (this.socket !== socket || this.socketGeneration !== generation) return;
         this.handleMessage(socket, generation, raw);
       });
-      socket.once("close", () => {
+      socket.once("close", (code) => {
         clearTimeout(handshakeTimeout);
         const wasActive = this.socket === socket;
         if (wasActive) {
@@ -1393,6 +1405,7 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         this.options.log?.({
           event: "mcp_v3_personal_browser_disconnected",
           generation,
+          code,
           activated: wasActive,
         });
       });
@@ -1645,6 +1658,18 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       this.recorder.ended(message);
       return;
     }
+    if (message.type === "request-phase") {
+      if (Buffer.byteLength(raw, "utf8") > 512 || typeof message.id !== "string" ||
+          typeof message.phase !== "string") return;
+      const pending = this.pending.get(message.id);
+      if (pending && pending.generation === generation &&
+          PERSONAL_OPERATION_PHASES[pending.operation]?.includes(message.phase) &&
+          pending.lastPhase !== message.phase) {
+        pending.lastPhase = message.phase;
+        pending.phaseStartedAt = performance.now();
+      }
+      return;
+    }
     if (message.type !== "response" || typeof message.id !== "string") return;
     const pending = this.pending.get(message.id);
     if (!pending || pending.generation !== generation) return;
@@ -1701,6 +1726,20 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
       const code = error instanceof AppError && ERROR_CODES.has(error.code) ? error.code : "INTERNAL_ERROR";
       latency.finish(outcome, { ...metrics, responseBytes: pendingMetrics?.responseBytes,
         ...extensionLatencyMetrics(pendingMetrics?.timing), errorCode: code });
+      if (pendingMetrics?.lastPhase && pendingMetrics.phaseStartedAt !== undefined &&
+          (outcome === "timeout" || outcome === "cancelled" ||
+           code === "EXECUTION_OUTCOME_UNKNOWN" || code === "BROWSER_DISCONNECTED" ||
+           code === "BROWSER_WORKER_TIMEOUT")) {
+        try {
+          this.options.log?.({
+            event: "mcp_v3_personal_browser_operation_stopped", bridgeRequestId: id,
+            operation, generation: pendingMetrics.generation, connected: this.isConnected(),
+            phase: pendingMetrics.lastPhase,
+            phaseElapsedMs: Math.max(0, Math.round(performance.now() - pendingMetrics.phaseStartedAt)),
+            durationMs: Math.max(0, Math.round(performance.now() - started)), errorCode: code,
+          });
+        } catch { /* Diagnostics must not alter execution. */ }
+      }
       if (traced) this.recorder.traceAction(operation, input, startedAt, outcome, code);
       return error;
     };
@@ -1755,11 +1794,14 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
         clearTimeout(timeout);
         pending.abort?.();
         sendCancel(socket, id);
+        const diagnostic = pending.lastPhase
+          ? ` Last reported phase: ${pending.lastPhase}; Chrome transport ${this.isConnected() ? "connected" : "disconnected"}.`
+          : "";
         if (isMutatingOperation(operation)) {
           rejectWithTiming(
             new AppError(
               "EXECUTION_OUTCOME_UNKNOWN",
-              `Personal browser mutation outcome is unknown after ${reason}: ${operation}`,
+              `Personal browser mutation outcome is unknown after ${reason}: ${operation}.${diagnostic}`,
             ), reason === "cancelled" ? "cancelled" : "timeout",
           );
           return;

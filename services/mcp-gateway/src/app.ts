@@ -1,10 +1,11 @@
 import type {
   BrowserExecutor,
+  BrowserViewerControlInput,
   RepositoryExecutor,
   SourceControlExecutor,
   WorkspaceExecutor,
 } from "@vs-code-gpt/shared";
-import { conversationSession, namedIds, type OnConversationCall } from "@vs-code-gpt/shared";
+import { AppError, browserViewerControlSchema, conversationSession, namedIds, type OnConversationCall } from "@vs-code-gpt/shared";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import compression from "compression";
@@ -54,7 +55,7 @@ export interface GatewayApplicationDependencies {
   logger?: Logger;
   browser?: BrowserExecutor;
   browserLiveFrame?: (
-    input: { taskId: string; tabId: string; afterSeq: number; signal?: AbortSignal },
+    input: { taskId: string; tabId: string; afterSeq: number; controlId?: string; signal?: AbortSignal },
     context: { ownerScope: string },
   ) => Promise<{
     seq: number;
@@ -63,6 +64,7 @@ export interface GatewayApplicationDependencies {
     height: number;
     capturedAt: number;
   } | null>;
+  browserViewerControl?: (input: BrowserViewerControlInput, context: { ownerScope: string }) => Promise<void>;
   workspaceExecutor?: WorkspaceExecutor;
   sourceControlExecutor?: SourceControlExecutor;
   repositoryExecutor?: RepositoryExecutor;
@@ -145,6 +147,8 @@ export function createGatewayApplication(
         const userId = request.auth?.extra?.userId;
         const taskId = typeof request.query.taskId === "string" ? request.query.taskId : "";
         const tabId = typeof request.query.tabId === "string" ? request.query.tabId : "";
+        const controlId = typeof request.query.controlId === "string" && /^[a-f0-9-]{36}$/iu.test(request.query.controlId)
+          ? request.query.controlId : undefined;
         const afterSeqText = typeof request.query.afterSeq === "string"
           ? request.query.afterSeq
           : "0";
@@ -161,6 +165,7 @@ export function createGatewayApplication(
               taskId,
               tabId,
               afterSeq: Number(afterSeqText),
+              ...(controlId === undefined ? {} : { controlId }),
               signal: request.signal,
             },
             { ownerScope: `user:${userId}` },
@@ -170,11 +175,39 @@ export function createGatewayApplication(
             return;
           }
           response.json(frame);
-        } catch {
+        } catch (error) {
+          if (error instanceof AppError && error.code === "TASK_SUSPENDED") {
+            response.status(409).json({ error: "manual_control_active" });
+            return;
+          }
           response.status(404).json({ error: "view_unavailable" });
         }
       },
     );
+  }
+  if (edgeTrustedAuthMiddleware && dependencies.browserViewerControl) {
+    app.post("/_viewer/control", edgeTrustedAuthMiddleware,
+      express.json({ limit: 8192, type: "application/json" }),
+      async (request: AuthenticatedRequest, response) => {
+        const userId = request.auth?.extra?.userId;
+        if (typeof userId !== "string" || !userId ||
+            request.auth?.extra?.subject !== `viewer:${userId}` ||
+            !request.auth.scopes.includes("browser:manual-control")) {
+          response.status(403).json({ error: "manual_control_forbidden" });
+          return;
+        }
+        const input = browserViewerControlSchema.safeParse(request.body);
+        if (!input.success) {
+          response.status(400).json({ error: "invalid_manual_input" });
+          return;
+        }
+        try {
+          await dependencies.browserViewerControl!(input.data, { ownerScope: `user:${userId}` });
+          response.status(204).end();
+        } catch {
+          response.status(409).json({ error: "manual_control_unavailable_or_busy" });
+        }
+      });
   }
 
   app.use(config.mcpPath, createMcpRequestLifecycleMiddleware(logger));

@@ -360,8 +360,16 @@ async function reloadPersonalExtensionWhenIdle(expectedVersion) {
 
 function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
-  socket = new WebSocket(BRIDGE_URL);
-  socket.onopen = () => {
+  // A closing socket can be superseded by the periodic reconnect. Its work
+  // must stop, and its callbacks must never invalidate the new connection.
+  if (socket) {
+    for (const controller of inFlightRequests.values()) controller.abort("disconnected");
+    endAllPersonalRecordings();
+  }
+  const connection = new WebSocket(BRIDGE_URL);
+  socket = connection;
+  connection.onopen = () => {
+    if (socket !== connection) return;
     send({
       type: "hello",
       protocolVersion: PROTOCOL_VERSION,
@@ -374,12 +382,14 @@ function connect() {
     void pushPersonalTaskMessages();
     void pushPersonalWakeSettings();
   };
-  socket.onmessage = (event) => {
-    void handleMessage(event.data);
+  connection.onmessage = (event) => {
+    if (socket === connection) void handleMessage(event.data);
   };
-  socket.onerror = () => undefined;
-  socket.onclose = () => {
+  connection.onerror = () => undefined;
+  connection.onclose = () => {
+    if (socket !== connection) return;
     socket = undefined;
+    for (const controller of inFlightRequests.values()) controller.abort("disconnected");
     endAllPersonalRecordings();
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 1000);
@@ -462,6 +472,14 @@ async function handleMessage(raw) {
   const timing = message.measureTiming === true ? { started: received, receivedAt, totalMs: 0, queueMs: 0, actionMs: 0, snapshotMs: 0, serializationMs: 0 } : undefined;
   const controller = new AbortController();
   inFlightRequests.set(message.id, controller);
+  const requestSocket = socket;
+  // Report only fixed stage names, never DOM, arguments or CDP payloads.
+  const reportPhase = ["snapshot", "screenshot", "scroll"].includes(operation)
+    ? (phase) => {
+        if (socket !== requestSocket) return;
+        try { send({ type: "request-phase", id: message.id, phase }); } catch {}
+      }
+    : undefined;
   const deadlineMs = typeof message.deadlineAt === "string"
     ? Date.parse(message.deadlineAt) - Date.now()
     : Number.POSITIVE_INFINITY;
@@ -472,11 +490,11 @@ async function handleMessage(raw) {
   }
 
   try {
-    const result = await runRequest(operation, message.input ?? {}, controller.signal, timing);
-    send({ type: "response", id: message.id, ok: true, result }, timing);
+    const result = await runRequest(operation, message.input ?? {}, controller.signal, timing, reportPhase);
+    if (socket === requestSocket) send({ type: "response", id: message.id, ok: true, result }, timing);
   } catch (error) {
     const normalized = normalizeRequestError(operation, controller.signal, error);
-    send({
+    if (socket === requestSocket) send({
       type: "response",
       id: message.id,
       ok: false,
@@ -487,20 +505,22 @@ async function handleMessage(raw) {
     }, timing);
   } finally {
     if (deadlineTimer) clearTimeout(deadlineTimer);
-    inFlightRequests.delete(message.id);
+    if (inFlightRequests.get(message.id) === controller) inFlightRequests.delete(message.id);
   }
 }
 
-async function runRequest(operation, input, signal, timing) {
+async function runRequest(operation, input, signal, timing, reportPhase) {
   const queueKey = mutationQueueKey(operation, input);
   const queuedAt = performance.now();
   const execute = async () => {
     if (timing && queueKey) timing.queueMs = performance.now() - queuedAt;
     const started = performance.now();
     const previousSnapshot = timing?.snapshotMs ?? 0;
+    reportPhase?.("ownership");
     await refuseDuringPersonalHandoff(operation, input);
     await refusePausedPersonalTab(operation, input);
-    try { return await perform(operation, input, signal, timing); }
+    throwIfAborted(signal, operation, false);
+    try { return await perform(operation, input, signal, timing, reportPhase); }
     finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
   };
   if (!queueKey) {
@@ -510,6 +530,7 @@ async function runRequest(operation, input, signal, timing) {
     return result;
   }
 
+  reportPhase?.("queued");
   return enqueueMutation(queueKey, async () => {
     if (timing) timing.queueMs = performance.now() - queuedAt;
     throwIfAborted(signal, operation, false);
@@ -526,7 +547,7 @@ async function runRequest(operation, input, signal, timing) {
   });
 }
 
-async function perform(operation, input, signal, timing) {
+async function perform(operation, input, signal, timing, reportPhase) {
   switch (operation) {
     case "tabs": return tabs(input, signal);
     case "selectTab": return selectOwnedTab(input, signal);
@@ -536,12 +557,12 @@ async function perform(operation, input, signal, timing) {
     case "download": return downloadPersonalFile(input, signal);
     case "open": return open(input, signal);
     case "navigate": return navigate(input, signal);
-    case "snapshot": return snapshot(input, signal);
+    case "snapshot": return snapshot(input, signal, reportPhase);
     case "evaluate": return evaluatePage(input, signal);
     case "click": return click(input, signal);
     case "hover": return hover(input, signal);
     case "drag": return drag(input, signal);
-    case "scroll": return scroll(input, signal);
+    case "scroll": return scroll(input, signal, reportPhase);
     case "fill": return fill(input, signal);
     case "formInput": return formInput(input, signal);
     case "type": return typeText(input, signal);
@@ -556,7 +577,7 @@ async function perform(operation, input, signal, timing) {
     case "frameSequence": return frameSequence(input, signal);
     case "navigatePath": return navigatePath(input, signal);
     case "sequence": return sequence(input, signal, timing);
-    case "screenshot": return screenshot(input, signal);
+    case "screenshot": return screenshot(input, signal, reportPhase);
     case "console": return readPersonalConsole(input, signal);
     case "networkList": return readPersonalNetwork(input, signal);
     case "networkInspect": return inspectPersonalNetwork(input, signal);
@@ -1877,23 +1898,31 @@ function describePersonalFrameCompact() {
   return { url, name, title, items };
 }
 
-async function snapshot(input, signal) {
+async function snapshot(input, signal, reportPhase) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "snapshot", false);
   // Automatic action observations use compact snapshots. Let panels, dialogs
   // and asynchronous controls settle before capturing their new state.
-  if (input.compact === true) await settlePersonalDom(input.tabId, signal);
+  if (input.compact === true) {
+    reportPhase?.("snapshot-settle");
+    await settlePersonalDom(input.tabId, signal);
+  }
+  reportPhase?.("snapshot-script");
   const generation = crypto.randomUUID().replaceAll("-", "");
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
     func: snapshotPage,
     args: [generation, input.compact === true],
   });
+  throwIfAborted(signal, "snapshot", false);
   if (!injection?.result) throw coded("BROWSER_DISCONNECTED", "The page snapshot could not be read.");
   let frameSummary = "";
+  reportPhase?.("snapshot-frames");
   const frames = await chrome.webNavigation?.getAllFrames?.({ tabId: chromeTabId }).catch(() => []);
+  throwIfAborted(signal, "snapshot", false);
   if (frames?.length > 1) {
+    reportPhase?.("snapshot-frame-summary");
     const descriptions = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId, allFrames: true }, func: describePersonalFrameCompact,
     }).catch(() => []);
@@ -1908,15 +1937,19 @@ async function snapshot(input, signal) {
           .join("\\n");
     }
   }
+  throwIfAborted(signal, "snapshot", false);
   let pointTarget;
   if (input.point) {
+    reportPhase?.("snapshot-point");
     const [target] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId }, func: inspectPointInDocument,
       args: [input.point.x, input.point.y],
     });
     pointTarget = target?.result;
   }
+  throwIfAborted(signal, "snapshot", false);
   axTargetsByTab.delete(chromeTabId);
+  if (input.includeAccessibility) reportPhase?.("snapshot-ax");
   const native = input.includeAccessibility
     ? await readNativeAccessibility(chromeTabId, injection.result.url, injection.result.pageInstanceId, signal)
     : undefined;
@@ -2247,6 +2280,7 @@ async function click(input, signal) {
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
     const modifiers = (input.modifiers ?? []).reduce((mask, part) => mask | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 }[part] ?? 0), 0);
     const clickStartedAt = Date.now();
+    throwIfAborted(signal, "click", false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, modifiers,
     });
@@ -2261,6 +2295,7 @@ async function click(input, signal) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "The classified pixel target changed after hover.");
       }
     }
+    throwIfAborted(signal, "click", false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mousePressed", x: point.x, y: point.y, button, buttons, clickCount, modifiers,
     });
@@ -2491,7 +2526,8 @@ async function settlePersonalViewport(target, signal) {
   }
 }
 
-async function scroll(input, signal) {
+async function scroll(input, signal, reportPhase) {
+  reportPhase?.("scroll-preflight");
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   const tab = await chrome.tabs.get(chromeTabId);
@@ -2508,20 +2544,34 @@ async function scroll(input, signal) {
     point = injection?.result;
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll target is stale or obscured.");
   } else if (!input.ref) {
-    const [injection] = await chrome.scripting.executeScript({
-      target: { tabId: chromeTabId },
-      func: (x, y) => {
-        const px = x ?? Math.floor(innerWidth / 2);
-        const py = y ?? Math.floor(innerHeight / 2);
-        if (!Number.isInteger(px) || !Number.isInteger(py) ||
-            px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) return null;
-        return { x: px, y: py };
-      },
-      args: [input.x, input.y],
-    });
-    point = injection?.result;
-    if (!point) {
-      throw coded("INVALID_ARGUMENT", "Scroll coordinates are outside the current CSS viewport.");
+    // A newly activated headful tab can briefly have an empty CSS viewport.
+    // Poll only geometry, never replay the wheel event, and bind every probe
+    // to the guarded page before accepting a point.
+    for (let attempt = 0; attempt <= 20; attempt += 1) {
+      throwIfAborted(signal, "scroll", false);
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId },
+        func: (x, y, expectedUrl) => {
+          if (location.href !== expectedUrl) return { stale: true };
+          if (!(innerWidth > 0 && innerHeight > 0)) return { unsized: true };
+          const px = x ?? Math.floor(innerWidth / 2);
+          const py = y ?? Math.floor(innerHeight / 2);
+          if (!Number.isInteger(px) || !Number.isInteger(py) ||
+              px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) return null;
+          return { x: px, y: py };
+        },
+        args: [input.x ?? null, input.y ?? null, input.guard.url],
+      });
+      const observed = injection?.result;
+      if (observed?.stale) throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll page changed before dispatch.");
+      if (observed?.unsized) {
+        if (attempt === 20) throw coded("STATE_NOT_REACHED", "Scroll viewport is not ready. Observe the tab before retrying.");
+        await delay(100, signal);
+        continue;
+      }
+      if (!observed) throw coded("INVALID_ARGUMENT", "Scroll coordinates are outside the current CSS viewport.");
+      point = observed;
+      break;
     }
   }
   throwIfAborted(signal, "scroll", false);
@@ -2530,8 +2580,15 @@ async function scroll(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   try {
+    reportPhase?.("debugger-attach");
     attached = await attachGuardedDebugger(target);
-    if (input.ref?.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+    throwIfAborted(signal, "scroll", false);
+    if (input.ref?.startsWith("ax-")) {
+      reportPhase?.("scroll-ax");
+      point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+    }
+    throwIfAborted(signal, "scroll", false);
+    reportPhase?.("cdp-wheel");
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseWheel", x: point.x, y: point.y, deltaX, deltaY,
     });
@@ -2540,6 +2597,7 @@ async function scroll(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
+    reportPhase?.("debugger-detach");
     await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
@@ -4159,13 +4217,28 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
     }
     // "nearest" leaves visible targets alone; scrolling here can also scroll
     // ancestor frames asynchronously, which the bridge waits out when mapping.
-    element.scrollIntoView({ block: "nearest", inline: "nearest" });
-    const rect = element.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    if (!visible(element) || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { invisible: true };
+    // A rich editor renders its text over the bound input. Only a click may
+    // target that verified surface; filling and key dispatch keep their guards.
+    const editor = step.action === "click" &&
+      (tag === "textarea" || element.isContentEditable || element.getAttribute("role") === "textbox")
+      ? element.closest?.(".monaco-editor,.cm-editor") : null;
+    const surface = editor?.isConnected && editor.contains?.(element) ? editor : element;
+    surface.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const rect = surface.getBoundingClientRect();
+    const left = surface === element ? rect.left : Math.max(0, rect.left);
+    const top = surface === element ? rect.top : Math.max(0, rect.top);
+    const right = surface === element ? rect.left + rect.width : Math.min(innerWidth, rect.left + rect.width);
+    const bottom = surface === element ? rect.top + rect.height : Math.min(innerHeight, rect.top + rect.height);
+    const x = (left + right) / 2;
+    const y = (top + bottom) / 2;
+    if (!visible(surface) || right <= left || bottom <= top ||
+        !Number.isFinite(x) || !Number.isFinite(y) ||
+        x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { invisible: true };
     const hit = document.elementFromPoint(x, y);
-    if (hit !== element && !element.contains(hit)) return { obscured: true };
+    const editorHit = surface !== element && hit && surface.contains(hit) &&
+      hit.closest?.(".monaco-editor,.cm-editor") === surface &&
+      !hit.closest?.('a[href],button,[role="button"],[role="link"],[role="menuitem"],input,select,textarea');
+    if (!hit || (hit !== element && !element.contains(hit) && !editorHit)) return { obscured: true };
     // Remember the resolved element in this extension world only, so focus
     // and select results can be verified without re-resolving the locator.
     globalThis.__mcpV3LegacyActionTarget = element;
@@ -4464,7 +4537,10 @@ async function probePersonalLegacyTarget(input, chromeTabId, step, describeOnly,
     if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator or option matched several candidates. " + JSON.stringify(observed.choices || []));
     if (observed?.missingOption) throw coded("INVALID_ARGUMENT", "Requested select option does not exist.");
     if (!observed?.found) {
-      throw coded("LOCATOR_NOT_FOUND", "Legacy action target is missing, disabled, obscured, outside the viewport or not editable.");
+      const reason = observed?.obscured ? "obscured" : observed?.invisible ? "outside viewport or hidden" :
+        observed?.disabled ? "disabled" : observed?.notEditable ? "not editable" : "missing or stale";
+      throw coded("LOCATOR_NOT_FOUND", "Legacy action target: " + reason +
+        ". No native input was dispatched for this step. Refresh browser_dom_index before retrying.");
     }
     return { graph, frame, observed };
   }
@@ -6002,7 +6078,7 @@ function personalBytesBase64(bytes) {
   return btoa(binary);
 }
 
-async function screenshot(input, signal) {
+async function screenshot(input, signal, reportPhase) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "screenshot", false);
@@ -6012,15 +6088,21 @@ async function screenshot(input, signal) {
     if (input.zoom !== undefined && !input.region) {
       throw coded("INVALID_ARGUMENT", "Zoom magnifies a clipped region; provide region.");
     }
+    reportPhase?.("debugger-attach");
     attached = await attachGuardedDebugger(target);
+    throwIfAborted(signal, "screenshot", false);
+    reportPhase?.("cdp-enable");
     await chrome.debugger.sendCommand(target, "Page.enable");
+    throwIfAborted(signal, "screenshot", false);
     let clip;
     if (input.region) {
       if (input.fullPage === true) {
         throw coded("INVALID_ARGUMENT", "Region screenshot cannot also be full page.");
       }
       const box = input.region;
+      reportPhase?.("cdp-layout");
       const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      throwIfAborted(signal, "screenshot", false);
       const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
       const { x, y, width, height } = box;
       if (![x, y, width, height].every(Number.isInteger) || x < 0 || y < 0 ||
@@ -6035,6 +6117,7 @@ async function screenshot(input, signal) {
       }
       let scale = 1;
       if (input.scale === "device") {
+        reportPhase?.("cdp-dpr");
         const dpr = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
           expression: "window.devicePixelRatio", returnByValue: true,
         });
@@ -6055,7 +6138,9 @@ async function screenshot(input, signal) {
       };
     }
     if (input.fullPage === true) {
+      reportPhase?.("cdp-layout");
       const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      throwIfAborted(signal, "screenshot", false);
       const contentSize = metrics?.cssContentSize ?? metrics?.contentSize;
       const width = Math.ceil(Number(contentSize?.width));
       const height = Math.ceil(Number(contentSize?.height));
@@ -6071,6 +6156,7 @@ async function screenshot(input, signal) {
     let data = "";
     for (const quality of [80, 65, 50]) {
       throwIfAborted(signal, "screenshot", false);
+      reportPhase?.("cdp-capture");
       const captured = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
         format: "jpeg",
         quality,
@@ -6101,6 +6187,7 @@ async function screenshot(input, signal) {
       "Personal browser screenshot requires Chrome debugger access for the MCP-owned tab.",
     );
   } finally {
+    reportPhase?.("debugger-detach");
     await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
@@ -7006,9 +7093,15 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   if (focus) element.focus?.();
   const rect = clickSurface.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
-  const x = coordinateX == null ? rect.left + rect.width / 2 : coordinateX;
-  const y = coordinateY == null ? rect.top + rect.height / 2 : coordinateY;
-  if (!Number.isFinite(x) || !Number.isFinite(y) || x < rect.left || y < rect.top ||
+  const editorSurface = editorPointRef || clickSurface !== element;
+  const left = editorSurface ? Math.max(0, rect.left) : rect.left;
+  const topEdge = editorSurface ? Math.max(0, rect.top) : rect.top;
+  const right = editorSurface ? Math.min(innerWidth, rect.right) : rect.right;
+  const bottom = editorSurface ? Math.min(innerHeight, rect.bottom) : rect.bottom;
+  const x = coordinateX == null ? (left + right) / 2 : coordinateX;
+  const y = coordinateY == null ? (topEdge + bottom) / 2 : coordinateY;
+  if (right <= left || bottom <= topEdge ||
+      !Number.isFinite(x) || !Number.isFinite(y) || x < rect.left || y < rect.top ||
       x >= rect.right || y >= rect.bottom || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
     return { error: "point_outside_target" };
   }

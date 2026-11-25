@@ -171,6 +171,35 @@ describe("embedded Gateway edge-trusted mode", () => {
     }
   });
 
+  it("accepts manual input only from the authenticated viewer principal", async () => {
+    const calls: unknown[] = [];
+    const gateway = createGatewayApplication(makeGatewayConfig(), {
+      logger: silentLogger(), workspaceExecutor: createTestExecutor(), sourceControlExecutor: createTestExecutor(),
+      edgeTrust: { internalAssertion: INTERNAL_ASSERTION },
+      browserViewerControl: async (input, context) => { calls.push({ input, context }); },
+    });
+    const http = await listenGateway(gateway.app);
+    const userId = "usr_11111111-1111-4111-8111-111111111111";
+    const body = { taskId: "task-one", tabId: "tab-one", controlId: "11111111-1111-4111-8111-111111111111", action: "take" };
+    const target = new URL("/_viewer/control", http.url);
+    const post = (principal?: unknown, value: unknown = body) => fetch(target, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(principal === undefined ? {} : {
+        "x-mcp-edge-internal-assertion": INTERNAL_ASSERTION,
+        "x-mcp-edge-principal": Buffer.from(JSON.stringify(principal)).toString("base64url"),
+      }) },
+      body: JSON.stringify(value),
+    });
+    try {
+      expect((await post()).status).toBe(401);
+      expect((await post({ ...PRINCIPAL, userId })).status).toBe(403);
+      const viewer = { subject: `viewer:${userId}`, scopes: ["browser:manual-control"], userId };
+      expect((await post(viewer, { ...body, arbitrary: true })).status).toBe(400);
+      expect((await post(viewer)).status).toBe(204);
+      expect(calls).toEqual([{ input: body, context: { ownerScope: `user:${userId}` } }]);
+    } finally { await http.close(); }
+  });
+
   it("serves the internal live-view frame route only through the signed Edge principal", async () => {
     const config = makeGatewayConfig();
     const calls: unknown[] = [];

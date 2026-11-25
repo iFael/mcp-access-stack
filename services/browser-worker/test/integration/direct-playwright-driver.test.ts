@@ -60,6 +60,32 @@ describe("DirectPlaywrightDriver", () => {
     });
   }, 30_000);
 
+  it("accepts human input on a real Chromium login fixture without retaining its diagnostics", async () => {
+    const driver = await createDriver();
+    const page = driver.currentPage();
+    await page.route("https://manual-fixture.test/**", (route) => route.fulfill({
+      contentType: "text/html",
+      body: '<form id="login"><input id="password" type="password" aria-label="Password"><button>Sign in</button></form><script>document.getElementById("login").onsubmit=(e)=>{e.preventDefault();console.log("manual-fixture-secret-sentinel");document.body.innerHTML="<main>Signed in</main>"};</script>',
+    }));
+    await page.goto("https://manual-fixture.test/");
+    const tab = (await driver.listTabs())[0]!;
+    const manual = driver.beginViewerControl(tab.id!);
+    const viewport = page.viewportSize()!;
+    const field = (await page.locator("#password").boundingBox())!;
+    await manual.input({ kind: "click", x: (field.x + field.width / 2) / viewport.width, y: (field.y + field.height / 2) / viewport.height });
+    await manual.input({ kind: "text", text: "fixture-only-not-a-real-password" });
+    expect(await page.locator("#password").inputValue()).toBe("fixture-only-not-a-real-password");
+    await expect(manual.release()).rejects.toMatchObject({ code: "TASK_SUSPENDED" });
+    await manual.input({ kind: "key", key: "Enter" });
+    await expect(page.locator("main").textContent()).resolves.toBe("Signed in");
+    expect((await driver.liveFrame(tab.id!, 0))?.data.startsWith("/9j/")).toBe(true);
+    await manual.release();
+    expect((await driver.readConsole({ level: "debug" })).text).not.toContain("manual-fixture-secret-sentinel");
+    const snapshot = await driver.captureSemanticSnapshot({ forceFull: true });
+    expect(snapshot.fullContent).toContain("Signed in");
+    expect(snapshot.fullContent).not.toContain("fixture-only-not-a-real-password");
+  }, 30_000);
+
   it("renders a virtual pointer after a headless click without intercepting the page", async () => {
     const driver = await createDriver();
     const page = driver.currentPage();

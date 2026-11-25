@@ -78,6 +78,38 @@ describe("ScopedBrowserWorkerPool", () => {
     await pool.close();
   });
 
+  it("retains a scoped profile only after an explicit owner handback opt-in", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-browser-pool-manual-"));
+    temporaryRoots.push(root);
+    const close = jest.fn(async () => undefined);
+    const viewerControl = jest.fn(async () => undefined);
+    const startWorker = jest.fn(async () => ({
+      client: {
+        open: jest.fn(async () => ({ tab: { taskId: "task-one", tabId: "tab-one" } })),
+        finishTask: jest.fn(async () => ({ completed: true, taskId: "task-one", closedTabs: 1, closedTabIds: ["tab-one"], browserClosed: true })),
+      } as unknown as BrowserExecutor,
+      viewerControl, close,
+    }));
+    const pool = await ScopedBrowserWorkerPool.create({
+      releaseRoot: root, stateRoot: path.join(root, "state"), startWorker: startWorker as never,
+    });
+    const scope = { ownerScope: "user:owner" };
+    const input = { taskId: "task-one", tabId: "tab-one", controlId: "11111111-1111-4111-8111-111111111111", action: "release", keepSession: true } as const;
+    await expect(pool.viewerControl(input, scope)).rejects.toMatchObject({ code: "TASK_NOT_FOUND" });
+    expect(startWorker).not.toHaveBeenCalled();
+    await pool.open({ url: "https://example.test" } as never, scope);
+    await expect(pool.viewerControl(input, { ownerScope: "user:other" })).rejects.toMatchObject({ code: "TASK_NOT_FOUND" });
+    await pool.viewerControl(input, scope);
+    await pool.finishTask({}, scope);
+    expect(close).not.toHaveBeenCalled();
+    await pool.open({ url: "https://example.test" } as never, scope);
+    expect(startWorker).toHaveBeenCalledTimes(1);
+    await pool.viewerControl({ ...input, keepSession: false }, scope);
+    await pool.finishTask({}, scope);
+    expect(close).toHaveBeenCalledTimes(1);
+    await pool.close();
+  });
+
   it("releases the owner worker after the final task finishes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "mcp-v3-browser-pool-finish-"));
     temporaryRoots.push(root);

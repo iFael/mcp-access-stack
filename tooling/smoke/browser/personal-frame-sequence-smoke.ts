@@ -4,6 +4,7 @@
 // and drives legacy frame mutations plus plain ref actions through the bridge.
 // Run: npm run smoke:browser:personal-frames
 // PERSONAL_SMOKE_CHROMIUM overrides the Chromium executable when needed.
+// PERSONAL_SMOKE_ROBUSTNESS_ONLY=1 runs the focused editor/scroll regression.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -23,6 +24,21 @@ const submissions: string[] = [];
 const listHits: string[] = [];
 const consultationPosts: string[] = [];
 const pages: Record<string, (url: URL, port: number) => string> = {
+  "editor-site.test/": () => `<!doctype html><title>Editor geometry fixture</title>
+    <body style="margin:0;width:300vw;height:100vh">
+      <div class="monaco-editor" style="position:fixed;left:75vw;top:80px;width:160vw;height:80px;background:#ddd;overflow:hidden">
+        <textarea id="expression" aria-label="Expression" style="position:absolute;left:1px;top:1px;width:1px;height:1px;padding:0;border:0"></textarea>
+        <span id="visual" style="position:absolute;inset:0">Rendered expression</span>
+      </div>
+      <div id="overlay" style="display:none;position:fixed;inset:0;z-index:99;background:#eee"></div>
+      <p id="count">0</p>
+      <script>
+        document.getElementById("visual").addEventListener("click", () => {
+          document.getElementById("expression").focus({preventScroll:true});
+          const count = document.getElementById("count");
+          count.textContent = String(Number(count.textContent) + 1);
+        });
+      </script>`,
   "parent-site.test/": (_url, port) => `<!doctype html><title>Parent</title>
     <body style="margin:0"><div style="height:900px">Top content</div>
     <iframe name="a" src="http://mid-site.test:${port}/mid"
@@ -226,6 +242,62 @@ async function main(): Promise<void> {
     }
     if (!bridge.isConnected()) throw new Error("The generated extension did not connect to the bridge.");
     report("connection", { ...bridge.connectionInfo(), capabilities: undefined });
+
+    // Real renderer regression: native wheel without coordinates and a
+    // partially visible Monaco-shaped editor. The fixture is local and contains
+    // no real account, workflow, or third-party data.
+    const editorUrl = `http://editor-site.test:${sitePort}/`;
+    const editorTask = "personal-editor-robustness";
+    const editorTab = (await bridge.open({ url: editorUrl, taskId: editorTask })).tab.tabId;
+    const editorPage = context.pages().find((page) => page.url() === editorUrl);
+    if (!editorPage) throw new Error("Editor fixture page is missing.");
+    const editorSnapshot = await bridge.snapshot({ tabId: editorTab });
+    const expressionRef = editorSnapshot.refs.find((ref) => ref.name === "Expression")?.ref;
+    if (!expressionRef) throw new Error("Editor snapshot did not expose the expression input.");
+    await bridge.scroll({ tabId: editorTab, direction: "right", amount: 450 });
+    await editorPage.waitForFunction("window.scrollX > 0", undefined, { timeout: 5000 });
+    const scrollX = await editorPage.evaluate("window.scrollX");
+    const freshEditor = await bridge.snapshot({ tabId: editorTab });
+    const freshRef = freshEditor.refs.find((ref) => ref.name === "Expression")?.ref;
+    if (!freshRef) throw new Error("Expression ref missing after scroll.");
+    await bridge.click({ tabId: editorTab, ref: freshRef });
+    await editorPage.locator("#count").waitFor();
+    if (await editorPage.locator("#count").textContent() !== "1") {
+      throw new Error("Guarded editor click did not reach its rendered surface.");
+    }
+    const index = await bridge.domIndex({ tabId: editorTab, query: "Expression", visibleOnly: true });
+    const indexedRef = index.items.find((item) => item.id === "expression")?.ref;
+    if (!indexedRef) throw new Error("Expression missing from DOM index.");
+    await bridge.frameSequence({ tabId: editorTab, steps: [{ action: "click", locator: { ref: indexedRef } }] });
+    if (await editorPage.locator("#count").textContent() !== "2") {
+      throw new Error("Indexed editor click did not reach its rendered surface.");
+    }
+    await bridge.type({ tabId: editorTab, text: "expression-test" });
+    if (await editorPage.locator("#expression").inputValue() !== "expression-test") {
+      throw new Error("Native typing did not reach the focused editor input.");
+    }
+    await editorPage.locator("#overlay").evaluate((el) => (el as unknown as { style: { display: string } }).style.display = "block");
+    const blocked = await bridge.click({ tabId: editorTab, ref: freshRef })
+      .then(() => "allowed", (error: { code?: string }) => error.code);
+    if (blocked !== "BROWSER_CONFIRMATION_INVALID" || await editorPage.locator("#count").textContent() !== "2") {
+      throw new Error("An unrelated overlay must block editor clicks.");
+    }
+    await editorPage.locator("#overlay").evaluate((el) => (el as unknown as { style: { display: string } }).style.display = "none");
+    await editorPage.locator("#expression").evaluate((el) => {
+      const node = el as unknown as { replaceWith(value: unknown): void; cloneNode(deep: boolean): unknown };
+      node.replaceWith(node.cloneNode(true));
+    });
+    const stale = await bridge.frameSequence({ tabId: editorTab, steps: [{ action: "click", locator: { ref: indexedRef } }] })
+      .then(() => "allowed", (error: { code?: string }) => error.code);
+    if (stale !== "LOCATOR_NOT_FOUND") throw new Error("Replaced editor accepted a stale indexed reference.");
+    const shot = await bridge.screenshot({ tabId: editorTab });
+    if (!shot.sizeBytes) throw new Error("Editor screenshot is empty.");
+    report("editor robustness", { scrollX, clicks: 2, typed: true, overlay: blocked, stale, screenshotBytes: shot.sizeBytes });
+    await bridge.finishTask({ taskId: editorTask });
+    if (process.env.PERSONAL_SMOKE_ROBUSTNESS_ONLY === "1") {
+      console.log("\nPERSONAL BROWSER ROBUSTNESS SMOKE PASS");
+      return;
+    }
 
     // Every extension notification uses the embedded data: icon, which Chrome
     // only loads when the extension's CSP allows it.

@@ -171,10 +171,12 @@ async function main(): Promise<void> {
               taskId: string;
               tabId: string;
               afterSeq: number;
+              controlId?: string;
               signal?: AbortSignal;
             },
             context: { ownerScope: string },
           ) => browserPool.readLiveFrame(input, context),
+          browserViewerControl: (input, context) => browserPool.viewerControl(input, context),
         }),
     workspaceReady: () => reloadable.ready,
     edgeTrust: { internalAssertion },

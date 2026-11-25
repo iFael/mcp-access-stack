@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { AppError } from "@vs-code-gpt/shared";
+import { AppError, type BrowserViewerControlInput } from "@vs-code-gpt/shared";
 import { BrowserWorkerClient } from "../browser/client.js";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
@@ -188,6 +188,7 @@ export class LocalBrowserWorker {
     tabId: string;
     afterSeq: number;
     ownerScope?: string;
+    controlId?: string;
     signal?: AbortSignal;
   }): Promise<BrowserLiveFramePayload | null> {
     const target = new URL("/live/frame", this.url);
@@ -195,6 +196,7 @@ export class LocalBrowserWorker {
       taskId: input.taskId,
       tabId: input.tabId,
       afterSeq: String(input.afterSeq),
+      ...(input.controlId === undefined ? {} : { controlId: input.controlId }),
     }).toString();
     let response: Response;
     try {
@@ -215,6 +217,7 @@ export class LocalBrowserWorker {
       );
     }
     if (response.status === 204) return null;
+    if (response.status === 409) throw new AppError("TASK_SUSPENDED", "Browser live view is under manual control.");
     if (response.status === 404) {
       throw new AppError("TASK_NOT_FOUND", "Browser live view is unavailable.");
     }
@@ -241,6 +244,26 @@ export class LocalBrowserWorker {
       );
     }
     return parsed;
+  }
+
+  async viewerControl(input: BrowserViewerControlInput, ownerScope: string): Promise<void> {
+    try {
+      const response = await (this.options.fetchImpl ?? fetch)(new URL("/live/control", this.url), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          "content-type": "application/json",
+          "x-mcp-owner-scope": ownerScope,
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (response.status === 204) return;
+      throw new AppError("TASK_SUSPENDED", "Manual control is unavailable or busy.");
+    } catch {
+      // Never retain the credential-bearing request or its error cause.
+      throw new AppError("TASK_SUSPENDED", "Manual control is unavailable or busy.");
+    }
   }
 
   async supportsLiveView(): Promise<boolean> {

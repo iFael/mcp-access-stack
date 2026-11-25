@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from "@jest/globals";
+import { Script } from "node:vm";
 import { BrowserLiveViewer } from "../src/control-plane/browser-live-viewer.js";
 
 const sourceRuntime =
@@ -10,7 +11,7 @@ const browserEpoch =
 const base =
   `https://edge.example/viewer/runtime/${sourceRuntime}/${browserEpoch}/task-1/tab-1`;
 
-function fixture() {
+function fixture(manualEnabled = false) {
   const records = new Map<string, unknown>();
   const storage = {
     get: async <T>(key: string) => records.get(key) as T | undefined,
@@ -33,6 +34,7 @@ function fixture() {
       headers: { "content-type": "application/json" },
     }),
   );
+  const control = jest.fn(async (_request: Request, _userId: string, _scope: unknown, _body: string) => new Response(null, { status: 204 }));
   const viewer = new BrowserLiveViewer(storage, {
     authenticate: async (password) =>
       password === "shared"
@@ -46,9 +48,11 @@ function fixture() {
       deviceId === "viewer-device-1",
     authorizeSource: access,
     frame,
+    ...(manualEnabled ? { control } : {}),
   });
   return {
     viewer,
+    control,
     access,
     frame,
     records,
@@ -82,6 +86,47 @@ function cookieHeader(response: Response): string {
 }
 
 describe("BrowserLiveViewer", () => {
+  it("requires a same-origin authenticated runtime viewer and binds control to its exact tab", async () => {
+    const { viewer, control, revokeDevice } = fixture(true);
+    const login = await viewer.handle(loginRequest());
+    const cookie = cookieHeader(login);
+    const page = await viewer.handle(new Request(base, { headers: { cookie } }));
+    const html = await page.text();
+    expect(html).toContain("Assumir controle");
+    expect(html).toContain("Manter sessão até o reinício");
+    expect(() => new Script(html.split("<script>")[1]!.split("</script>")[0]!)).not.toThrow();
+    const send = (body: unknown, useCookie = cookie, origin = "https://edge.example", url = base) =>
+      viewer.handle(new Request(url + "/control", { method: "POST",
+        headers: { cookie: useCookie, origin, "content-type": "application/json" },
+        body: JSON.stringify(body) }));
+    expect((await send({ action: "take" }, "")).status).toBe(401);
+    expect((await send({ action: "take" }, cookie, "https://evil.example")).status).toBe(403);
+    expect((await send({ action: "take", tabId: "other" })).status).toBe(400);
+    expect((await send({ action: "take" }, cookie, "https://edge.example", base.replace("tab-1", "tab-2"))).status).toBe(401);
+    expect(control).not.toHaveBeenCalled();
+    expect((await send({ action: "take" })).status).toBe(204);
+    const first = JSON.parse(control.mock.calls[0]![3]);
+    expect(first).toEqual({ action: "take", taskId: "task-1", tabId: "tab-1", controlId: expect.any(String) });
+    expect((await send({ action: "release", keepSession: true })).status).toBe(204);
+    expect(JSON.parse(control.mock.calls[1]![3])).toEqual({ ...first, action: "release", keepSession: true });
+    revokeDevice();
+    expect((await send({ action: "take" })).status).toBe(401);
+    expect(control).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not expose remote control on personal device viewers", async () => {
+    const { viewer, control } = fixture(true);
+    const deviceUrl = "https://edge.example/viewer/device/dev_11111111-1111-4111-8111-111111111111/task-1/tab-1";
+    const cookie = cookieHeader(await viewer.handle(loginRequest(deviceUrl)));
+    const page = await viewer.handle(new Request(deviceUrl, { headers: { cookie } }));
+    expect(await page.text()).not.toContain("Assumir controle");
+    const response = await viewer.handle(new Request(deviceUrl + "/control", { method: "POST",
+      headers: { cookie, origin: "https://edge.example", "content-type": "application/json" },
+      body: '{"action":"take"}' }));
+    expect(response.status).toBe(403);
+    expect(control).not.toHaveBeenCalled();
+  });
+
   it("keeps separate session cookies for two live tabs", async () => {
     const { viewer } = fixture();
     const second =

@@ -817,7 +817,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
     if (url.pathname.startsWith("/viewer/")) {
       return this.handleBrowserLiveViewer(request);
     }
-    if (url.pathname === "/_viewer/frame") {
+    if (url.pathname === "/_viewer/frame" || url.pathname === "/_viewer/control") {
       return jsonResponse({ error: "not_found" }, 404);
     }
     if (isAllowedEdgeRequest(request.method, `${url.pathname}${url.search}`)) {
@@ -890,7 +890,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
         (await this.accountStore.getActiveDeviceForUser(userId, deviceId)) !== null,
       authorizeSource: (userId, scope) =>
         this.authorizeBrowserViewerSource(userId, scope),
-      frame: async (viewerRequest, userId, scope, afterSeq) => {
+      frame: async (viewerRequest, userId, scope, afterSeq, controlId) => {
         let targetSocket: WebSocket | undefined;
         let protocolVersion:
           | typeof EDGE_PROTOCOL_VERSION
@@ -924,6 +924,7 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           taskId: scope.taskId,
           tabId: scope.tabId,
           afterSeq: String(afterSeq),
+          ...(scope.kind === "runtime" && controlId ? { controlId } : {}),
         }).toString();
         return this.relayAuthenticatedRequestTo(
           new Request(target, { method: "GET", signal: viewerRequest.signal }),
@@ -938,6 +939,25 @@ export class McpSession extends DurableObject<EdgeGatewayEnv> {
           protocolVersion,
           undefined,
           5_000,
+        );
+      },
+      control: async (viewerRequest, userId, scope, body) => {
+        const current = await this.getCurrentPrimaryBrowserAffinity();
+        const targetSocket = this.getExecutionReadyConnector(EDGE_PROTOCOL_VERSION);
+        if (!current || current.runtimeId !== scope.runtimeId ||
+            current.browserEpoch !== scope.browserEpoch || !targetSocket) {
+          return jsonResponse({ error: "browser_offline" }, 503);
+        }
+        const target = new URL(viewerRequest.url);
+        target.pathname = "/_viewer/control";
+        target.search = "";
+        // Authenticated owner input only; the internal route cannot be invoked
+        // through MCP or a public Edge request.
+        return this.relayAuthenticatedRequestTo(
+          new Request(target, { method: "POST", headers: { "content-type": "application/json" }, signal: viewerRequest.signal }),
+          body,
+          { subject: `viewer:${userId}`, scopes: ["browser:manual-control"], ownerScope: "owner", userId },
+          targetSocket, EDGE_PROTOCOL_VERSION, undefined, 10_000,
         );
       },
     });
