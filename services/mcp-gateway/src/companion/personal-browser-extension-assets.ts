@@ -101,7 +101,7 @@ export function buildPersonalBrowserExtensionAssets(
       "declarativeNetRequest", "alarms", "contextMenus"],
     host_permissions: ["http://*/*", "https://*/*"],
     background: { service_worker: "service-worker.js" },
-    action: { default_title: "MCP V3 — compartilhar aba e permitir consultas neste site; clicar novamente revoga" },
+    action: { default_title: "MCP V3 — compartilhar aba e permitir consultas e JavaScript neste site (pode ler e alterar dados); clicar novamente revoga" },
     options_page: "secret-provision.html",
     commands: { "fill-mcp-preparation-secret": { suggested_key: { default: "Ctrl+Shift+8" }, description: "Fill the focused MCP prepare-secret field without showing its value" } },
     // Chrome fetches a notification's data: icon under this policy; without
@@ -827,9 +827,10 @@ async function pushPersonalSiteApprovals() {
   });
 }
 
-// A toolbar share is explicit consent for consultation forms on that tab and origin,
-// not for login, writes, uploads, JavaScript or sensitive actions.
-function grantPersonalSharedConsultation(chromeTabId, expectedOrigin) {
+// The toolbar describes JavaScript access explicitly. This user gesture grants
+// consultations and scripts only for the current tab and exact origin. The
+// normal typed action guards remain separate; scripts can read and modify data.
+function grantPersonalSharedAccess(chromeTabId, expectedOrigin) {
   return withPersonalSiteGrants(async () => {
     const metadata = (await readOwnedTabs())[String(chromeTabId)];
     const tab = await chrome.tabs.get(chromeTabId).catch(() => undefined);
@@ -837,9 +838,12 @@ function grantPersonalSharedConsultation(chromeTabId, expectedOrigin) {
     let origin;
     try { origin = new URL(assertPersonalNavigationTarget(tab.url)).origin; } catch { return false; }
     if (origin !== expectedOrigin) return false;
-    const grant = { origin, category: "consult-form", tabId: PERSONAL_PREFIX + chromeTabId, grantedAt: Date.now() };
+    const tabId = PERSONAL_PREFIX + chromeTabId;
+    const categories = ["consult-form", "execute-script"];
+    const grantedAt = Date.now();
     await changePersonalSiteGrants((grants) => [...grants.filter((candidate) =>
-      candidate.category !== grant.category || candidate.tabId !== grant.tabId), grant]);
+      candidate.tabId !== tabId || candidate.taskId || !categories.includes(candidate.category)),
+      ...categories.map((category) => ({ origin, category, tabId, grantedAt }))]);
     return true;
   });
 }
@@ -2109,10 +2113,17 @@ function inspectPersonalPixelSemanticTarget(expectedUrl, x, y) {
       if (!child || child.readyState === "loading") return { unknown: true };
       const rect = hit.getBoundingClientRect();
       const style = doc.defaultView.getComputedStyle(hit);
+      // As in probePersonalChildFramePoint, compare the visual border box to
+      // integer layout dimensions with tolerance for Chrome's fractional rounding.
       if (style.transform !== "none" || rect.width <= 0 || rect.height <= 0 ||
-          rect.width < hit.clientWidth || rect.height < hit.clientHeight) return { unknown: true };
-      px -= rect.left + hit.clientLeft;
-      py -= rect.top + hit.clientTop;
+          !(Math.abs(rect.width - hit.offsetWidth) <= 2 &&
+            Math.abs(rect.height - hit.offsetHeight) <= 2)) return { unknown: true };
+      px -= rect.left + hit.clientLeft + (parseFloat(style.paddingLeft) || 0);
+      py -= rect.top + hit.clientTop + (parseFloat(style.paddingTop) || 0);
+      const viewport = child.defaultView;
+      if (!viewport || !(px >= 0 && py >= 0 && px < viewport.innerWidth && py < viewport.innerHeight)) {
+        return { unknown: true };
+      }
       frames.push((hit.getAttribute("name") || hit.id || String(frames.length)).slice(0, 100));
       doc = child;
       continue;
@@ -7339,15 +7350,15 @@ async function personalBrowserToolbarClick(tab) {
       await setPersonalSharedBadge(tab.id, false);
       return true;
     }
-    let consultationOrigin;
-    try { consultationOrigin = new URL(assertPersonalNavigationTarget(tab.url)).origin; } catch {}
+    let sharedOrigin;
+    try { sharedOrigin = new URL(assertPersonalNavigationTarget(tab.url)).origin; } catch {}
     await personalTabSharingDispatch({ type: "mcp-tab-share", tabId: tab.id });
     const shared = (await readOwnedTabs())[String(tab.id)];
     if (shared?.ownership !== "user" || !Number.isInteger(shared.mcpGroupId)) {
       await releasePersonalSharedTab(tab.id).catch(() => undefined);
       throw Error("Chrome could not share the tab in an MCP group.");
     }
-    if (consultationOrigin) await grantPersonalSharedConsultation(tab.id, consultationOrigin);
+    if (sharedOrigin) await grantPersonalSharedAccess(tab.id, sharedOrigin);
     return true;
   });
 }
