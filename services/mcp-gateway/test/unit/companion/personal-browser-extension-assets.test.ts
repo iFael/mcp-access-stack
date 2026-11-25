@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.13");
+    expect(manifest.version).toBe("1.17.14");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -2281,6 +2281,12 @@ describe("personal browser extension assets", () => {
     const guard = { ref: "p-7", role: "button", name: "Help", url: "https://example.test/" };
     expect(probe("p-7", guard, false, 21, 40)).toMatchObject({ x: 21, y: 40 });
     expect(probe("p-7", guard, false, 150, 40)).toMatchObject({ error: "point_outside_target" });
+    const originalRect = button.getBoundingClientRect;
+    button.getBoundingClientRect = () => ({ left: 750, top: 0, right: 1050, bottom: 100, width: 300, height: 100 });
+    expect(probe("p-7", guard, false, undefined as unknown as number, undefined as unknown as number))
+      .toMatchObject({ x: 775, y: 50 });
+    expect(probe("p-7", guard, false, 900, 40)).toMatchObject({ error: "point_outside_target" });
+    button.getBoundingClientRect = originalRect;
     expect(probe("p-7", { ...guard, name: "Wrong" }, false, 21, 40))
       .toMatchObject({ error: "target_changed" });
     vm.runInContext('location.href = "https://example.test/#section"', context);
@@ -4033,12 +4039,66 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(session.size).toBe(0);
   });
 
+  it("releases a stuck screenshot capture and permits the next queued operation", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const captureStarted = deferred<void>();
+    const capture = deferred<unknown>();
+    const events: string[] = [];
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      cancellationError: () => Object.assign(new Error("cancelled"), { code: "OPERATION_CANCELLED" }),
+      setTimeout: (callback: () => void) => { timers.set(++nextTimer, callback); return nextTimer; },
+      clearTimeout: (id: number) => timers.delete(id),
+      __mcpV3PersonalTaskDebuggers: held,
+      releasePersonalTaskDebugger: async () => { events.push("release"); held.clear(); },
+      chrome: { debugger: {
+        sendCommand: async (_target: unknown, method: string) => {
+          if (method === "Page.captureScreenshot") {
+            events.push("capture");
+            captureStarted.resolve();
+            return capture.promise;
+          }
+          return {};
+        },
+      } },
+    });
+    vm.runInContext("const mutationQueues = new Map();", context);
+    vm.runInContext(extractFunction(serviceWorker, "screenshot"), context);
+    vm.runInContext(extractFunction(serviceWorker, "enqueueMutation"), context);
+    const screenshot = vm.runInContext("screenshot", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const enqueue = vm.runInContext("enqueueMutation", context) as <T>(key: string, work: () => Promise<T>) => Promise<T>;
+    const signal = new AbortController();
+    const first = enqueue("tab:personal:7", () => screenshot({ tabId: "personal:7" }, signal.signal));
+    const result = first.catch((error: { code: string }) => error.code);
+    await captureStarted.promise;
+    const second = enqueue("tab:personal:7", async () => { events.push("next"); return "ready"; });
+    for (const callback of [...timers.values()]) callback();
+    // The CDP capture itself never settles until after the queue recovers.
+    let safetyTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { safetyTimer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("BROWSER_WORKER_TIMEOUT");
+      await expect(second).resolves.toBe("ready");
+      expect(events).toEqual(["capture", "release", "next"]);
+      expect(timers.size).toBe(0);
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      capture.resolve({});
+    }
+  });
+
   it("captures a bounded CSS viewport region using page scroll offsets and device scale", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ name: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
       MAX_FULL_PAGE_PIXELS: 40_000_000,
       MAX_SCREENSHOT_BASE64_CHARS: 3_000_000,
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -4124,7 +4184,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.13");
+    expect(parsedManifest.version).toBe("1.17.14");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");

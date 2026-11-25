@@ -6083,16 +6083,44 @@ async function screenshot(input, signal, reportPhase) {
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "screenshot", false);
   const target = { tabId: chromeTabId };
+  const key = String(chromeTabId);
   let attached = false;
+  let held;
+  let interrupted = false;
+  // Screenshot CDP commands are observational. Do not keep the tab queue
+  // waiting forever for a renderer reply after their deadline/cancellation.
+  async function command(method, params) {
+    throwIfAborted(signal, "screenshot", false);
+    let timer;
+    let onAbort;
+    try {
+      const limit = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          interrupted = true;
+          reject(coded("BROWSER_WORKER_TIMEOUT", "Screenshot CDP command timed out: " + method));
+        }, 12000);
+        onAbort = () => {
+          interrupted = true;
+          reject(cancellationError("screenshot", signal, false));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+      return await Promise.race([limit, chrome.debugger.sendCommand(target, method, params)]);
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
   try {
     if (input.zoom !== undefined && !input.region) {
       throw coded("INVALID_ARGUMENT", "Zoom magnifies a clipped region; provide region.");
     }
     reportPhase?.("debugger-attach");
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(key);
     throwIfAborted(signal, "screenshot", false);
     reportPhase?.("cdp-enable");
-    await chrome.debugger.sendCommand(target, "Page.enable");
+    await command("Page.enable");
     throwIfAborted(signal, "screenshot", false);
     let clip;
     if (input.region) {
@@ -6101,7 +6129,7 @@ async function screenshot(input, signal, reportPhase) {
       }
       const box = input.region;
       reportPhase?.("cdp-layout");
-      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      const metrics = await command("Page.getLayoutMetrics");
       throwIfAborted(signal, "screenshot", false);
       const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
       const { x, y, width, height } = box;
@@ -6118,7 +6146,7 @@ async function screenshot(input, signal, reportPhase) {
       let scale = 1;
       if (input.scale === "device") {
         reportPhase?.("cdp-dpr");
-        const dpr = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+        const dpr = await command("Runtime.evaluate", {
           expression: "window.devicePixelRatio", returnByValue: true,
         });
         scale = Number(dpr?.result?.value);
@@ -6139,7 +6167,7 @@ async function screenshot(input, signal, reportPhase) {
     }
     if (input.fullPage === true) {
       reportPhase?.("cdp-layout");
-      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      const metrics = await command("Page.getLayoutMetrics");
       throwIfAborted(signal, "screenshot", false);
       const contentSize = metrics?.cssContentSize ?? metrics?.contentSize;
       const width = Math.ceil(Number(contentSize?.width));
@@ -6157,7 +6185,7 @@ async function screenshot(input, signal, reportPhase) {
     for (const quality of [80, 65, 50]) {
       throwIfAborted(signal, "screenshot", false);
       reportPhase?.("cdp-capture");
-      const captured = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+      const captured = await command("Page.captureScreenshot", {
         format: "jpeg",
         quality,
         fromSurface: true,
@@ -6189,6 +6217,16 @@ async function screenshot(input, signal, reportPhase) {
   } finally {
     reportPhase?.("debugger-detach");
     await detachGuardedDebugger(target, attached).catch(() => undefined);
+    // Retire only the task-owned debugger we actually used. A viewport,
+    // dialog, network capture or recording may still own/borrow that session.
+    // Never detach a replacement session or replay a pending input command.
+    if (interrupted && held && globalThis.__mcpV3PersonalTaskDebuggers?.get(key) === held &&
+        !globalThis.__mcpV3PersonalViewportSessions?.has(key) &&
+        !globalThis.__mcpV3PersonalDialogArms?.has(key) &&
+        !globalThis.__mcpV3PersonalNetworkCaptures?.has(key) &&
+        !globalThis.__mcpV3PersonalRecordings?.has(key)) {
+      await releasePersonalTaskDebugger(chromeTabId);
+    }
   }
 }
 
@@ -7093,11 +7131,12 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
   if (focus) element.focus?.();
   const rect = clickSurface.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
-  const editorSurface = editorPointRef || clickSurface !== element;
-  const left = editorSurface ? Math.max(0, rect.left) : rect.left;
-  const topEdge = editorSurface ? Math.max(0, rect.top) : rect.top;
-  const right = editorSurface ? Math.min(innerWidth, rect.right) : rect.right;
-  const bottom = editorSurface ? Math.min(innerHeight, rect.bottom) : rect.bottom;
+  // Use the visible intersection for every semantic target, not only editors.
+  // Explicit coordinates and the final hit test must still match the same element.
+  const left = Math.max(0, rect.left);
+  const topEdge = Math.max(0, rect.top);
+  const right = Math.min(innerWidth, rect.right);
+  const bottom = Math.min(innerHeight, rect.bottom);
   const x = coordinateX == null ? (left + right) / 2 : coordinateX;
   const y = coordinateY == null ? (topEdge + bottom) / 2 : coordinateY;
   if (right <= left || bottom <= topEdge ||
