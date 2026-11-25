@@ -1133,6 +1133,8 @@ export const browserProgressPlanSchema = z
       endedAt: z.iso.datetime().optional(),
     }).strict()).min(1).max(20),
     updatedAt: z.iso.datetime(),
+    activity: z.object({ status: z.enum(["running", "waiting", "idle"]), observedAt: z.iso.datetime() }).strict().optional(),
+    observedSteps: z.array(browserProgressStepSchema.extend({ startedAt: z.iso.datetime().optional(), endedAt: z.iso.datetime().optional() }).strict()).max(20).optional(),
     /** When its card was last shown; an older card of the plan folds into one line. */
     shownAt: z.iso.datetime().optional(),
   })

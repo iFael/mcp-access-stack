@@ -4,6 +4,7 @@ import {
   COMPANION_PROTOCOL_VERSION,
   COMPANION_AUDIT_FEATURE,
   PROGRESS_FEATURE,
+  PERSISTENT_PROGRESS_FEATURE,
   COMPANION_UPDATE_FEATURE,
   WAKE_EVENTS_CAPABILITY,
   UPDATE_WAKE_CAPABILITY,
@@ -111,6 +112,8 @@ export class CompanionConnector {
   private socket: WebSocket | undefined;
   private edgeTakesUserMessages = false;
   private edgeTakesProgress = false;
+  private edgeTakesPersistentProgress = false;
+  private pendingPersistentProgress = new Map<string, WakeEvent>();
   // Only the latest steps of each plan matter.
   private pendingProgress = new Map<string, ProgressUpdate>();
   private edgeTakesCompanionUpdates = false;
@@ -192,6 +195,25 @@ export class CompanionConnector {
     this.flushProgress();
   }
 
+  sendPersistentProgress(event: WakeEvent): void {
+    if (event.kind === "update") return;
+    const key = `${event.kind}:${event.workspaceId}:${event.kind === "task" ? event.taskId : event.watchId}`;
+    this.pendingPersistentProgress.delete(key);
+    this.pendingPersistentProgress.set(key, event);
+    while (this.pendingPersistentProgress.size > 100) this.pendingPersistentProgress.delete(this.pendingPersistentProgress.keys().next().value!);
+    this.flushPersistentProgress();
+  }
+
+  private flushPersistentProgress(): void {
+    const socket = this.socket;
+    if (!this.edgeTakesPersistentProgress || !socket || socket.readyState !== WebSocket.OPEN) return;
+    for (const [key, event] of this.pendingPersistentProgress) {
+      try { socket.send(JSON.stringify({ type: "companion-wake-event", protocolVersion: COMPANION_PROTOCOL_VERSION, event })); }
+      catch { return; }
+      this.pendingPersistentProgress.delete(key);
+    }
+  }
+
   private flushProgress(): void {
     const socket = this.socket;
     if (!this.edgeTakesProgress || !socket || socket.readyState !== WebSocket.OPEN) return;
@@ -267,6 +289,7 @@ export class CompanionConnector {
       this.registered = false;
       this.edgeTakesUserMessages = false;
       this.edgeTakesProgress = false;
+      this.edgeTakesPersistentProgress = false;
       this.edgeTakesCompanionUpdates = false;
       const clearHeartbeat = () => {
         if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -378,9 +401,11 @@ export class CompanionConnector {
       this.log({ event: "local_runtime_registered", deviceId: message.deviceId });
       this.edgeTakesUserMessages = socket === this.socket && message.features?.includes("userMessagesV1") === true;
       this.edgeTakesProgress = socket === this.socket && message.features?.includes(PROGRESS_FEATURE) === true;
+      this.edgeTakesPersistentProgress = socket === this.socket && message.features?.includes(PERSISTENT_PROGRESS_FEATURE) === true;
       this.edgeTakesCompanionUpdates = socket === this.socket && message.features?.includes(COMPANION_UPDATE_FEATURE) === true;
       if (this.options.pendingUserMessages) this.announceUserMessages(this.options.pendingUserMessages());
       this.flushProgress();
+      this.flushPersistentProgress();
       this.flushCompanionUpdateStatus();
       if (socket === this.socket && message.features?.includes(COMPANION_AUDIT_FEATURE)) {
         this.options.auditQueue?.connect((batch) => {

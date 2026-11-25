@@ -2338,8 +2338,531 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "Reuse the same planId; for releases reconcile the same updateId with mcp_fluxo operation=update_mcp action=read.",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v14.html",
+      "openai/toolInvocation/invoked": "Fluxo",
+      "openai/toolInvocation/invoking": "Abrindo Fluxo",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ],
+      "ui": {
+        "resourceUri": "ui://mcp-v3/progress-v14.html"
+      }
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Single Fluxo card for every MCP V3 job. Call action=open once per conversation (title and steps optional), or action=show with planId to recover it. Use browser_progress_update to update the existing card without remounting. Native tools contribute observed progress, including correlated runtime outcomes. For an authorized MCP release only, set operation=update_mcp, workspaceId=mcp-access-stack and action=start with exact expectedMainSha; read, confirm and resume use the same updateId and the native release ledger. Never start a second release to recover an uncertain outcome. The Edge handles plan actions; release permissions and confirmations remain unchanged. Next: Reuse the same planId; for releases reconcile the same updateId with mcp_fluxo operation=update_mcp action=read.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "open",
+            "show",
+            "update",
+            "start",
+            "read",
+            "confirm",
+            "resume"
+          ],
+          "type": "string"
+        },
+        "confirmationId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedMainSha": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "operation": {
+          "const": "update_mcp",
+          "type": "string"
+        },
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "updateId": {
+          "pattern": "^upd_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "mcp_fluxo",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "activity": {
+          "additionalProperties": false,
+          "properties": {
+            "observedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "running",
+                "waiting",
+                "idle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "observedAt"
+          ],
+          "type": "object"
+        },
+        "observedSteps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "planId": {
+          "pattern": "^plan_[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        "shownAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        },
+        "update": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "activeBefore": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "companionTag": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "confirmation": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "confirmationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasons": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "step": {
+                      "enum": [
+                        "oracle_prepare",
+                        "oracle_promote",
+                        "windows_prepare",
+                        "windows_promote"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "confirmationId",
+                    "reasons",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                },
+                "createdAt": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "message": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "mainSha": {
+                  "pattern": "^[a-f0-9]{40}$",
+                  "type": "string"
+                },
+                "planId": {
+                  "pattern": "^plan_[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "skipped": {
+                  "items": {
+                    "enum": [
+                      "precheck",
+                      "edge_stage",
+                      "edge_activate",
+                      "connector_tag",
+                      "connector_release",
+                      "oracle_prepare",
+                      "oracle_promote",
+                      "oracle_verify",
+                      "companion_release",
+                      "windows_prepare",
+                      "windows_promote"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "enum": [
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "needs_confirmation"
+                  ],
+                  "type": "string"
+                },
+                "step": {
+                  "enum": [
+                    "precheck",
+                    "edge_stage",
+                    "edge_activate",
+                    "connector_tag",
+                    "connector_release",
+                    "oracle_prepare",
+                    "oracle_promote",
+                    "oracle_verify",
+                    "companion_release",
+                    "windows_prepare",
+                    "windows_promote"
+                  ],
+                  "type": "string"
+                },
+                "tag": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "updateId": {
+                  "pattern": "^upd_[0-9a-f-]{36}$",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workflows": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "activate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "bootstrap": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "companion": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "release": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    },
+                    "stage": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "operationId": {
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                          "type": "string"
+                        },
+                        "runId": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "operationId"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "updateId",
+                "mainSha",
+                "status",
+                "step",
+                "skipped",
+                "workflows",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "title": "MCP Fluxo"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v13.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v14.html",
       "openai/toolInvocation/invoked": "Atualização do MCP",
       "openai/toolInvocation/invoking": "Atualizando o MCP",
       "securitySchemes": [
@@ -2351,7 +2874,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v13.html"
+        "resourceUri": "ui://mcp-v3/progress-v14.html"
       }
     },
     "annotations": {
@@ -2360,7 +2883,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Publishes the exact MAIN to the execution node by itself, in the fixed order of the release guide: Edge catalog stage and activate when the contract changes, connector tag and signed release, then prepare_release and promote_release there, and checks /health. Then it publishes the Windows companion built by MAIN's CI and has the user's companion prepare and promote it in its MCP Access Stack workspace; the updater task applies the swap within minutes and nothing touches a Scheduled Task. Use it only when the user asked to update or publish MCP V3; that request covers the whole sequence. action=start moves a plan card step by step: pass the planId of the conversation's card when there is one, and the card takes the shape of the update; without it, the update opens its own. Its result carries the planId: as in every job, write your text first and end each answer about the update with browser_progress and only that planId, so the card, with the user's message field while the update runs, sits under your text. action=start returns at once; end your answer and you are woken when the update succeeds, fails or needs a confirmation. action=read shows the update; action=confirm continues one that needs a confirmation, with the confirmationId the user approved. action=resume continues a failed update from the step that failed, once its cause is fixed: a failed workflow is dispatched again, nothing done before is redone. It never repeats a dispatch, a prepare or a promote by itself. When it stops on an error, the user's request to update already covers fixing it: find the cause, fix it and resume on your own, without waiting for the user, and tell them what failed and what you did; ask them only for a confirmation or a step you cannot take. Next: end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
+    "description": "Compatibility entry for MCP releases during catalog migration. Prefer mcp_fluxo operation=update_mcp. Retains the exact native release contract and ledger. Next: end your answer; you are woken when it stops, then mcp_update action=read with the updateId.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -2671,7 +3194,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       ],
       "type": "object"
     },
-    "title": "Update MCP V3 on the execution node and Windows"
+    "title": "MCP update (compatibility)"
   },
   {
     "_meta": {
@@ -28251,7 +28774,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   {
     "_meta": {
       "io.github.ifael/next-step": "browser_progress_update with the planId when a step changes.",
-      "openai/outputTemplate": "ui://mcp-v3/progress-v13.html",
+      "openai/outputTemplate": "ui://mcp-v3/progress-v14.html",
       "openai/toolInvocation/invoked": "Etapas",
       "openai/toolInvocation/invoking": "Atualizando as etapas",
       "openai/widgetAccessible": true,
@@ -28264,7 +28787,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         }
       ],
       "ui": {
-        "resourceUri": "ui://mcp-v3/progress-v13.html"
+        "resourceUri": "ui://mcp-v3/progress-v14.html"
       }
     },
     "annotations": {
@@ -28273,7 +28796,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Shows the user, in the chat, a card with the plan of this conversation's work: a short title and the steps, each done, doing, todo, failed or skipped, in the user's language. Call it once at the start of every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work), before the job's first other call; only an answer that uses no MCP V3 tool goes without it. Keep the planId it returns: when a step starts or ends, or the plan changes as you talk, call browser_progress_update with the whole new list, and the same card follows by itself. When the user asks for something more while the job goes on, add it to the plan as a new step, so nothing they asked is lost. browser_progress with only the planId also answers with the plan as it is now: call it when you lose track of the job, after a long pause or a summary of the conversation, to see again what was asked, what is done and what remains. A step may say in detail why it waits (\"na fila do GitHub\") and link to its GitHub page. Open the progress card once at task start; update it in place using browser_progress_update, including at task completion. Do not call browser_progress again merely to move it to the bottom of the chat: each call can mount a new visual instance and cause flicker. Reopen only when the user explicitly asks to show the card or recovery requires it. One conversation uses one planId. When the work turns to something else (an update, a change in a repository, a web search, the browser), keep the same planId and reshape the card with browser_progress_update: a new title for what you do now and the steps of that flow. The progress card contains only the steps, without a message field or send control. Messages, when needed, use the separate browser_user_messages tool or the Chrome extension. Every other MCP V3 result ends with a \"Card:\" line that reminds you of this. Next: browser_progress_update with the planId when a step changes.",
+    "description": "Legacy compatibility entry for the Fluxo card. Prefer mcp_fluxo action=open or action=show; reuse the same planId and browser_progress_update for in-place changes. Never open a duplicate card. Next: browser_progress_update with the planId when a step changes.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -28345,6 +28868,77 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activity": {
+          "additionalProperties": false,
+          "properties": {
+            "observedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "running",
+                "waiting",
+                "idle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "observedAt"
+          ],
+          "type": "object"
+        },
+        "observedSteps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
         "planId": {
           "pattern": "^plan_[0-9a-f-]{36}$",
           "type": "string"
@@ -28426,7 +29020,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
-      "io.github.ifael/next-step": "while the job goes on, end your answer with browser_progress and only the planId.",
+      "io.github.ifael/next-step": "Keep the existing card; reopen only on explicit request or recovery.",
       "securitySchemes": [
         {
           "scopes": [
@@ -28442,7 +29036,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Changes the plan opened with browser_progress (its planId): send the whole list of steps each time, with their new states, and title only to rename it. The card already in the chat follows; no new card appears. Next: while the job goes on, end your answer with browser_progress and only the planId.",
+    "description": "Changes the plan opened with browser_progress (its planId): send the whole list of steps each time, with their new states, and title only to rename it. The card already in the chat follows; no new card appears. Next: Keep the existing card; reopen only on explicit request or recovery.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -28518,6 +29112,77 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activity": {
+          "additionalProperties": false,
+          "properties": {
+            "observedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "running",
+                "waiting",
+                "idle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "observedAt"
+          ],
+          "type": "object"
+        },
+        "observedSteps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
         "planId": {
           "pattern": "^plan_[0-9a-f-]{36}$",
           "type": "string"
@@ -28712,6 +29377,77 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "activity": {
+          "additionalProperties": false,
+          "properties": {
+            "observedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "running",
+                "waiting",
+                "idle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "observedAt"
+          ],
+          "type": "object"
+        },
+        "observedSteps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "endedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "link": {
+                "pattern": "^https:\\/\\/github\\.com\\/[^\\s\"<>]{1,280}$",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "done",
+                  "doing",
+                  "todo",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
         "planId": {
           "pattern": "^plan_[0-9a-f-]{36}$",
           "type": "string"
@@ -30812,15 +31548,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "9e4afb29c41bbe0ed1206e0b07b23e3c3612749ecb71ee663360e91a4f3e6e9a",
-  "serverVersion": "0.4.0-catalog.c9e4afb29c41b.s8ad4760e9b6e",
-  "toolCount": 134,
-  "toolSetRevision": "8ad4760e9b6e7e6cbe1af7eb3fd5184431a45a8b657ef57c19a036d4de305273"
+  "contractRevision": "b80c4bc87be21846604ea9ffb4c39c8dd09ff1aaa45350b3e00fd965a16eaf60",
+  "serverVersion": "0.4.0-catalog.cb80c4bc87be2.s811b25e3744b",
+  "toolCount": 135,
+  "toolSetRevision": "811b25e3744b41d7f968d9c7883a5a109e5eede784aac4730c01b31b9117e059"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c9e4afb29c41b.s8ad4760e9b6e"
+  "version": "0.4.0-catalog.cb80c4bc87be2.s811b25e3744b"
 } as const;
 
-export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every job the user asks for that uses MCP V3 (an update, a change, a fix, an investigation, browser work) gets the plan card, one per conversation: before the first other MCP V3 call, call browser_progress once with a short title and the plan as steps, add each new ask as a step, and when the work turns to another flow keep the planId and reshape the card (title and steps; pass the planId to mcp_update action=start); then, whenever a step or the plan changes, browser_progress_update with its planId and the whole list (the same card follows), ending with every step in its final state. A card shows where its call is made, so write your text first and end every answer with the cards: browser_progress with only that planId, and nothing after it. The progress card displays only steps, without a message field. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";
+export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

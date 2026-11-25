@@ -27,9 +27,9 @@ describe("the next step the Edge adds to each result", () => {
     expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: PLAN_CARD_REMINDER }] } });
   });
 
-  it("leaves errors, other tools and other answers alone", async () => {
+  it("keeps error outcomes and adds only the card reminder; other answers stay unchanged", async () => {
     const failed = { jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: "No." }] } };
-    expect(await (await attachNextStep(call("git_commit"), json(failed), steps)).json()).toEqual(failed);
+    expect(await (await attachNextStep(call("git_commit"), json(failed), steps)).json()).toEqual({ ...failed, result: { ...failed.result, content: [...failed.result.content, { type: "text", text: PLAN_CARD_REMINDER }] } });
     const plain = { jsonrpc: "2.0", id: 1, result: { content: [] } };
     expect(await (await attachNextStep(call("browser_progress"), json(plain), steps)).json()).toEqual(plain);
     expect(await (await attachNextStep(call("browser_user_messages"), json(plain), steps)).json()).toEqual(plain);

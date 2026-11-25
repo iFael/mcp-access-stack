@@ -66,7 +66,7 @@ export function checkpointFromNativeTool(
   if(!REPOSITORY.test(repositoryId))return null;
   const args=object(input),data=object(structured);
   if(!args||!data)return null;
-  if(tool==="mcp_update"){
+  if(tool==="mcp_update" || (tool==="mcp_fluxo" && args.operation==="update_mcp")){
     if(args.workspaceId!=="mcp-access-stack")return null;
     const update=object(data.update);
     if(!update||!["succeeded","failed"].includes(String(update.status))||

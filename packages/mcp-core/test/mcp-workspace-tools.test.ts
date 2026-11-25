@@ -599,6 +599,21 @@ describe("registerWorkspaceTools", () => {
     expect(executor.calls).toEqual(["mcpUpdate:start","mcpUpdate:read"]);
   });
 
+  it("executes only typed release operations through the generic Fluxo tool", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer({name:"test",version:"0.0.0"},{capabilities:{tools:{}}});
+    registerWorkspaceTools(server,executor,{includeTools:["mcp_fluxo"],securitySchemes:[{type:"noauth"}]});
+    const tool = registeredTools(server).mcp_fluxo!;
+    const extra = {signal:new AbortController().signal};
+    const release = await tool.handler({operation:"update_mcp",action:"start",workspaceId:"mcp-access-stack",expectedMainSha:"a".repeat(40)},extra);
+    expect(release.isError).toBeFalsy();
+    expect((release.content as Array<{text:string}>)[0]!.text).toContain("Next: mcp_fluxo");
+    for (const args of [{action:"start",workspaceId:"mcp-access-stack",expectedMainSha:"a".repeat(40)}, {operation:"update_mcp",action:"open",workspaceId:"mcp-access-stack"}, {operation:"update_mcp",action:"start",workspaceId:"mcp-access-stack",expectedMainSha:"a".repeat(40),title:"invalid"}]) {
+      expect((await tool.handler(args,extra)).isError).toBe(true);
+    }
+    expect(executor.calls).toEqual(["mcpUpdate:start"]);
+  });
+
   it("registers only the requested subset", async () => {
     const executor = new MockWorkspaceExecutor();
     const server = new McpServer(
@@ -2109,8 +2124,8 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(26);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(69);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(69);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(70);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(70);
     expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
   });
 

@@ -9,7 +9,7 @@ import { createGatewayApplication } from "./app.js";
 import { BrowserModeRouter } from "./browser/browser-mode-router.js";
 import { CompanionConnector, DEFAULT_COMPANION_CAPABILITIES } from "./companion/connector.js";
 import { CloudAuditQueue } from "./companion/cloud-audit-queue.js";
-import { COMPANION_UPDATE_CAPABILITY, UPDATE_WAKE_CAPABILITY, WAKE_EVENTS_CAPABILITY } from "@mcp-access-stack/edge-protocol";
+import { COMPANION_UPDATE_CAPABILITY, UPDATE_WAKE_CAPABILITY, WAKE_EVENTS_CAPABILITY, type WakeEvent } from "@mcp-access-stack/edge-protocol";
 import { DesktopOAuthClient } from "./companion/desktop-oauth.js";
 import { acquireCompanionInstanceLock } from "./companion/companion-instance-lock.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners } from "./companion/local-repository-manager.js";
@@ -105,16 +105,22 @@ async function main(): Promise<void> {
       });
     }
   });
+  let connector: CompanionConnector | undefined;
+  const earlyProgress: WakeEvent[] = [];
+  const forwardProgress = (event: WakeEvent): void => {
+    chatWake.queue(event);
+    if (connector) connector.sendPersistentProgress(event);
+    else { earlyProgress.push(event); if (earlyProgress.length > 100) earlyProgress.shift(); }
+  };
   const reloadable = new ReloadableLocalAgent({
     auditSink: cloudAudit,
     ...(elevationBroker === undefined ? {} : { elevationBroker }),
-    onBackgroundTaskFinished: (event) => chatWake.queue({ kind: "task", taskId: event.taskId, workspaceId: event.workspaceId,
+    onBackgroundTaskFinished: (event) => forwardProgress({ kind: "task", taskId: event.taskId, workspaceId: event.workspaceId,
       state: event.state, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }) }),
-    onCommitChecksWatchFinished: (event) => chatWake.queue({ kind: "checks", watchId: event.watchId,
+    onCommitChecksWatchFinished: (event) => forwardProgress({ kind: "checks", watchId: event.watchId,
       workspaceId: event.workspaceId, repository: `${event.owner}/${event.repository}`, commitSha: event.commitSha,
       state: event.state }),
   });
-  let connector: CompanionConnector | undefined;
   let repositories!: LocalRepositoryManager;
 
   const reloadLocalRuntime = async (): Promise<void> => {
@@ -257,6 +263,7 @@ async function main(): Promise<void> {
         writeLog({ event: "mcp_v3_companion_update_failed", error: asAppError(error).toJSON() }));
     },
   });
+  for (const event of earlyProgress.splice(0)) connector.sendPersistentProgress(event);
   await companionUpdates.recover();
 
   const controller = new AbortController();

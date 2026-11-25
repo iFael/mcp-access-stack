@@ -83,7 +83,7 @@ describe("embedded gateway HTTP surface", () => {
         tool._meta = meta;
         if (["browser_user_messages", "browser_user_reply", "browser_progress_read", "browser_user_card"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }], "openai/widgetAccessible": true });
-        } else if (["browser_progress", "mcp_update"].includes(String(tool.name))) {
+        } else if (["browser_progress", "mcp_update", "mcp_fluxo"].includes(String(tool.name))) {
           expect(tool._meta).toMatchObject({ securitySchemes: [{ type: "noauth" }],
             "openai/outputTemplate": expect.stringMatching(/^ui:\/\/mcp-v3\//u) });
         } else if (tool.name === "browser_progress_update") {

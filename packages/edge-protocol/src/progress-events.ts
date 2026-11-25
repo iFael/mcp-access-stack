@@ -6,6 +6,7 @@
 // it is waiting (detail) and a GitHub page that shows it (link).
 
 export const PROGRESS_FEATURE = "progressV1" as const;
+export const PERSISTENT_PROGRESS_FEATURE = "persistentProgressV1" as const;
 
 export const PROGRESS_STEP_STATES = ["done", "doing", "todo", "failed", "skipped"] as const;
 export type ProgressStepState = (typeof PROGRESS_STEP_STATES)[number];
