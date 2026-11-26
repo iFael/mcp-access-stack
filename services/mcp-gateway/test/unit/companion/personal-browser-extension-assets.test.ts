@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.16");
+    expect(manifest.version).toBe("1.17.17");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -949,6 +949,7 @@ describe("personal browser extension assets", () => {
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
     let pageUrl = "https://example.com/";
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown, _input: unknown,
         point: unknown) => point,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
@@ -1728,6 +1729,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<Record<string, unknown>> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       innerWidth: 800, innerHeight: 600, location: { href: "https://example.com/" },
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -1772,6 +1774,7 @@ describe("personal browser extension assets", () => {
     let readyAfter = 2;
     let url = "https://example.com/";
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       innerWidth: 0, innerHeight: 0, location: { href: url },
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
@@ -1810,6 +1813,188 @@ describe("personal browser extension assets", () => {
     context.location.href = "https://other.example/";
     await expect(scroll(input)).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
     expect(commands).toHaveLength(1);
+  });
+
+  it.each(["mousePressed", "mouseReleased"])("bounds an unacknowledged click %s without replaying it", async (stalledType) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const dispatched = deferred<void>();
+    const ack = deferred<unknown>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      probeGuardedElement: () => ({ x: 20, y: 25 }),
+      revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown,
+        _input: unknown, point: unknown) => point,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held,
+      __mcpV3PersonalPendingInput: new Map(),
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
+        debugger: {
+          sendCommand: async (_target: unknown, _method: string, params: { type: string }) => {
+            events.push(params.type);
+            if (params.type === stalledType) { dispatched.resolve(); return ack.promise; }
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "click"), context);
+    const click = vm.runInContext("click", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const signal = new AbortController();
+    const first = click({ tabId: "personal:7", ref: "target", guard: {
+      url: "https://example.com/", ref: "target",
+    } }, signal.signal);
+    const result = first.then(() => "completed", (error: { code: string }) => error.code);
+    await dispatched.promise;
+    signal.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      const expected = stalledType === "mousePressed"
+        ? ["mouseMoved", "mousePressed", "retire"]
+        : ["mouseMoved", "mousePressed", "mouseReleased", "retire"];
+      expect(events).toEqual(expected);
+      expect(context.__mcpV3PersonalPendingInput.size).toBe(0);
+    } finally {
+      clearTimeout(timer);
+      ack.resolve({});
+      await result;
+    }
+  });
+
+  it("bounds a stalled wheel, retires only the task-owned debugger and releases the tab queue", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const wheelStarted = deferred<void>();
+    const wheel = deferred<unknown>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      setTimeout, clearTimeout,
+      __mcpV3PersonalTaskDebuggers: held,
+      __mcpV3PersonalPendingInput: new Map(),
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
+        debugger: {
+          sendCommand: async (_target: unknown, _method: string, params: { type: string }) => {
+            events.push(params.type);
+            wheelStarted.resolve();
+            return wheel.promise;
+          },
+        },
+      },
+    });
+    vm.runInContext("const mutationQueues = new Map();", context);
+    for (const name of ["scroll", "enqueueMutation"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const scroll = vm.runInContext("scroll", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const enqueue = vm.runInContext("enqueueMutation", context) as <T>(key: string, work: () => Promise<T>) => Promise<T>;
+    const signal = new AbortController();
+    const first = enqueue("tab:personal:7", () => scroll({ tabId: "personal:7",
+      guard: { url: "https://example.com/" }, direction: "down", amount: 700 }, signal.signal));
+    const result = first.catch((error: { code: string }) => error.code);
+    await wheelStarted.promise;
+    const second = enqueue("tab:personal:7", async () => { events.push("next"); return "ready"; });
+    signal.abort("deadline");
+    let safetyTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { safetyTimer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      await expect(second).resolves.toBe("ready");
+      expect(events).toEqual(["mouseWheel", "retire", "next"]);
+      expect(context.__mcpV3PersonalPendingInput.size).toBe(0);
+    } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      wheel.resolve({});
+      await first.catch(() => undefined);
+      await second;
+    }
+  });
+
+  it("keeps an unresolved wheel fenced when a shared debugger must not be detached", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const wheel = deferred<unknown>();
+    const held = { arm: () => undefined };
+    const viewport = { borrowers: 1 };
+    const fences = new Map();
+    const events: string[] = [];
+    const context = vm.createContext({
+      setTimeout, clearTimeout, performance,
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalTaskDebuggers: new Map([["7", held]]),
+      __mcpV3PersonalViewportSessions: new Map([["7", viewport]]),
+      releasePersonalTaskDebugger: async () => { events.push("retire"); return true; },
+      chromeTabIdFrom: (id: string) => Number(id.split(":")[1]),
+      refuseDuringPersonalHandoff: async () => undefined,
+      refusePausedPersonalTab: async () => undefined,
+      throwIfAborted: () => undefined,
+      mutationQueueKey: (_operation: string, input: { tabId: string }) => "tab:" + input.tabId,
+      perform: async () => { events.push("perform"); return "ready"; },
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+    });
+    vm.runInContext("const mutationQueues = new Map();", context);
+    for (const name of ["recoverInterruptedPersonalInput", "runRequest", "enqueueMutation"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const recover = vm.runInContext("recoverInterruptedPersonalInput", context) as
+      (target: unknown, attached: boolean, held: unknown, pending: Promise<unknown>) => Promise<void>;
+    const request = vm.runInContext("runRequest", context) as
+      (operation: string, input: unknown, signal: AbortSignal) => Promise<unknown>;
+    await recover({ tabId: 7 }, false, held, wheel.promise);
+    expect(viewport.borrowers).toBe(0);
+    expect(fences.has("7")).toBe(true);
+    const signal = new AbortController().signal;
+    await expect(request("click", { tabId: "personal:7" }, signal))
+      .rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+    await expect(request("snapshot", { tabId: "personal:8" }, signal)).resolves.toBe("ready");
+    expect(events).toEqual(["perform"]);
+    wheel.resolve({});
+    await wheel.promise;
+    expect(fences.has("7")).toBe(false);
+    await expect(request("snapshot", { tabId: "personal:7" }, signal)).resolves.toBe("ready");
+    expect(events).toEqual(["perform", "perform"]);
+  });
+
+  it("does not release the recovery fence until a stalled detach is acknowledged", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const wheel = deferred<unknown>();
+    const detach = deferred<boolean>();
+    const detachStarted = deferred<void>();
+    const held = { arm: () => undefined };
+    const fences = new Map();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const context = vm.createContext({
+      setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalTaskDebuggers: new Map([["7", held]]),
+      releasePersonalTaskDebugger: async () => { detachStarted.resolve(); return detach.promise; },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "recoverInterruptedPersonalInput"), context);
+    const recover = vm.runInContext("recoverInterruptedPersonalInput", context) as
+      (target: unknown, attached: boolean, held: unknown, pending: Promise<unknown>) => Promise<void>;
+    const recovering = recover({ tabId: 7 }, false, held, wheel.promise);
+    await detachStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    await recovering;
+    expect(fences.has("7")).toBe(true);
+    detach.resolve(true);
+    await detach.promise;
+    // The mocked async detach and the recovery continuation run in separate microtasks.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fences.has("7")).toBe(false);
+    wheel.resolve({});
+    expect(timers.size).toBe(0);
   });
 
   it("does not dispatch a scroll after its deadline expires during debugger attachment", async () => {
@@ -1893,7 +2078,7 @@ describe("personal browser extension assets", () => {
     let detachCount = 0;
     let targetChangedOnHover = false;
     const context = vm.createContext({
-      Number, String, RegExp, Object, Array,
+      Number, String, RegExp, Object, Array, setTimeout, clearTimeout,
       delay: async () => undefined,
       chromeTabIdFrom: () => 7,
       probeGuardedElement: () => ({ x: 30, y: 40 }),
@@ -2956,6 +3141,7 @@ describe("personal browser extension assets", () => {
     const origins: unknown[] = [];
     const emitted: Array<Record<string, unknown>> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -2990,7 +3176,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: Array<{ method: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
-      Number, Math,
+      Number, Math, setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       probeGuardedElement: () => ({ x: 20, y: 25 }),
       requireOwnedMetadata: async () => ({}),
@@ -3093,7 +3279,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const inputs: Array<{ method: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
-      Map, Set, Number, Array, String, crypto: { randomUUID: () => "uuidax" },
+      Map, Set, Number, Array, String, setTimeout, clearTimeout, crypto: { randomUUID: () => "uuidax" },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -4433,7 +4619,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.16");
+    expect(parsedManifest.version).toBe("1.17.17");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -5776,6 +5962,10 @@ function extractFunction(source: string, name: string): string {
           return ["safeNetworkUrl", "safeNetworkHeaders", "safeNetworkBody",
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
             .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
+        }
+        if (["click", "scroll"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
+          return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
+            .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
         if (name !== "attachGuardedDebugger" && name !== "detachGuardedDebugger" &&
             name !== "borrowPersonalDebugger" &&

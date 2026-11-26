@@ -5,6 +5,7 @@
 // Run: npm run smoke:browser:personal-frames
 // PERSONAL_SMOKE_CHROMIUM overrides the Chromium executable when needed.
 // PERSONAL_SMOKE_ROBUSTNESS_ONLY=1 runs the focused editor/scroll regression.
+// PERSONAL_SMOKE_CDP_RECOVERY_ONLY=1 injects lost acknowledgements in an isolated profile.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -24,6 +25,18 @@ const submissions: string[] = [];
 const listHits: string[] = [];
 const consultationPosts: string[] = [];
 const pages: Record<string, (url: URL, port: number) => string> = {
+  "recovery-site.test/": () => `<!doctype html><title>CDP recovery fixture</title>
+    <body style="margin:0;height:300vh"><div style="position:fixed;top:20px;left:20px">
+      <button id="increase">Increase</button><p id="clicks">Count 0</p><p id="wheels">0</p>
+    </div><script>
+      let clicks = 0, wheels = 0;
+      document.getElementById("increase").addEventListener("click", () => {
+        document.getElementById("clicks").textContent = "Count " + (++clicks);
+      });
+      window.addEventListener("wheel", () => {
+        document.getElementById("wheels").textContent = String(++wheels);
+      }, {passive:true});
+    </script>`,
   "editor-site.test/": () => `<!doctype html><title>Editor geometry fixture</title>
     <body style="margin:0;width:300vw;height:100vh">
       <div class="monaco-editor" style="position:fixed;left:75vw;top:80px;width:160vw;height:80px;background:#ddd;overflow:hidden">
@@ -262,8 +275,22 @@ async function main(): Promise<void> {
   if (originalScript.split(listener).length !== 2) {
     throw new Error("Chrome notification listener was not found exactly once in the smoke extension.");
   }
-  await writeFile(extensionScript, originalScript.replace(listener,
-    "chrome.notifications?.onButtonClicked?.addListener(globalThis.__mcpSmokeNotificationClick = (id, buttonIndex) => {"));
+  let smokeScript = originalScript.replace(listener,
+    "chrome.notifications?.onButtonClicked?.addListener(globalThis.__mcpSmokeNotificationClick = (id, buttonIndex) => {");
+  if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
+    // Lose only the acknowledgement after one real Chrome input command.
+    // The fixture observes the actual effect; no production extension is patched.
+    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"]]) {
+      const needle = "await waitPersonalInputAcknowledgement(" + expression + ", signal, \"" + operation + "\"";
+      if (smokeScript.split(needle).length !== 2) throw new Error("Lost-ack smoke hook missing: " + operation);
+      const drop = "(globalThis.__mcpSmokeDropAck === \"" + operation +
+        "\" ? (globalThis.__mcpSmokeDropAck = undefined, " + expression +
+        ".then(() => new Promise(() => undefined))) : " + expression + ")";
+      smokeScript = smokeScript.replace(needle,
+        "await waitPersonalInputAcknowledgement(" + drop + ", signal, \"" + operation + "\"");
+    }
+  }
+  await writeFile(extensionScript, smokeScript);
   let context: BrowserContext | undefined;
   try {
     context = await chromium.launchPersistentContext(path.join(root, "profile"), {
@@ -286,6 +313,44 @@ async function main(): Promise<void> {
     }
     if (!bridge.isConnected()) throw new Error("The generated extension did not connect to the bridge.");
     report("connection", { ...bridge.connectionInfo(), capabilities: undefined });
+
+    if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
+      const url = `http://recovery-site.test:${sitePort}/`;
+      const taskId = "personal-cdp-recovery";
+      const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+      const page = await waitForFixturePage(context, url);
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://"));
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      await bridge.snapshot({ tabId });
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'scroll'");
+      const wheel = await bridge.scroll({ tabId, direction: "down", amount: 600 })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (wheel !== "EXECUTION_OUTCOME_UNKNOWN") throw new Error("Lost wheel acknowledgement was not reported: " + wheel);
+      await page.waitForFunction("window.scrollY > 0");
+      if (await page.locator("#wheels").textContent() !== "1") throw new Error("Wheel was replayed or not dispatched.");
+      const shot = await bridge.screenshot({ tabId });
+      if (!shot.sizeBytes) throw new Error("Screenshot did not recover after the wheel timeout.");
+      const beforeClick = await bridge.snapshot({ tabId });
+      const button = beforeClick.refs.find(ref => ref.name === "Increase");
+      if (!button) throw new Error("Missing recovery fixture button.");
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'click'");
+      const click = await bridge.click({ tabId, ref: button.ref })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (click !== "EXECUTION_OUTCOME_UNKNOWN") throw new Error("Lost click acknowledgement was not reported: " + click);
+      if (await page.locator("#clicks").textContent() !== "Count 1") throw new Error("Click was replayed or not dispatched.");
+      const fresh = await bridge.snapshot({ tabId });
+      const freshButton = fresh.refs.find(ref => ref.name === "Increase");
+      if (!freshButton) throw new Error("Missing button after debugger recovery.");
+      const result = await bridge.click({ tabId, ref: freshButton.ref, expect: { text: "Count 2" } });
+      if (result.unverified !== false || await page.locator("#clicks").textContent() !== "Count 2") {
+        throw new Error("Subsequent guarded click did not recover.");
+      }
+      report("CDP lost-ack recovery", { wheel, click, scrollY: await page.evaluate("window.scrollY"),
+        wheelEvents: 1, clickEvents: 2, screenshotBytes: shot.sizeBytes, nextClickVerified: true });
+      await bridge.finishTask({ taskId });
+      console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
+      return;
+    }
 
     if (process.env.PERSONAL_SMOKE_INTERACTION_QUALITY_ONLY === "1") {
       const candidate = bridge.connectionInfo().capabilities.includes("clickPostconditionV1");
