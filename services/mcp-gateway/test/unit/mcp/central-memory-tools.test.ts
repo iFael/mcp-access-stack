@@ -45,7 +45,7 @@ describe("public central-memory tools",()=>{
     const client=await fixture("user:alice");
     const list=await client.listTools();
     expect(list.tools.map(tool=>tool.name)).toContain("memory_context");
-    expect(list.tools.map(tool=>tool.name)).toContain("memory_update");
+    expect(list.tools.find(tool=>tool.name==="memory_update")?.description).toContain("Create and revise require recordId, expectedRevision, kind, confidence, title, content and evidenceRefs");
     expect(list.tools.map(tool=>tool.name)).toContain("memory_recovery_export");
     const recovery=await client.callTool({name:"memory_recovery_export",arguments:{
       workspaceId:"mcp-access-stack",repositoryId:repo,kind:"events",
