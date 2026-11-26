@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.18");
+    expect(manifest.version).toBe("1.17.19");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -4535,6 +4535,96 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(session.size).toBe(0);
   });
 
+  it("bounds screenshot recovery when the exact debugger detach also stalls", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const capture = deferred<unknown>();
+    const captureStarted = deferred<void>();
+    const detach = deferred<boolean>();
+    const detachStarted = deferred<void>();
+    const fences = new Map();
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      setTimeout: (fn: () => void) => { timers.set(++nextTimer, fn); return nextTimer; },
+      clearTimeout: (id: number) => timers.delete(id),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalTaskDebuggers: held,
+      releasePersonalTaskDebugger: async () => { detachStarted.resolve(); return detach.promise; },
+      chrome: { debugger: { sendCommand: async (_: unknown, method: string) => {
+        if (method === "Page.captureScreenshot") { captureStarted.resolve(); return capture.promise; }
+        return {};
+      } } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "screenshot"), context);
+    const screenshot = vm.runInContext("screenshot", context) as (input: unknown) => Promise<unknown>;
+    const result = screenshot({ tabId: "personal:7" }).catch((error: { code: string }) => error.code);
+    await captureStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    await detachStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("BROWSER_WORKER_TIMEOUT");
+      expect(fences.has("7")).toBe(true);
+      detach.resolve(true);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(fences.has("7")).toBe(false);
+    } finally {
+      if (timer) clearTimeout(timer);
+      detach.resolve(true);
+      capture.resolve({});
+      await result;
+    }
+  });
+
+  it("bounds a lost hover acknowledgement without replaying movement", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const move = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      setTimeout, clearTimeout,
+      __mcpV3PersonalPendingInput: fences, __mcpV3PersonalTaskDebuggers: held,
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
+        debugger: { sendCommand: async (_: unknown, _method: string, params: { type: string }) => {
+          events.push(params.type); started.resolve(); return move.promise;
+        } },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "hover"), context);
+    const hover = vm.runInContext("hover", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const result = hover({ tabId: "personal:7", ref: "target",
+      guard: { url: "https://example.com/", ref: "target" } }, controller.signal)
+      .catch((error: { code: string }) => error.code);
+    await started.promise;
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      expect(events).toEqual(["mouseMoved", "retire"]);
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      move.resolve({});
+      await result;
+    }
+  });
+
   it("releases a stuck screenshot capture and permits the next queued operation", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const captureStarted = deferred<void>();
@@ -4551,7 +4641,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       setTimeout: (callback: () => void) => { timers.set(++nextTimer, callback); return nextTimer; },
       clearTimeout: (id: number) => timers.delete(id),
       __mcpV3PersonalTaskDebuggers: held,
-      releasePersonalTaskDebugger: async () => { events.push("release"); held.clear(); },
+      __mcpV3PersonalPendingInput: new Map(),
+      releasePersonalTaskDebugger: async () => { events.push("release"); held.clear(); return true; },
       chrome: { debugger: {
         sendCommand: async (_target: unknown, method: string) => {
           if (method === "Page.captureScreenshot") {
@@ -4680,7 +4771,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.18");
+    expect(parsedManifest.version).toBe("1.17.19");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -6024,7 +6115,7 @@ function extractFunction(source: string, name: string): string {
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
             .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
-        if (["click", "scroll"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
+        if (["click", "scroll", "hover", "screenshot"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
           return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
             .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }

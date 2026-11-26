@@ -289,7 +289,7 @@ async function main(): Promise<void> {
   if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
     // Lose only the acknowledgement after one real Chrome input command.
     // The fixture observes the actual effect; no production extension is patched.
-    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"]]) {
+    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"], ["hover", "pending"]]) {
       const needle = "await waitPersonalInputAcknowledgement(" + expression + ", signal, \"" + operation + "\"";
       if (smokeScript.split(needle).length !== 2) throw new Error("Lost-ack smoke hook missing: " + operation);
       const drop = "(globalThis.__mcpSmokeDropAck === \"" + operation +
@@ -298,6 +298,12 @@ async function main(): Promise<void> {
       smokeScript = smokeScript.replace(needle,
         "await waitPersonalInputAcknowledgement(" + drop + ", signal, \"" + operation + "\"");
     }
+    const captureNeedle = 'const pending = chrome.debugger.sendCommand(target, method, params);';
+    if (smokeScript.split(captureNeedle).length !== 2) throw new Error("Screenshot lost-ack hook missing.");
+    smokeScript = smokeScript.replace(captureNeedle,
+      'const pending = chrome.debugger.sendCommand(target, method, params).then(value => ' +
+      'method === "Page.captureScreenshot" && globalThis.__mcpSmokeDropAck === "screenshot" ' +
+      '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value);');
   }
   await writeFile(extensionScript, smokeScript);
   let context: BrowserContext | undefined;
@@ -354,8 +360,22 @@ async function main(): Promise<void> {
       if (result.unverified !== false || await page.locator("#clicks").textContent() !== "Count 2") {
         throw new Error("Subsequent guarded click did not recover.");
       }
-      report("CDP lost-ack recovery", { wheel, click, scrollY: await page.evaluate("window.scrollY"),
-        wheelEvents: 1, clickEvents: 2, screenshotBytes: shot.sizeBytes, nextClickVerified: true });
+      const hoverRef = (await bridge.snapshot({ tabId })).refs.find(ref => ref.name === "Run history");
+      if (!hoverRef) throw new Error("Missing recovery fixture hover target.");
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'hover'");
+      const hover = await bridge.hover({ tabId, ref: hoverRef.ref })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (hover !== "EXECUTION_OUTCOME_UNKNOWN" || !(await page.getByRole("link", { name: "Run history" }).evaluate(el => el.matches(":hover")))) {
+        throw new Error("Lost hover acknowledgement or actual hover effect was not verified: " + hover);
+      }
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'screenshot'");
+      const capture = await bridge.screenshot({ tabId })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (capture !== "BROWSER_WORKER_TIMEOUT") throw new Error("Lost capture acknowledgement was not reported: " + capture);
+      const recoveredShot = await bridge.screenshot({ tabId });
+      if (!recoveredShot.sizeBytes) throw new Error("Capture did not recover after the timeout.");
+      report("CDP lost-ack recovery", { wheel, click, hover, capture, scrollY: await page.evaluate("window.scrollY"),
+        wheelEvents: 1, clickEvents: 2, screenshotBytes: shot.sizeBytes, recoveredScreenshotBytes: recoveredShot.sizeBytes, nextClickVerified: true });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
       return;

@@ -2419,23 +2419,29 @@ async function hover(input, signal) {
   throwIfAborted(signal, "hover", false);
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
   try {
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
     if (!pixel && input.ref.startsWith("ax-")) {
       point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     } else if (pixel) {
       point = await revalidatePersonalClickAfterAttach(chromeTabId, target, input,
         point, pixel, attached, signal);
     }
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    throwIfAborted(signal, "hover", false);
+    const pending = chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, button: "none",
     });
+    await waitPersonalInputAcknowledgement(pending, signal, "hover", value => { interrupted = value; });
     return { tabId: input.tabId, completed: true };
   } catch (error) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted);
+    else await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -6329,26 +6335,28 @@ async function screenshot(input, signal, reportPhase) {
   const key = String(chromeTabId);
   let attached = false;
   let held;
-  let interrupted = false;
+  let interrupted;
   // Screenshot CDP commands are observational. Do not keep the tab queue
   // waiting forever for a renderer reply after their deadline/cancellation.
   async function command(method, params) {
     throwIfAborted(signal, "screenshot", false);
     let timer;
     let onAbort;
+    const pending = chrome.debugger.sendCommand(target, method, params);
     try {
       const limit = new Promise((_, reject) => {
         timer = setTimeout(() => {
-          interrupted = true;
+          interrupted = pending;
           reject(coded("BROWSER_WORKER_TIMEOUT", "Screenshot CDP command timed out: " + method));
         }, 12000);
         onAbort = () => {
-          interrupted = true;
+          interrupted = pending;
           reject(cancellationError("screenshot", signal, false));
         };
         signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) onAbort();
       });
-      return await Promise.race([limit, chrome.debugger.sendCommand(target, method, params)]);
+      return await Promise.race([limit, pending]);
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
@@ -6459,17 +6467,10 @@ async function screenshot(input, signal, reportPhase) {
     );
   } finally {
     reportPhase?.("debugger-detach");
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
-    // Retire only the task-owned debugger we actually used. A viewport,
-    // dialog, network capture or recording may still own/borrow that session.
-    // Never detach a replacement session or replay a pending input command.
-    if (interrupted && held && globalThis.__mcpV3PersonalTaskDebuggers?.get(key) === held &&
-        !globalThis.__mcpV3PersonalViewportSessions?.has(key) &&
-        !globalThis.__mcpV3PersonalDialogArms?.has(key) &&
-        !globalThis.__mcpV3PersonalNetworkCaptures?.has(key) &&
-        !globalThis.__mcpV3PersonalRecordings?.has(key)) {
-      await releasePersonalTaskDebugger(chromeTabId);
-    }
+    // Use the same bounded recovery and exact-session fence as native input.
+    // A late observational reply must not leave a newer operation blocked.
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted);
+    else await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
