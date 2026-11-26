@@ -2302,7 +2302,7 @@ describe("personal browser extension assets", () => {
     const context = vm.createContext({ WebSocket: FakeSocket, BRIDGE_URL: "ws://localhost/",
       inFlightRequests: pending, endAllPersonalRecordings: () => undefined,
       clearTimeout: () => undefined, setTimeout: () => 1 });
-    vm.runInContext("let socket; let reconnectTimer;", context);
+    vm.runInContext("let socket; let reconnectTimer; let reconnectFailures = 0;", context);
     vm.runInContext(extractFunction(serviceWorker, "connect"), context);
     const connect = vm.runInContext("connect", context) as () => void;
     connect();
@@ -2322,6 +2322,56 @@ describe("personal browser extension assets", () => {
     second.onclose?.();
     expect(newRequest.signal.aborted).toBe(true);
     expect(vm.runInContext("socket", context)).toBeUndefined();
+  });
+
+  it("backs off repeated short connections and never bypasses a pending reconnect timer", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const connections: FakeSocket[] = [];
+    class FakeSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = 0;
+      onopen?: () => void;
+      onclose?: (event: { code: number }) => void;
+      constructor() { connections.push(this); }
+    }
+    let clock = 0;
+    const scheduled: Array<{ callback: () => void; ms: number }> = [];
+    const context = vm.createContext({
+      WebSocket: FakeSocket, BRIDGE_URL: "ws://localhost/",
+      inFlightRequests: new Map(), endAllPersonalRecordings: () => undefined,
+      performance: { now: () => clock }, Math: Object.assign(Object.create(Math), { random: () => 0 }),
+      send: () => undefined, PROTOCOL_VERSION: 1, EXTENSION_VERSION: "test", CAPABILITIES: [],
+      pushPersonalSiteApprovals: () => undefined, pushPersonalTaskMessages: () => undefined,
+      pushPersonalWakeSettings: () => undefined,
+      clearTimeout: () => undefined,
+      setTimeout: (callback: () => void, ms: number) => scheduled.push({ callback, ms }),
+    });
+    vm.runInContext("let socket; let reconnectTimer; let reconnectFailures = 0;", context);
+    vm.runInContext(extractFunction(serviceWorker, "connect"), context);
+    const connect = vm.runInContext("connect", context) as () => void;
+    connect();
+    for (const expected of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+      const connection = connections.at(-1)!;
+      connection.readyState = FakeSocket.OPEN;
+      connection.onopen?.();
+      connection.onclose?.({ code: 4000 });
+      expect(scheduled).toHaveLength(1);
+      const timer = scheduled.shift()!;
+      expect(timer.ms).toBe(expected);
+      const count = connections.length;
+      connect(); // Heartbeat, startup and installation share the same gate.
+      expect(connections).toHaveLength(count);
+      clock += timer.ms;
+      timer.callback();
+      expect(connections).toHaveLength(count + 1);
+    }
+    const stable = connections.at(-1)!;
+    stable.readyState = FakeSocket.OPEN;
+    stable.onopen?.();
+    clock += 60_000;
+    stable.onclose?.({ code: 1006 });
+    expect(scheduled[0]?.ms).toBe(1000);
   });
 
   it("generates the extension mutation queue from the shared mutation contract", () => {

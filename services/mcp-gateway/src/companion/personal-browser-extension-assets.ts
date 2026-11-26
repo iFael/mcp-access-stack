@@ -133,6 +133,7 @@ const MUTATING_OPERATIONS = new Set(${JSON.stringify(PERSONAL_BROWSER_MUTATING_O
 
 let socket;
 let reconnectTimer;
+let reconnectFailures = 0;
 let ownershipTail = Promise.resolve();
 const inFlightRequests = new Map();
 const mutationQueues = new Map();
@@ -420,6 +421,8 @@ async function reloadPersonalExtensionWhenIdle(expectedVersion) {
 }
 
 function connect() {
+  // All entry points, including heartbeat and startup, honor the same backoff.
+  if (reconnectTimer !== undefined) return;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   // A closing socket can be superseded by the periodic reconnect. Its work
   // must stop, and its callbacks must never invalidate the new connection.
@@ -429,8 +432,10 @@ function connect() {
   }
   const connection = new WebSocket(BRIDGE_URL);
   socket = connection;
+  let openedAt;
   connection.onopen = () => {
     if (socket !== connection) return;
+    openedAt = performance.now();
     send({
       type: "hello",
       protocolVersion: PROTOCOL_VERSION,
@@ -452,8 +457,15 @@ function connect() {
     socket = undefined;
     for (const controller of inFlightRequests.values()) controller.abort("disconnected");
     endAllPersonalRecordings();
-    clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connect, 1000);
+    // A hello/open alone is not proof of stability: competing clients can
+    // replace each other immediately after every successful handshake.
+    if (openedAt !== undefined && performance.now() - openedAt >= 60000) reconnectFailures = 0;
+    const delayMs = Math.min(30000, Math.round(1000 * 2 ** reconnectFailures * (1 + Math.random() * 0.25)));
+    reconnectFailures = Math.min(reconnectFailures + 1, 5);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      connect();
+    }, delayMs);
   };
 }
 
