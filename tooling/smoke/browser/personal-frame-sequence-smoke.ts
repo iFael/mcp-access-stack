@@ -8,6 +8,7 @@
 // PERSONAL_SMOKE_CDP_RECOVERY_ONLY=1 injects lost acknowledgements in an isolated profile.
 // PERSONAL_SMOKE_FRAME_RECOVERY_ONLY=1 focuses on direct and nested frame input recovery.
 // PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
+// PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -48,6 +49,11 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("wheels").textContent = String(++wheels);
       }, {passive:true});
     </script>`,
+  "capture-site.test/": url => `<!doctype html><title>Capture ${url.searchParams.has("other") ? "B" : "A"}</title>
+    <body style="margin:0;height:1800px;background:${url.searchParams.has("other") ? "#184a90" : "#b83224"}">
+      <div style="width:240px;height:160px;background:#eee">Capture ${url.searchParams.has("other") ? "B" : "A"}</div>
+      <div style="position:absolute;top:1500px;width:200px;height:100px;background:#222;color:#fff">Below viewport</div>
+    </body>`,
   "recovery-site.test/runs": () => "<!doctype html><title>Run history</title><p>Run history destination</p>",
   "frame-recovery-site.test/": (url, port) => `<!doctype html><title>Frame recovery</title>
     <iframe name="content" src="http://${url.searchParams.has("nested") ? "frame-recovery-mid.test" : "recovery-site.test"}:${port}/"
@@ -609,6 +615,81 @@ async function main(): Promise<void> {
       }
       await bridge.finishTask({ taskId: frameTask });
       console.log("\nPERSONAL BROWSER FRAME RECOVERY PASS");
+      return;
+    }
+
+    if (process.env.PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY === "1") {
+      const url = `http://capture-site.test:${sitePort}/`;
+      const taskId = "personal-background-capture";
+      const target = (await bridge.open({ url, taskId })).tab.tabId;
+      const targetPage = await waitForFixturePage(context, url);
+      const other = (await bridge.open({ url: url + "?other=1", taskId })).tab.tabId;
+      await waitForFixturePage(context, url + "?other=1");
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://"));
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      const targetChrome = Number(target.split(":")[1]);
+      const otherChrome = Number(other.split(":")[1]);
+      const selection = () => worker.evaluate(`Promise.all([chrome.tabs.get(${targetChrome}), chrome.tabs.get(${otherChrome})]).then(tabs => tabs.map(tab => tab.active))`) as Promise<boolean[]>;
+      const modes = [
+        ["viewport", {}],
+        ["region", { region: { x: 300, y: 100, width: 120, height: 80 }, scale: "css" }],
+        ["fullPage", { fullPage: true }],
+      ] as const;
+      const capture = async (tabId: string, options: (typeof modes)[number][1]) => {
+        const started = performance.now();
+        const shot = await bridge.screenshot({ tabId, ...options });
+        const data = (shot as typeof shot & { contentBase64?: string }).contentBase64;
+        if (!data || !shot.sizeBytes) throw new Error("Missing screenshot bytes");
+        const elapsedMs = Math.round(performance.now() - started);
+        // Decode the actual JPEG returned by MCP; do not compare encoded bytes
+        // (Chrome can change rendering/encoding when a tab loses selection).
+        const pixels = await worker.evaluate(`(async () => {
+          const bytes = Uint8Array.from(atob(${JSON.stringify(data)}), char => char.charCodeAt(0));
+          const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+          const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(bitmap, 0, 0);
+          const rgb = [...ctx.getImageData(Math.floor(bitmap.width * .7), Math.floor(bitmap.height * .3), 1, 1).data].slice(0, 3);
+          bitmap.close();
+          return rgb;
+        })()`) as number[];
+        return { size: jpegSize(Buffer.from(data, "base64")), pixels, elapsedMs };
+      };
+      await bridge.selectTab({ tabId: target });
+      if ((await selection()).join(",") !== "true,false") throw new Error("Target selection not confirmed.");
+      const baselines = [];
+      for (const [name, options] of modes) {
+        const foreground = await capture(target, options);
+        baselines.push({ name, options, foreground });
+      }
+      await bridge.selectTab({ tabId: other });
+      const before = await selection();
+      if (before.join(",") !== "false,true") throw new Error("Target is not inactive.");
+      for (const { name, options, foreground } of baselines) {
+        const otherImage = await capture(other, options);
+        const matches = (actual: number[], expected: number[]) => actual.length === 3 &&
+          actual.every((value, i) => Math.abs(value - (expected[i] ?? -999)) <= 12);
+        if (!matches(foreground.pixels, [184, 50, 36]) || !matches(otherImage.pixels, [24, 74, 144])) {
+          throw new Error("Distinct fixture identity not established: " + JSON.stringify({ foreground, otherImage }));
+        }
+        for (let sample = 0; sample < 2; sample++) {
+          const background = await capture(target, options);
+          const after = await selection();
+          const identityMatches = matches(background.pixels, [184, 50, 36]);
+          const wrongTab = matches(background.pixels, [24, 74, 144]);
+          const geometryMatches = name === "region" ? background.size.width === 120 && background.size.height === 80
+            : name === "fullPage" ? background.size.height >= 1800 : background.size.width === foreground.size.width;
+          report("background screenshot", { name, sample, foregroundMs: foreground.elapsedMs,
+            backgroundMs: background.elapsedMs, foregroundSize: foreground.size, size: background.size,
+            pixels: background.pixels, identityMatches, wrongTab, geometryMatches,
+            selection: after, visibility: await targetPage.evaluate("document.visibilityState") });
+          if (!identityMatches || wrongTab || !geometryMatches || after.join(",") !== "false,true") {
+            throw new Error("Inactive screenshot identity/selection mismatch: " + name);
+          }
+        }
+      }
+      await bridge.finishTask({ taskId });
+      console.log("\nPERSONAL BROWSER BACKGROUND CAPTURE PASS");
       return;
     }
 
