@@ -34,6 +34,8 @@ export type WorkspaceKind = z.infer<typeof workspaceKindSchema>;
 export const workspaceLimitsSchema = z
   .object({
     maxFileBytes: z.number().int().positive(),
+    // Explicit opt-in for hash-only deletion; existing limits remain unchanged by default.
+    maxDeleteFileBytes: z.number().int().positive().max(64 * 1024 * 1024).optional(),
     maxSearchResults: z.number().int().positive(),
     maxSearchSnippetBytes: z.number().int().positive(),
     maxDiffBytes: z.number().int().positive(),

@@ -198,8 +198,9 @@ export class FileService {
     if (!initial.isFile() || initial.isSymbolicLink()) {
       throw new AppError("NOT_A_FILE", "Deletion requires an existing regular file.");
     }
-    if (initial.size > workspace.limits.maxFileBytes) {
-      throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace file-size limit.");
+    const maxDeleteFileBytes = workspace.limits.maxDeleteFileBytes ?? workspace.limits.maxFileBytes;
+    if (initial.size > maxDeleteFileBytes) {
+      throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace deletion-size limit.");
     }
     // Read through the opened descriptor, not by reopening the pathname.
     // This does not authorize destructive deletion; it only narrows the
@@ -211,7 +212,7 @@ export class FileService {
         other.isFile() && !other.isSymbolicLink() &&
         other.dev === opened.dev && other.ino === opened.ino &&
         other.size === opened.size && other.mtimeMs === opened.mtimeMs;
-      if (!sameIdentity(initial) || opened.size > workspace.limits.maxFileBytes) {
+      if (!sameIdentity(initial) || opened.size > maxDeleteFileBytes) {
         throw new AppError("INVALID_ARGUMENT", "Opened file identity changed during deletion dry-run.");
       }
       const openedPath = await realpath(authorized.absolutePath);
@@ -221,7 +222,7 @@ export class FileService {
       if (!stillAuthorized || !sameIdentity(await lstat(authorized.absolutePath))) {
         throw new AppError("INVALID_ARGUMENT", "Deletion dry-run target was redirected.");
       }
-      const currentHash = hashBuffer(await handle.readFile());
+      const currentHash = await hashDeletionTarget(handle, opened.size);
       const latest = await handle.stat();
       if (!sameIdentity(latest) || !sameIdentity(await lstat(authorized.absolutePath))) {
         throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion dry-run.");
@@ -278,7 +279,9 @@ export class FileService {
           moved = true;
           if (!sameIdentity(await lstat(staged)) ||
               !sameIdentity(await handle.stat()) ||
-              hashBuffer(await readFile(staged)) !== currentHash ||
+              await hashDeletionTarget(handle, opened.size) !== currentHash ||
+              !sameIdentity(await handle.stat()) ||
+              !sameIdentity(await lstat(staged)) ||
               await realpath(pinnedParent) !== parentPath) {
             throw new AppError("INVALID_ARGUMENT", "Staged inode is not the authorized file.");
           }
@@ -369,4 +372,24 @@ export class FileService {
       dryRun,
     };
   }
+}
+
+// Positional reads allow the same validated descriptor to be hashed again after
+// the pinned rename. Read at most the observed size plus one EOF probe.
+async function hashDeletionTarget(handle: FileHandle, size: number): Promise<string> {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (position < size) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, size - position), position);
+    if (bytesRead === 0) {
+      throw new AppError("INVALID_ARGUMENT", "File size changed during deletion validation.");
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  if ((await handle.read(buffer, 0, 1, position)).bytesRead !== 0) {
+    throw new AppError("INVALID_ARGUMENT", "File size changed during deletion validation.");
+  }
+  return hash.digest("hex");
 }
