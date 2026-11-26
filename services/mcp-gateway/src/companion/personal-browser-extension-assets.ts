@@ -185,7 +185,7 @@ async function waitPersonalDebuggerTransition(pending, onTimeout) {
     const limit = new Promise((_, reject) => {
       timer = setTimeout(() => {
         onTimeout?.();
-        reject(coded("BROWSER_WORKER_TIMEOUT", "Chrome debugger transition did not complete; no new input was dispatched."));
+        reject(coded("BROWSER_WORKER_TIMEOUT", "Chrome debugger transition did not complete."));
       }, 8000);
     });
     return await Promise.race([pending, limit]);
@@ -235,9 +235,26 @@ async function attachGuardedDebugger(target) {
   return await waitPersonalDebuggerTransition(attaching, () => { abandoned = true; });
 }
 
+async function detachPersonalDebugger(target, onDetached) {
+  const key = String(target.tabId);
+  const transitions = globalThis.__mcpV3PersonalDebuggerTransitions;
+  if (transitions?.has(key)) {
+    throw coded("EXECUTION_STATE_INVALID", "A Chrome debugger transition is already pending.");
+  }
+  const fence = globalThis.__mcpV3PersonalPendingInput?.get(key);
+  const detaching = chrome.debugger.detach(target).then(() => {
+    if (onDetached) onDetached();
+    fence?.detached?.();
+  });
+  transitions?.set(key, detaching);
+  const clear = () => { if (transitions?.get(key) === detaching) transitions.delete(key); };
+  void detaching.then(clear, clear);
+  await waitPersonalDebuggerTransition(detaching);
+}
+
 async function detachGuardedDebugger(target, attached) {
   if (attached) {
-    await chrome.debugger.detach(target);
+    await detachPersonalDebugger(target);
     return;
   }
   const key = String(target.tabId);
@@ -252,7 +269,7 @@ async function detachGuardedDebugger(target, attached) {
     dialog.borrowers -= 1;
     if (dialog.closing && dialog.borrowers === 0) {
       globalThis.__mcpV3PersonalDialogArms?.delete(key);
-      if (dialog.attached) await chrome.debugger.detach(target).catch(() => undefined);
+      if (dialog.attached) await detachPersonalDebugger(target).catch(() => undefined);
       else {
         const network = globalThis.__mcpV3PersonalNetworkCaptures?.get(key);
         if (network) network.borrowers = Math.max(0, (network.borrowers ?? 0) - 1);
@@ -325,28 +342,33 @@ function takeFreshPersonalDebugger(target) {
 async function releasePersonalTaskDebugger(chromeTabId) {
   const key = String(chromeTabId);
   const transitions = globalThis.__mcpV3PersonalDebuggerTransitions;
-  const pending = transitions?.get(key);
-  if (pending) await pending.catch(() => undefined);
+  try {
+    while (transitions?.has(key)) await waitPersonalDebuggerTransition(transitions.get(key));
+  } catch { return false; }
   const held = personalTaskDebuggers.get(key);
   if (!held) return;
-  personalTaskDebuggers.delete(key);
-  clearTimeout(held.timer);
-  if (held.listener) chrome.debugger.onEvent?.removeListener(held.listener);
+  const clearHeld = () => {
+    if (personalTaskDebuggers.get(key) !== held) return;
+    personalTaskDebuggers.delete(key);
+    clearTimeout(held.timer);
+    if (held.listener) chrome.debugger.onEvent?.removeListener(held.listener);
+  };
   // A viewport, dialog, network capture or recording still on the tab takes the
   // debugger over and detaches it when it ends.
   const heir = personalViewportSessions.get(key) ?? personalDialogArms.get(key) ??
     personalNetworkCaptures.get(key) ?? personalRecordings.get(key);
   if (heir) {
+    clearHeld();
     heir.attached = true;
     return;
   }
-  const detaching = chrome.debugger.detach({ tabId: chromeTabId }).then(() => true, () => false);
-  transitions?.set(key, detaching);
+  // Keep the exact session unavailable until the native detach is confirmed.
+  held.ready = false;
+  clearTimeout(held.timer);
   try {
-    return await detaching;
-  } finally {
-    if (transitions?.get(key) === detaching) transitions.delete(key);
-  }
+    await detachPersonalDebugger({ tabId: chromeTabId }, clearHeld);
+    return true;
+  } catch { return false; }
 }
 
 // Reload only after the current work has safely quiesced. Chrome keeps the
@@ -379,8 +401,13 @@ async function reloadPersonalExtensionWhenIdle(expectedVersion) {
       }
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
-    await Promise.all([...personalTaskDebuggers.keys()]
+    const released = await Promise.all([...personalTaskDebuggers.keys()]
       .map((key) => releasePersonalTaskDebugger(Number(key))));
+    if (released.some(result => result === false)) {
+      send({ type: "reload-extension-status", state: "deferred",
+        reason: "Chrome debugger retirement has not been confirmed." });
+      return;
+    }
     endAllPersonalRecordings();
     send({ type: "reload-extension-status", state: "reloading" });
     chrome.runtime.reload();
@@ -1063,7 +1090,9 @@ async function waitForUser(input, signal) {
   }
   if (!handoff) {
     // The user's turn runs without MCP's debugger on the tab.
-    await releasePersonalTaskDebugger(chromeTabId);
+    if (await releasePersonalTaskDebugger(chromeTabId) === false) {
+      throw coded("BROWSER_WORKER_TIMEOUT", "Chrome debugger retirement has not been confirmed; user handoff not started.");
+    }
     handoff = { reason: String(input.forUser).slice(0, 200), startedAt: Date.now() };
     await chrome.storage.session.set({ [PERSONAL_HANDOFF_PREFIX + chromeTabId]: handoff });
     await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId: chromeTabId, color: "#d97706" }))
@@ -2670,7 +2699,7 @@ async function recoverInterruptedPersonalInput(target, attached, held, pending, 
     if (settled && cleaned && fences.get(key) === fence) fences.delete(key);
   };
   const finished = () => { if (!requireDetach) settled = true; clear(); };
-  if (requireDetach) fence.detached = () => { settled = true; clear(); };
+  fence.detached = () => { settled = true; clear(); };
   void pending.then(finished, finished);
   const recovery = (async () => {
     try {
@@ -6627,7 +6656,9 @@ async function finishTask(input) {
     axTargetsByTab.delete(target.chromeTabId);
     await finalizePersonalDialog(target.chromeTabId, true);
     await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
-    await releasePersonalTaskDebugger(target.chromeTabId);
+    if (await releasePersonalTaskDebugger(target.chromeTabId) === false) {
+      throw coded("BROWSER_WORKER_TIMEOUT", "Chrome debugger retirement has not been confirmed; task not finished.");
+    }
     if (!target.shared) await clearPersonalHandoff(target.chromeTabId);
   }
   if (input.pause === true) return pausePersonalTask(input.taskId, targets);

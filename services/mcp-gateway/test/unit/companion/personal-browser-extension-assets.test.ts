@@ -4187,6 +4187,56 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     expect(calls.filter((call) => call === "detach")).toHaveLength(2);
   });
 
+  it.each([false, true])("bounds a stalled debugger detach (task-owned=%s) and retains the exact transition", async (taskOwned) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<void>();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const calls: string[] = [];
+    const transitions = new Map();
+    const held = new Map(taskOwned ? [["7", { ready: true, arm: () => undefined }]] : []);
+    const ctx = vm.createContext({
+      setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalDebuggerTransitions: transitions, __mcpV3PersonalTaskDebuggers: held,
+      personalTaskDebuggers: held, personalViewportSessions: new Map(), personalDialogArms: new Map(),
+      personalNetworkCaptures: new Map(), personalRecordings: new Map(),
+      holdPersonalTaskDebugger: () => held.set("7", { ready: true, arm: () => undefined }),
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        detach: () => { calls.push("detach"); return pending.promise; },
+      } },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger", "releasePersonalTaskDebugger"])
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const detach = vm.runInContext("detachGuardedDebugger", ctx) as (target: { tabId: number }, attached: boolean) => Promise<void>;
+    const release = vm.runInContext("releasePersonalTaskDebugger", ctx) as (tabId: number) => Promise<boolean>;
+    const target = { tabId: 7 };
+    const first = (taskOwned ? release(7) : detach(target, true)).catch((error: { code: string }) => error.code);
+    const second = attach(target).catch((error: { code: string }) => error.code);
+    expect(calls).toEqual(["detach"]);
+    for (const callback of [...timers.values()]) callback();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([Promise.all([first, second]), new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toEqual([taskOwned ? false : "BROWSER_WORKER_TIMEOUT", "BROWSER_WORKER_TIMEOUT"]);
+      expect(transitions.has("7")).toBe(true);
+      if (taskOwned) expect(held.get("7")?.ready).toBe(false);
+      pending.resolve();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(transitions.size).toBe(0);
+      expect(held.size).toBe(0);
+      await expect(attach(target)).resolves.toBe(false);
+      expect(calls).toEqual(["detach", "attach"]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve();
+      await Promise.all([first, second]);
+    }
+  });
+
   it("waits for a pending Chrome debugger detach before attaching again", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];
@@ -6425,8 +6475,11 @@ function extractFunction(source: string, name: string): string {
       depth -= 1;
       if (depth === 0) {
         const body = source.slice(start, index + 1);
-        if (name === "attachGuardedDebugger") {
+        if (["attachGuardedDebugger", "detachPersonalDebugger"].includes(name)) {
           return extractFunction(source, "waitPersonalDebuggerTransition") + "\n" + body;
+        }
+        if (["detachGuardedDebugger", "releasePersonalTaskDebugger"].includes(name)) {
+          return extractFunction(source, "detachPersonalDebugger") + "\n" + body;
         }
         if (name === "readPersonalNetwork") {
           return ["safeNetworkUrl", "safeNetworkHeaders", "safeNetworkBody",

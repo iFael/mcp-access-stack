@@ -327,6 +327,12 @@ async function main(): Promise<void> {
     smokeScript = smokeScript.replace(retireNeedle,
       'await chrome.debugger.detach(target); if (globalThis.__mcpSmokeLateAttachTab === target.tabId) ' +
       'globalThis.__mcpSmokeLateRetiredTab = target.tabId; return false;');
+    const detachNeedle = 'const detaching = chrome.debugger.detach(target).then(() => {';
+    if (smokeScript.split(detachNeedle).length !== 2) throw new Error("Late-detach smoke hook missing.");
+    smokeScript = smokeScript.replace(detachNeedle,
+      'const detaching = chrome.debugger.detach(target).then(async () => { ' +
+      'if (globalThis.__mcpSmokeDelayDetach) { globalThis.__mcpSmokeDelayDetach = false; ' +
+      'await new Promise(resolve => setTimeout(resolve, 9000)); globalThis.__mcpSmokeLateDetachTab = target.tabId; }');
     const dragNeedle = 'chrome.debugger.sendCommand(target, method, params), signal, "drag"';
     if (smokeScript.split(dragNeedle).length !== 2) throw new Error("Drag lost-ack hook missing.");
     smokeScript = smokeScript.replace(dragNeedle,
@@ -477,8 +483,9 @@ async function main(): Promise<void> {
         if (fault === "drop") await bridge.navigate({ tabId: boardTab, url: boardUrl + "?pointer=1" });
       }
       const lateUrl = url + "?late-attach=1";
-      const lateTab = (await bridge.open({ url: lateUrl, taskId })).tab.tabId;
-      await waitForFixturePage(context, lateUrl);
+      const lateTask = "personal-debugger-transition-recovery";
+      const lateTab = (await bridge.open({ url: lateUrl, taskId: lateTask })).tab.tabId;
+      const latePage = await waitForFixturePage(context, lateUrl);
       const lateChromeTab = Number(lateTab.split(":")[1]);
       const attachedBefore = await worker.evaluate(`chrome.debugger.getTargets().then(targets =>
         targets.some(t => t.tabId === ${lateChromeTab} && t.attached))`);
@@ -504,6 +511,29 @@ async function main(): Promise<void> {
       const lateShot = await bridge.screenshot({ tabId: lateTab });
       if (!lateShot.sizeBytes) throw new Error("A new capture did not recover after late debugger attachment.");
       report("late debugger attachment recovery", { late, retired, screenshotBytes: lateShot.sizeBytes });
+      await worker.evaluate("globalThis.__mcpSmokeDelayDetach = true");
+      const delayedFinish = await bridge.finishTask({ taskId: lateTask })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (delayedFinish !== "BROWSER_WORKER_TIMEOUT" || latePage.isClosed()) {
+        throw new Error("Task finished before debugger retirement was confirmed: " + delayedFinish);
+      }
+      const lateDetach = await worker.evaluate(`new Promise(resolve => {
+        const deadline = Date.now() + 6000;
+        const check = () => {
+          const pending = globalThis.__mcpV3PersonalDebuggerTransitions.has("${lateChromeTab}");
+          const held = globalThis.__mcpV3PersonalTaskDebuggers.has("${lateChromeTab}");
+          const detached = globalThis.__mcpSmokeLateDetachTab === ${lateChromeTab};
+          if (!pending && !held && detached || Date.now() >= deadline) resolve({ pending, held, detached });
+          else setTimeout(check, 100);
+        };
+        check();
+      })`) as { pending: boolean; held: boolean; detached: boolean };
+      if (lateDetach.pending || lateDetach.held || !lateDetach.detached) {
+        throw new Error("Delayed detach did not reconcile.");
+      }
+      const finished = await bridge.finishTask({ taskId: lateTask });
+      if (!finished.completed || !latePage.isClosed()) throw new Error("Task did not finish after confirmed detach.");
+      report("late debugger detach recovery", { delayedFinish, ...lateDetach, finished: finished.completed });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
       return;
