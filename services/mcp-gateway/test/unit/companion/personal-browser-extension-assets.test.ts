@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.14");
+    expect(manifest.version).toBe("1.17.15");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -1695,6 +1695,22 @@ describe("personal browser extension assets", () => {
     expect(JSON.stringify(result.actionSummary)).not.toMatch(/https|hello|private/);
   });
 
+  it("preserves uncertain action outcomes in a sequence without repeating them", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const calls: string[] = [];
+    const context = vm.createContext({ performance: { now: () => 0 }, throwIfAborted() {},
+      click: async () => { calls.push("click"); return { completed: true, unverified: true }; },
+      fill: async () => { calls.push("fill"); return { completed: true }; } });
+    vm.runInContext(extractFunction(serviceWorker, "sequence"), context);
+    const sequence = vm.runInContext("sequence", context) as (input: unknown) => Promise<unknown>;
+    await expect(sequence({ tabId: "personal:1", steps: [
+      { action: "click", ref: "target" }, { action: "fill", ref: "editor" },
+    ] })).resolves.toMatchObject({ completed: true, unverified: true, steps: [
+      { action: "click", unverified: true }, { action: "fill", completed: true },
+    ] });
+    expect(calls).toEqual(["click", "fill"]);
+  });
+
   it("measures final snapshot separately from action in the actual sequence", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     let clock = 0;
@@ -1875,8 +1891,10 @@ describe("personal browser extension assets", () => {
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     let attachCount = 0;
     let detachCount = 0;
+    let targetChangedOnHover = false;
     const context = vm.createContext({
       Number, String, RegExp, Object, Array,
+      delay: async () => undefined,
       chromeTabIdFrom: () => 7,
       probeGuardedElement: () => ({ x: 30, y: 40 }),
       revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown,
@@ -1888,7 +1906,8 @@ describe("personal browser extension assets", () => {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
         scripting: { executeScript: async (input: { func: { name: string } }) => [{ result:
           input.func.name === "observePersonalEditableMutation"
-            ? { ready: true, changed: true } : { x: 30, y: 40 } }] },
+            ? { ready: true, changed: true } : targetChangedOnHover && commands.at(-1)?.params.type === "mouseMoved"
+              ? { error: "target_changed" } : { x: 30, y: 40 } }] },
         debugger: {
           attach: async () => { attachCount += 1; },
           detach: async () => { detachCount += 1; },
@@ -1904,8 +1923,8 @@ describe("personal browser extension assets", () => {
     const guardedClick = vm.runInContext("click", context) as (arg: unknown) => Promise<unknown>;
     const guardedFill = vm.runInContext("fill", context) as (arg: unknown) => Promise<unknown>;
     const guardedPress = vm.runInContext("press", context) as (arg: unknown) => Promise<unknown>;
-    await guardedClick({ tabId: "personal:7", ref: "target", guard: { url: "https://example.com/", ref: "target" } });
-    await guardedFill({ tabId: "personal:7", ref: "target", value: "secret", guard: { url: "https://example.com/", ref: "target" } });
+    await expect(guardedClick({ tabId: "personal:7", ref: "target", guard: { url: "https://example.com/", ref: "target" } })).resolves.toMatchObject({ completed: true, unverified: true });
+    await expect(guardedFill({ tabId: "personal:7", ref: "target", value: "secret", guard: { url: "https://example.com/", ref: "target" } })).resolves.toMatchObject({ completed: true, unverified: true });
     await guardedPress({ tabId: "personal:7", key: "Ctrl+A", guard: { url: "https://example.com/" } });
     expect(commands.map((entry) => entry.method)).toEqual([
       "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
@@ -1921,6 +1940,11 @@ describe("personal browser extension assets", () => {
       code: "BROWSER_CONFIRMATION_INVALID",
     });
     expect(attachCount).toBe(3);
+    targetChangedOnHover = true;
+    const countBeforeHover = commands.length;
+    await expect(guardedClick({ tabId: "personal:7", ref: "target", guard: { url: "https://example.com/", ref: "target" } })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(commands.slice(countBeforeHover).map((event) => event.params.type)).toEqual(["mouseMoved"]);
+    targetChangedOnHover = false;
     const parseChromeKey = vm.runInContext("parseChromeKey", context) as (key: string) => unknown;
     expect(parseChromeKey("Shift+End")).toEqual({ key: "End", code: "End", keyCode: 35, modifiers: 8 });
     expect(parseChromeKey("pagedown")).toMatchObject({ key: "PageDown", keyCode: 34 });
@@ -1943,6 +1967,47 @@ describe("personal browser extension assets", () => {
         type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46,
       }) },
     ]);
+  });
+
+  it("confirms only an expected transition and never redispatches after verification fails", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: string[] = [];
+    let alreadyReached = false;
+    let failWait = false;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      probeGuardedElement: () => ({ x: 30, y: 40 }),
+      waitProbe: () => alreadyReached,
+      wait: async () => { if (failWait) throw new Error("not reached"); },
+      revalidatePersonalClickAfterAttach: async (_tab: unknown, _target: unknown,
+        _input: unknown, point: unknown) => point,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async ({ func }: { func: { name: string } }) =>
+          [{ result: func.name === "waitProbe" ? alreadyReached : { x: 30, y: 40 } }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, _method: string, params: { type: string }) =>
+            { events.push(params.type); },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "click"), context);
+    const click = vm.runInContext("click", context) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", ref: "target", guard: { ref: "target", url: "https://example.com/" },
+      expect: { text: "Saved", timeoutMs: 500 } };
+    await expect(click(input)).resolves.toMatchObject({ completed: true, unverified: false });
+    expect(events).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    events.length = 0;
+    failWait = true;
+    await expect(click(input)).resolves.toMatchObject({ completed: true, unverified: true });
+    expect(events).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    events.length = 0;
+    alreadyReached = true;
+    await expect(click(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(events).not.toContain("mousePressed");
   });
 
   it("keeps the same guarded editor ref when only its editable content changes", () => {
@@ -2148,6 +2213,31 @@ describe("personal browser extension assets", () => {
     expect(full.content).not.toContain("X".repeat(20001));
   });
 
+  it("observes a relevant DOM condition without waiting for the entire page to be quiet", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const document = { body: { innerText: "Loading" }, readyState: "complete" };
+    let callback: (() => void) | undefined;
+    let disconnected = false;
+    const context = vm.createContext({
+      document, setTimeout, clearTimeout, setInterval, clearInterval,
+      MutationObserver: class {
+        constructor(check: () => void) { callback = check; }
+        observe() {}
+        disconnect() { disconnected = true; }
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "waitProbe"), context);
+    const probe = vm.runInContext("waitProbe", context) as
+      (...args: unknown[]) => boolean | Promise<boolean>;
+    const pending = probe("Saved", null, null, null, 250);
+    document.body.innerText = "Saved";
+    callback?.();
+    await expect(pending).resolves.toBe(true);
+    expect(disconnected).toBe(true);
+    document.readyState = "loading";
+    expect(probe(null, null, null, "Deleting")).toBeNull();
+  });
+
   it("resolves editor pixels to an empty-name textbox rather than a generic submit control", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const dom = createDom([]);
@@ -2229,6 +2319,9 @@ describe("personal browser extension assets", () => {
     expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
       .toMatchObject({ error: "obscured" });
     expect(inspect(50, 15)).toBeNull();
+    document.elementFromPoint = (x?: number) => x === 50 ? button : visual;
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false)).toMatchObject({ x: 25, y: 15 });
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false, 50, 15)).toMatchObject({ error: "obscured" });
     document.elementFromPoint = () => ({ tagName: "DIV", parentElement: null, closest: () => null });
     expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
       .toMatchObject({ error: "obscured" });
@@ -2584,6 +2677,9 @@ describe("personal browser extension assets", () => {
     vm.runInContext(extractFunction(serviceWorker, "observePersonalEditableMutation"), context);
     const check = vm.runInContext("observePersonalEditableMutation", context) as
       (stage: string, ref: string | null, expected: string | null) => Record<string, unknown>;
+    (context as unknown as { document: { activeElement: unknown } }).document.activeElement = {};
+    expect(check("before", "editor", "new secret")).toEqual({ ready: false });
+    (context as unknown as { document: { activeElement: unknown } }).document.activeElement = editor;
     expect(check("before", "editor", "new secret")).toEqual({ ready: true, alreadyEqual: false });
     expect(check("after", "editor", "new secret")).toEqual({ ready: true, changed: false, matches: false, plain: false });
     editor.textContent = "new secret";
@@ -2616,7 +2712,29 @@ describe("personal browser extension assets", () => {
       (stage: string, ref: null, expected: string | null) => Record<string, unknown>;
     expect(observe("before", null, "json(new)")).toMatchObject({ ready: true, alreadyEqual: false });
     mutation?.();
-    expect(observe("after", null, "json(new)")).toMatchObject({ ready: true, changed: true, plain: false });
+    expect(observe("after", null, "json(new)")).toMatchObject({ ready: true, changed: true, matches: false, plain: false });
+    editor.editContext.text = "json(new)";
+    expect(observe("after", null, "json(new)")).toMatchObject({ ready: true, changed: true, matches: true, plain: false });
+  });
+
+  it("verifies insertion against the original selection, not an unrelated DOM mutation", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const editor = {
+      tagName: "INPUT", value: "private abc def", isConnected: true,
+      selectionStart: 8, selectionEnd: 11,
+      getAttribute: () => null,
+    };
+    const context = vm.createContext({ document: { activeElement: editor } });
+    vm.runInContext(extractFunction(serviceWorker, "observePersonalEditableMutation"), context);
+    const observe = vm.runInContext("observePersonalEditableMutation", context) as
+      (stage: string, ref: null, expected: string, mode: string) => Record<string, unknown>;
+    expect(observe("before", null, "XYZ", "insert")).toMatchObject({ ready: true });
+    editor.value = "private WRONG def";
+    expect(observe("after", null, "XYZ", "insert")).toMatchObject({ changed: true, matches: false });
+    editor.value = "private XYZ def";
+    const result = observe("after", null, "XYZ", "insert");
+    expect(result).toMatchObject({ changed: true, matches: true });
+    expect(JSON.stringify(result)).not.toContain("private");
   });
 
   it("detects protected rich-editor tokens before a destructive fill", () => {
@@ -2643,6 +2761,7 @@ describe("personal browser extension assets", () => {
     const sent: string[] = [];
     let focused = false;
     let changed = false;
+    let matches = false;
     const context = vm.createContext({
       setTimeout: (callback: () => void) => { callback(); return 0; },
       chromeTabIdFrom: () => 7,
@@ -2653,7 +2772,7 @@ describe("personal browser extension assets", () => {
       chrome: {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
         scripting: { executeScript: async (input: { args: unknown[] }) => [{
-          result: input.args[0] === "before" ? { ready: focused } : { ready: true, changed },
+          result: input.args[0] === "before" ? { ready: focused } : { ready: true, changed, matches },
         }] },
         debugger: {
           attach: async () => undefined, detach: async () => undefined,
@@ -2672,7 +2791,9 @@ describe("personal browser extension assets", () => {
     await expect(typeText(input)).resolves.toMatchObject({ completed: true, unverified: true });
     expect(sent).toEqual(["Input.insertText"]);
     changed = true;
-    await expect(typeText(input)).resolves.toMatchObject({ completed: true });
+    await expect(typeText(input)).resolves.toMatchObject({ completed: true, unverified: true });
+    matches = true;
+    await expect(typeText(input)).resolves.toEqual({ tabId: "personal:7", completed: true });
   });
 
   it("types international text as native keystrokes and composes CJK runs through an IME", async () => {
@@ -2690,7 +2811,7 @@ describe("personal browser extension assets", () => {
       },
       chrome: {
         tabs: { get: async () => ({ url: "https://example.com/" }) },
-        scripting: { executeScript: async () => [{ result: { ready: true, changed: true } }] },
+        scripting: { executeScript: async () => [{ result: { ready: true, changed: true, matches: true } }] },
         debugger: {
           attach: async () => undefined, detach: async () => undefined,
           sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
@@ -2933,6 +3054,43 @@ describe("personal browser extension assets", () => {
       tabId: "personal:7", ref: ref.ref,
       guard: { url: "https://example.com/", ...ref, name: "Wrong name" },
     })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+  });
+
+  it("requires AX fill to acquire the intended editable focus before destructive keys", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: string[] = [];
+    let focused = false;
+    let matches = false;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, delay: async () => undefined,
+      resolveGuardedAxPoint: async () => ({ x: 40, y: 30 }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        scripting: { executeScript: async ({ args }: { args: unknown[] }) => [{
+          documentId: "doc-1", result: args[0] === "before" ? { ready: focused } :
+            args[0] === "after" ? { ready: focused, matches } : false,
+        }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string) => { events.push(method); },
+        },
+      },
+    });
+    for (const fn of ["observePersonalEditableMutation", "fill"]) {
+      vm.runInContext(extractFunction(serviceWorker, fn), context);
+    }
+    const fill = vm.runInContext("fill", context) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", ref: "ax-1", value: "replacement",
+      guard: { ref: "ax-1", url: "https://example.test/", role: "textbox", name: "Field" } };
+    await expect(fill(input)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(events.every((method) => method === "Input.dispatchMouseEvent")).toBe(true);
+    events.length = 0;
+    focused = true;
+    await expect(fill(input)).resolves.toMatchObject({ unverified: true });
+    expect(events.filter((method) => method === "Input.insertText")).toHaveLength(1);
+    matches = true;
+    await expect(fill(input)).resolves.toEqual({ tabId: "personal:7", completed: true });
   });
 
   it("records full request and response detail across subsequent browser operations in one Chrome CDP session", async () => {
@@ -4184,7 +4342,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.14");
+    expect(parsedManifest.version).toBe("1.17.15");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -4952,6 +5110,35 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(element.clickCount).toBe(0);
   });
 
+  it("recovers a recreated uniquely identified navigation link but never a changed destination or ambiguous ID", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const link = (href: string) => Object.assign(fakeElement({
+      tagName: "A", text: "Help", attributes: { id: "help-link", href },
+    }), { href, isConnected: true });
+    const first = link("https://example.test/help");
+    const dom = createDom([first]);
+    const document = dom.context.document;
+    dom.context.URL = URL;
+    const bind = (element: ReturnType<typeof link>) => Object.assign(element, { getRootNode: () => document });
+    bind(first);
+    const snapshot = vm.runInContext(
+      `(${extractFunction(serviceWorker, "snapshotPage")})`, dom.context,
+    ) as (generation: string) => { refs: Array<{ ref: string }> };
+    const original = snapshot("old").refs[0]!.ref;
+    first.isConnected = false;
+    const replacement = bind(link(first.href));
+    dom.setInteractiveElements([replacement]);
+    expect(snapshot("new").refs[0]!.ref).toBe(original);
+    replacement.isConnected = false;
+    const changed = bind(link("https://example.test/another"));
+    dom.setInteractiveElements([changed]);
+    const changedRef = snapshot("changed").refs[0]!.ref;
+    expect(changedRef).not.toBe(original);
+    changed.isConnected = false;
+    dom.setInteractiveElements([bind(link(changed.href)), bind(link(changed.href))]);
+    expect(snapshot("ambiguous").refs.map((item) => item.ref)).not.toContain(changedRef);
+  });
+
   it("includes controls inside open shadow roots without altering the host DOM", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const inside = fakeElement({ tagName: "BUTTON", text: "Inside shadow" });
@@ -5191,6 +5378,29 @@ ${extractFunction(serviceWorker, "mcpTaskGroupStyle")}`, context);
     await expect(assignMcpTaskGroup(71, "task-b", {})).resolves.toBeUndefined();
     groupFails = false;
     await expect(assignMcpTaskGroup(72, "task-b", {})).resolves.toBe(8);
+  });
+
+  it("does not miss tab completion between the status check and listener registration", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let checks = 0;
+    const listeners = new Set<unknown>();
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      throwIfAborted: () => undefined,
+      chrome: { tabs: {
+        get: async () => ({ status: ++checks === 1 ? "loading" : "complete" }),
+        onUpdated: {
+          addListener: (listener: unknown) => listeners.add(listener),
+          removeListener: (listener: unknown) => listeners.delete(listener),
+        },
+      } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "waitForTabComplete"), context);
+    const wait = vm.runInContext("waitForTabComplete", context) as
+      (tab: number, timeout: number) => Promise<void>;
+    await expect(wait(7, 1000)).resolves.toBeUndefined();
+    expect(checks).toBe(2);
+    expect(listeners.size).toBe(0);
   });
 
   it("groups a newly opened tab before waiting for the page to load", () => {

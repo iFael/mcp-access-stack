@@ -19684,7 +19684,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Supports authorized deletions: ACTION_REQUIRES_CONFIRMATION supplies a one-use confirmationId; after the user approves the exact action, repeat the same click with that ID. Site-wide grants do not authorize deletions. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence. Next: on ACTION_REQUIRES_CONFIRMATION, get approval and repeat the exact click with confirmationId; otherwise act on returned state. See get_operation_guide topic=browser.",
+    "description": "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Optional expect verifies a new text, absentText or URL condition after one dispatch; unverified=true means inspect before retry, never assume the business effect. Supports authorized deletions: ACTION_REQUIRES_CONFIRMATION supplies a one-use confirmationId; after the user approves the exact action, repeat the same click with that ID. Site-wide grants do not authorize deletions. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence. Next: on ACTION_REQUIRES_CONFIRMATION, get approval and repeat the exact click with confirmationId; otherwise act on returned state. See get_operation_guide topic=browser.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -19713,6 +19713,66 @@ export const EDGE_MCP_TOOL_MANIFEST = [
         "deviceId": {
           "pattern": "^dev_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "type": "string"
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "maxLength": 10000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "timeoutMs": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "absentText": {
+                  "maxLength": 10000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "timeoutMs": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "absentText"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "timeoutMs": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000,
+                  "type": "integer"
+                },
+                "url": {
+                  "format": "uri",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
         },
         "knownRevision": {
           "maximum": 9007199254740991,
@@ -22922,7 +22982,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Executes up to 20 typed steps (navigate, click, fill, hover, scroll, drag, formInput, type, press, wait, extract) under one owned-tab lock, returning per-step durations and actionSummary; finalSnapshot and finalScreenshot are optional. Split after navigation when fresh refs are required. Not atomic: earlier side effects can remain after failure, so inspect before retrying. Confirmation and policy checks are required for every relevant step. Next: browser_snapshot before more steps after a navigation.",
+    "description": "Executes up to 20 typed steps (navigate, click, fill, hover, scroll, drag, formInput, type, press, wait, extract) under one owned-tab lock, returning per-step durations, unverified markers and actionSummary; finalSnapshot and finalScreenshot are optional. Split after navigation when fresh refs are required. Not atomic: earlier side effects can remain after failure, so inspect before retrying. Confirmation and policy checks are required for every relevant step. Next: browser_snapshot before more steps after a navigation.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -23970,6 +24030,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
                 "minimum": 0,
                 "type": "integer"
               },
+              "unverified": {
+                "type": "boolean"
+              },
               "value": {}
             },
             "required": [
@@ -24013,6 +24076,9 @@ export const EDGE_MCP_TOOL_MANIFEST = [
             "totalMs"
           ],
           "type": "object"
+        },
+        "unverified": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -31548,15 +31614,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "7d83d35f3e4d81dd4727b404790c0cc8fab901201842b67936b02dc88fa8f3c5",
-  "serverVersion": "0.4.0-catalog.c7d83d35f3e4d.s811b25e3744b",
+  "contractRevision": "e0f6f5b2e5df88e409086200d1f79efcb2deb49524143d7ace01d04cec0d85fb",
+  "serverVersion": "0.4.0-catalog.ce0f6f5b2e5df.s811b25e3744b",
   "toolCount": 135,
   "toolSetRevision": "811b25e3744b41d7f968d9c7883a5a109e5eede784aac4730c01b31b9117e059"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c7d83d35f3e4d.s811b25e3744b"
+  "version": "0.4.0-catalog.ce0f6f5b2e5df.s811b25e3744b"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

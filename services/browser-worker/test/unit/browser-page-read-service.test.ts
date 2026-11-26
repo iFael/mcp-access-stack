@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, jest } from "@jest/globals";
 import type { BrowserTab } from "@vs-code-gpt/shared";
 import type { BrowserDriverResponse } from "../../drivers/browser-driver.js";
@@ -141,6 +142,42 @@ describe("BrowserPageReadService", () => {
       { name: "wait", input: { text: "Completed", time: 2.5 } },
     ]);
     expect(updateSelectedTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("observes an exact condition without treating unavailable data as a match", async () => {
+    let now = 0;
+    const driver = new FakePageDriver([
+      response({ result: null }), response({ result: false }),
+      response({ result: false }), response({ result: true }),
+      response({ result: false }), response({ result: false }),
+    ]);
+    const service = makeService({ driver, now: () => now,
+      delay: async (ms) => { now += ms; }, pollIntervalMs: 100 });
+    await expect(service.observeCondition({ absentText: "Deleting" })).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(service.observeCondition({ text: "Saved" })).resolves.toBe(false);
+    await expect(service.waitCondition({ url: "https://example.test/saved", timeoutMs: 300 })).resolves.toBe(true);
+    await expect(service.waitCondition({ text: "Saved", timeoutMs: 200 })).resolves.toBe(false);
+    expect(driver.calls.every((call) => call.name === "evaluate")).toBe(true);
+  });
+
+  it("stops post-dispatch observation when cancelled without reporting a verified effect", async () => {
+    const controller = new AbortController();
+    const driver = new FakePageDriver([response({ result: false }), response({ result: true })]);
+    const service = makeService({ driver, delay: async () => controller.abort() });
+    await expect(service.waitCondition({ text: "Saved" }, controller.signal)).resolves.toBe(false);
+    expect(driver.calls).toHaveLength(1);
+  });
+
+  it("provides a callable condition to the direct driver and never interpolates executable input", async () => {
+    const text = 'Saved "quotes" ; (() => { throw Error("unsafe"); })()';
+    const driver = new FakePageDriver([response({ result: false })]);
+    const service = makeService({ driver });
+    await service.observeCondition({ text });
+    const source = (driver.calls[0]?.input as { function: string }).function;
+    expect(runInNewContext(`(${source})()`, {
+      document: { readyState: "complete", body: { innerText: text } },
+      location: { href: baseTab.url },
+    })).toBe(true);
   });
 
   it("returns typed extraction values without textual parsing", async () => {

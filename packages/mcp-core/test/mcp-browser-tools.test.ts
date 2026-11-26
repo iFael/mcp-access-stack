@@ -233,6 +233,15 @@ describe("browser interaction parity contracts", () => {
     expect(browserClickInputSchema.safeParse({ tabId: "personal:1", x: 20, y: 40 }).success).toBe(true);
     expect(browserClickInputSchema.safeParse({ tabId: "personal:1", ref: "p-1", x: 20, y: 40 }).success).toBe(false);
     expect(browserClickInputSchema.safeParse({ tabId: "personal:1", y: 20 }).success).toBe(false);
+    const click = { tabId: "personal:1", ref: "p-1" };
+    for (const expectCondition of [{ text: "Saved" }, { absentText: "Saving" },
+      { url: "https://example.test/done", timeoutMs: 1000 }]) {
+      expect(browserClickInputSchema.safeParse({ ...click, expect: expectCondition }).success).toBe(true);
+    }
+    for (const expectCondition of [{}, { text: "" }, { text: "A", absentText: "B" },
+      { url: "not-a-url" }, { text: "Saved", timeoutMs: 10001 }]) {
+      expect(browserClickInputSchema.safeParse({ ...click, expect: expectCondition }).success).toBe(false);
+    }
     expect(browserHoverInputSchema.safeParse({ tabId: "personal:1" }).success).toBe(false);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450 }).success).toBe(true);
     expect(browserScrollInputSchema.safeParse({ tabId: "personal:1", direction: "down", amount: 450, x: 50, y: 90 }).success).toBe(true);

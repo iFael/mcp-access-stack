@@ -36,7 +36,7 @@ describe("personal Chrome SPA navigation", () => {
   });
   it("waits natively for a URL or disappearance of a loading label", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
-    const start = serviceWorker.indexOf("function waitProbe(text, ref, url, absentText) {");
+    const start = serviceWorker.indexOf("function waitProbe(text, ref, url, absentText, observeMs = 0) {");
     const end = serviceWorker.indexOf("\n}\n", start);
     expect(start).toBeGreaterThanOrEqual(0);
     const page = { innerText: "Loading records" };

@@ -941,7 +941,7 @@ describe("BrowserRuntime Playwright layer", () => {
 
     await expect(
       runtime.click({ tabId: tab.tabId, ref: "e7", confirmationId }),
-    ).resolves.toEqual({ tabId: tab.tabId, completed: true });
+    ).resolves.toEqual({ tabId: tab.tabId, completed: true, unverified: true });
     expect(fake.calls.some((call) => call.name === "browser_click")).toBe(true);
   });
 
@@ -1056,6 +1056,51 @@ describe("BrowserRuntime Playwright layer", () => {
       await runtime.shutdown();
     }
   }, 30_000);
+
+  it("verifies a delayed click condition on real Chromium without dispatching twice", async () => {
+    const directory = await makeTemporaryDirectory();
+    const config = makeConfig(directory);
+    config.headless = true;
+    config.userDataDirectory = path.join(directory, "private", "click-verification-profile");
+    const driver = new DirectPlaywrightDriver(config);
+    const runtime = await BrowserRuntime.create(config, () => driver);
+    try {
+      await runtime.connect({});
+      const [tab] = (await runtime.tabs({})).tabs;
+      if (!tab) throw new Error("Expected the default MCP tab.");
+      const page = driver.currentPage();
+      await page.setContent(`
+        <button id="run">Mostrar detalhes</button>
+        <p id="out">pending</p><p id="count">0</p>
+        <script>
+          document.getElementById("run").onclick = () => {
+            const count = document.getElementById("count");
+            count.textContent = String(Number(count.textContent) + 1);
+            setTimeout(() => { document.getElementById("out").textContent = "finished"; }, 450);
+          };
+        </script>`);
+      const ref = (await runtime.snapshot({ tabId: tab.tabId })).refs
+        .find((item) => item.name === "Mostrar detalhes")?.ref;
+      if (!ref) throw new Error("Expected action reference.");
+      await expect(runtime.click({ tabId: tab.tabId, ref,
+        expect: { text: "finished", timeoutMs: 4000 } }))
+        .resolves.toMatchObject({ completed: true, unverified: false });
+      expect(await page.locator("#count").textContent()).toBe("1");
+      const nextRef = (await runtime.snapshot({ tabId: tab.tabId })).refs
+        .find((item) => item.name === "Mostrar detalhes")?.ref;
+      if (!nextRef) throw new Error("Expected refreshed action reference.");
+      await expect(runtime.click({ tabId: tab.tabId, ref: nextRef,
+        expect: { text: "finished" } })).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+      expect(await page.locator("#count").textContent()).toBe("1");
+      const controller = new AbortController();
+      controller.abort();
+      await expect(runtime.click({ tabId: tab.tabId, ref: nextRef }, { signal: controller.signal }))
+        .rejects.toMatchObject({ code: "OPERATION_CANCELLED" });
+      expect(await page.locator("#count").textContent()).toBe("1");
+    } finally {
+      await runtime.shutdown();
+    }
+  }, 60_000);
 
   it("discovers lazy content below the fold with bounded document extraction", async () => {
     const directory = await makeTemporaryDirectory();

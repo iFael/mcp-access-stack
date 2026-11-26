@@ -11,7 +11,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { chromium, type BrowserContext } from "playwright";
+import { chromium, type BrowserContext, type Page } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
 
 interface LegacyFixtureRouter {
@@ -159,6 +159,22 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <body style="margin:0;height:100vh;background:#ffffff">
     <button onclick="document.body.style.background='#00c000'">Pintar</button>
     <button onclick="document.body.style.background='#ffffff'">Limpar</button>`,
+  "quality-site.test/": () => `<!doctype html><title>Interaction quality</title><body>
+    <button id="run">Mostrar resultado</button><button id="noop">Mostrar nada</button>
+    <input id="entry" aria-label="Entry" value="abc def">
+    <div id="rich" contenteditable="true" role="textbox" aria-label="Rich">abc def</div>
+    <p id="result">pending</p><p id="clicks">0</p>
+    <a id="help" href="/help">Help</a>
+    <script>
+      document.getElementById("run").onclick = () => {
+        document.getElementById("clicks").textContent = String(Number(document.getElementById("clicks").textContent) + 1);
+        setTimeout(() => { document.getElementById("result").textContent = "finished"; }, 450);
+      };
+      document.getElementById("noop").onclick = () => {
+        document.getElementById("clicks").textContent = String(Number(document.getElementById("clicks").textContent) + 1);
+      };
+    </script>`,
+  "quality-site.test/help": () => "<!doctype html><title>Help</title><p>Help destination</p>",
   "plain-site.test/": (url) => {
     return `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
@@ -168,6 +184,18 @@ const pages: Record<string, (url: URL, port: number) => string> = {
 
 function report(label: string, value: unknown): void {
   console.log(`\n== ${label}\n${JSON.stringify(value, null, 1).slice(0, 2500)}`);
+}
+
+// The extension's tabs.get and Playwright's page events are independent.
+async function waitForFixturePage(context: BrowserContext, url: string): Promise<Page> {
+  const deadline = Date.now() + 15_000;
+  do {
+    const page = context.pages().find((candidate) => candidate.url() === url);
+    if (page) return page;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  throw new Error("Fixture page did not arrive: " + new URL(url).hostname +
+    "; observed pages: " + context.pages().map((page) => page.url()).join(", "));
 }
 
 function jpegSize(bytes: Buffer): { width: number; height: number } {
@@ -243,14 +271,84 @@ async function main(): Promise<void> {
     if (!bridge.isConnected()) throw new Error("The generated extension did not connect to the bridge.");
     report("connection", { ...bridge.connectionInfo(), capabilities: undefined });
 
+    if (process.env.PERSONAL_SMOKE_INTERACTION_QUALITY_ONLY === "1") {
+      const candidate = bridge.connectionInfo().capabilities.includes("clickPostconditionV1");
+      const measurements: Array<{ calls: number; elapsedMs: number }> = [];
+      for (let sample = 0; sample < 3; sample += 1) {
+        const url = `http://quality-site.test:${sitePort}/?sample=${sample}`;
+        const taskId = "quality-benchmark-" + sample;
+        const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+        const page = await waitForFixturePage(context, url);
+        const ref = (await bridge.snapshot({ tabId })).refs.find((item) => item.name === "Mostrar resultado")?.ref;
+        if (!ref) throw new Error("Quality fixture action is missing.");
+        const started = performance.now();
+        if (candidate) {
+          const result = await bridge.click({ tabId, ref, expect: { text: "finished", timeoutMs: 4000 } });
+          if (result.unverified !== false) throw new Error("The delayed postcondition was not verified.");
+        } else {
+          await bridge.click({ tabId, ref });
+          await bridge.wait({ tabId, text: "finished", timeoutMs: 4000 });
+        }
+        measurements.push({ calls: candidate ? 1 : 2, elapsedMs: Math.round(performance.now() - started) });
+        if (await page.locator("#result").textContent() !== "finished" ||
+            await page.locator("#clicks").textContent() !== "1") throw new Error("Benchmark did not produce exactly one action.");
+        if (candidate && sample === 0) {
+          const refs = (await bridge.snapshot({ tabId })).refs;
+          const noop = refs.find((item) => item.name === "Mostrar nada")!.ref;
+          const field = refs.find((item) => item.name === "Entry")!.ref;
+          const rich = refs.find((item) => item.name === "Rich")!.ref;
+          const help = refs.find((item) => item.name === "Help")!.ref;
+          const unverified = await bridge.click({ tabId, ref: noop, expect: { text: "never reached", timeoutMs: 500 } });
+          if (unverified.unverified !== true || await page.locator("#clicks").textContent() !== "2") {
+            throw new Error("Missing postcondition must not redispatch or report a confirmed effect.");
+          }
+          const already = await bridge.click({ tabId, ref: noop, expect: { text: "finished" } })
+            .then(() => "allowed", (error: { code?: string }) => error.code);
+          if (already !== "STATE_NOT_REACHED" || await page.locator("#clicks").textContent() !== "2") {
+            throw new Error("A pre-existing condition incorrectly authorized dispatch.");
+          }
+          const filled = await bridge.fill({ tabId, ref: field, value: "abc def" });
+          if (filled.unverified || await page.locator("#entry").inputValue() !== "abc def") {
+            throw new Error("Native fill did not verify the value.");
+          }
+          await page.locator("#entry").evaluate((node) => (node as unknown as {
+            setSelectionRange(start: number, end: number): void;
+          }).setSelectionRange(4, 7));
+          const typed = await bridge.type({ tabId, text: "XYZ" });
+          if (typed.unverified || await page.locator("#entry").inputValue() !== "abc XYZ") {
+            throw new Error("Native insertion did not verify the selected text.");
+          }
+          const richResult = await bridge.fill({ tabId, ref: rich, value: "rich replacement" });
+          if (richResult.unverified || await page.locator("#rich").innerText() !== "rich replacement") {
+            throw new Error("Contenteditable replacement was not verified.");
+          }
+          await page.locator("#help").evaluate((node) => {
+            const anchor = node as unknown as { cloneNode(deep: boolean): unknown; replaceWith(node: unknown): void };
+            anchor.replaceWith(anchor.cloneNode(true));
+          });
+          const navigated = await bridge.click({ tabId, ref: help, expect: {
+            url: `http://quality-site.test:${sitePort}/help`, timeoutMs: 4000,
+          } });
+          await page.waitForURL(`http://quality-site.test:${sitePort}/help`, { timeout: 5000 });
+          if (navigated.unverified !== false) {
+            throw new Error("Safe recreated link did not recover and navigate.");
+          }
+        }
+        await bridge.finishTask({ taskId });
+      }
+      report("interaction quality benchmark", { version: bridge.connectionInfo().extensionVersion,
+        samples: measurements, measuredScope: "click + expected state; excludes setup and teardown" });
+      console.log("\nPERSONAL BROWSER INTERACTION QUALITY PASS");
+      return;
+    }
+
     // Real renderer regression: native wheel without coordinates and a
     // partially visible Monaco-shaped editor. The fixture is local and contains
     // no real account, workflow, or third-party data.
     const editorUrl = `http://editor-site.test:${sitePort}/`;
     const editorTask = "personal-editor-robustness";
     const editorTab = (await bridge.open({ url: editorUrl, taskId: editorTask })).tab.tabId;
-    const editorPage = context.pages().find((page) => page.url() === editorUrl);
-    if (!editorPage) throw new Error("Editor fixture page is missing.");
+    const editorPage = await waitForFixturePage(context, editorUrl);
     const editorSnapshot = await bridge.snapshot({ tabId: editorTab });
     const expressionRef = editorSnapshot.refs.find((ref) => ref.name === "Expression")?.ref;
     if (!expressionRef) throw new Error("Editor snapshot did not expose the expression input.");
@@ -409,8 +507,7 @@ async function main(): Promise<void> {
     const fixtureUrl = legacyFixture.indexUrl(`http://mistert-fixture.test:${sitePort}`, "mistert-smoke");
     const fixtureTab = await bridge.open({ url: fixtureUrl, taskId: "personal-frame-smoke" });
     const fixtureId = fixtureTab.tab.tabId;
-    const fixturePage = context.pages().find((candidate) => candidate.url() === fixtureUrl);
-    if (!fixturePage) throw new Error("MisterT-like fixture tab was not found.");
+    const fixturePage = await waitForFixturePage(context, fixtureUrl);
     await fixturePage.frameLocator('frame[name="Menu"]').locator("#stock-root").waitFor();
     const menuFrame = fixturePage.frame({ name: "Menu" });
     if (!menuFrame) throw new Error("MisterT-like fixture menu frame was not found.");
@@ -485,8 +582,7 @@ async function main(): Promise<void> {
     // Real fractional geometry: Chrome rounds the layout dimensions to integers.
     const pixelUrl = `http://pixel-site.test:${sitePort}/`;
     const pixelTab = (await bridge.open({ url: pixelUrl, taskId: "personal-frame-smoke" })).tab.tabId;
-    const pixelPage = context.pages().find((candidate) => candidate.url() === pixelUrl);
-    if (!pixelPage) throw new Error("Fractional frame fixture is missing.");
+    const pixelPage = await waitForFixturePage(context, pixelUrl);
     const pixelInput = pixelPage.frameLocator("iframe").locator("#search");
     await pixelInput.waitFor();
     const geometry = await pixelPage.locator("iframe").evaluate((element) => {
@@ -707,34 +803,80 @@ async function main(): Promise<void> {
     // One recording feeds a trace and a video. Both come out as WebM files Chrome
     // plays, each timed from its own start, and the trace lists the clicks.
     const recTab = (await bridge.open({ url: `http://rec-site.test:${sitePort}/`, taskId: "personal-frame-smoke" })).tab.tabId;
+    const recPage = await waitForFixturePage(context, `http://rec-site.test:${sitePort}/`);
     const recRefs = (await bridge.snapshot({ tabId: recTab })).refs;
     const paintRef = recRefs.find((item) => item.name === "Pintar")?.ref;
     const clearRef = recRefs.find((item) => item.name === "Limpar")?.ref;
     if (!paintRef || !clearRef) throw new Error(`Recording page refs missing: ${JSON.stringify(recRefs)}`);
     const pause = () => new Promise((resolve) => setTimeout(resolve, 800));
+    // A slow renderer can take longer than the nominal capture interval.
+    // Wait for the actual recorded frame, not a guessed delay after a click.
+    // Test-only read of accepted frame metadata; no image data is exposed.
+    const stagedFrames = () => (bridge as unknown as {
+      recorder: { byTab: Map<string, { frames: ReadonlyArray<{ at: number }> }> };
+    }).recorder.byTab.get(recTab)?.frames ?? [];
+    const waitRecordedColor = async (color: "green" | "white", minimumFrames: number) => {
+      const captured = await extensionWorker.evaluate(`(async () => {
+        const deadline = Date.now() + 12000;
+        while (Date.now() < deadline) {
+          const recording = globalThis.__mcpV3PersonalRecordings?.get(${JSON.stringify(recTab.slice("personal:".length))});
+          if (!recording) return false;
+          await recording.flight;
+          const canvas = recording.canvas;
+          if (canvas) {
+            const [r, g, b] = canvas.getContext("2d").getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data;
+            if (${JSON.stringify(color)} === "green" ? g > 110 && r < 80 && b < 80 : r > 220 && g > 220 && b > 220) return true;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return false;
+      })()`);
+      if (captured !== true) throw new Error("Recording never captured " + color + " fixture state.");
+      const deadline = Date.now() + 5000;
+      while (stagedFrames().length < minimumFrames && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const frame = stagedFrames().at(-1);
+      if (!frame || stagedFrames().length < minimumFrames) {
+        throw new Error("The gateway did not accept the " + color + " frame.");
+      }
+      return frame.at;
+    };
     await bridge.traceStart({ tabId: recTab });
     const videoStarted = await bridge.videoStart({ tabId: recTab, filename: "gravacao" });
+    const videoStartedAt = Date.now();
+    await waitRecordedColor("white", 1);
     await pause();
+    const beforePaint = stagedFrames().length;
     await bridge.click({ tabId: recTab, ref: paintRef });
+    if (await recPage.evaluate("getComputedStyle(document.body).backgroundColor") !== "rgb(0, 192, 0)") {
+      throw new Error("Paint click did not change the fixture.");
+    }
+    const paintedAt = await waitRecordedColor("green", beforePaint + 1);
     await pause();
     const video = await bridge.videoStop({ tabId: recTab });
     const midway = await bridge.diagnostics({ tabId: recTab });
+    const beforeClear = stagedFrames().length;
     await bridge.click({ tabId: recTab, ref: clearRef });
+    if (await recPage.evaluate("getComputedStyle(document.body).backgroundColor") !== "rgb(255, 255, 255)") {
+      throw new Error("Clear click did not change the fixture.");
+    }
+    const clearedAt = await waitRecordedColor("white", beforeClear + 1);
     await pause();
     const trace = await bridge.traceStop({ tabId: recTab });
     const traceJson = JSON.parse(await readFile(trace.files.find((file) => file.path.endsWith("trace.json"))!.path, "utf8")) as {
-      video: string | null; actions: Array<{ operation: string; outcome: string; atMs: number; durationMs: number; target?: { ref?: string } }>;
+      startedAt: string; video: string | null; actions: Array<{ operation: string; outcome: string; atMs: number; durationMs: number; target?: { ref?: string } }>;
     };
     const clicks = traceJson.actions.filter((action) => action.operation === "click");
     // Plays a recording in Chrome and reads the center pixel at each time; a
     // negative time counts back from the end.
-    const play = async (file: string, times: number[]) => context!.pages()[0]!.evaluate(`(async () => {
+    const play = async (file: string, times: number[]) => recPage.evaluate(`(async () => {
       const element = document.createElement("video");
       element.muted = true;
-      element.src = "data:video/webm;base64," + ${JSON.stringify((await readFile(file)).toString("base64"))};
       await new Promise((resolve, reject) => {
-        element.onloadedmetadata = resolve;
+        element.onloadeddata = resolve;
         element.onerror = () => reject(new Error("video error " + element.error?.code));
+        element.src = "data:video/webm;base64," + ${JSON.stringify((await readFile(file)).toString("base64"))};
       });
       const canvas = document.createElement("canvas");
       canvas.width = element.videoWidth;
@@ -742,8 +884,11 @@ async function main(): Promise<void> {
       const context2d = canvas.getContext("2d");
       const pixels = [];
       for (const time of ${JSON.stringify(times)}) {
-        element.currentTime = time < 0 ? element.duration + time : time;
-        await new Promise((resolve) => { element.onseeked = resolve; });
+        // Seek near zero to decode the initial frame before drawing it.
+        const target = time < 0 ? element.duration + time : time === 0 ? 0.05 : time;
+        if (Math.abs(element.currentTime - target) > 0.001) {
+          await new Promise((resolve) => { element.onseeked = resolve; element.currentTime = target; });
+        }
         context2d.drawImage(element, 0, 0);
         pixels.push([...context2d.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data].slice(0, 3));
       }
@@ -751,21 +896,22 @@ async function main(): Promise<void> {
     })()`) as Promise<{ duration: number; width: number; height: number; pixels: number[][] }>;
     const green = (pixel: number[] | undefined) => !!pixel && pixel[1]! > 110 && pixel[0]! < 80 && pixel[2]! < 80;
     const white = (pixel: number[] | undefined) => !!pixel && pixel.every((value) => value > 220);
-    // At the start, half a second after the paint click and at the end; the video
-    // started with the trace.
+    // Both consumers must contain the captured transition at their own time origin.
     const paintClick = clicks.find((action) => action.target?.ref === paintRef);
     const clearClick = clicks.find((action) => action.target?.ref === clearRef);
-    const painted = paintClick ? (paintClick.atMs + paintClick.durationMs + 500) / 1000 : 0;
-    const videoPlay = await play(video.path, [0, painted, -0.05]);
-    const tracePlay = await play(trace.files.find((file) => file.path.endsWith("trace.webm"))!.path, [0, painted, -0.05]);
+    const videoPainted = (paintedAt - videoStartedAt + 100) / 1000;
+    const tracePainted = (paintedAt - Date.parse(traceJson.startedAt) + 100) / 1000;
+    const videoPlay = await play(video.path, [0, videoPainted, -0.05]);
+    const traceCleared = (clearedAt - Date.parse(traceJson.startedAt) + 100) / 1000;
+    const tracePlay = await play(trace.files.find((file) => file.path.endsWith("trace.webm"))!.path, [0, tracePainted, traceCleared, -0.05]);
     report("recording", { videoStarted, video, midway: { traceActive: midway.traceActive, videoActive: midway.videoActive },
       videoPlay, tracePlay, traceFiles: trace.files.map((file) => path.basename(file.path)), clicks });
     if (!video.path.endsWith("gravacao.webm") || video.path !== videoStarted.path || video.sizeBytes <= 0 ||
         !midway.traceActive || midway.videoActive || traceJson.video !== "trace.webm" || trace.files.length !== 2 ||
-        clicks.length !== 2 || clicks.some((action) => action.outcome !== "success") || !clearClick ||
+        clicks.length !== 2 || clicks.some((action) => action.outcome !== "success") || !paintClick || !clearClick ||
         videoPlay.duration < 1 || videoPlay.width < 64 || !white(videoPlay.pixels[0]) || !green(videoPlay.pixels[1]) || !green(videoPlay.pixels[2]) ||
         tracePlay.duration < videoPlay.duration || !white(tracePlay.pixels[0]) || !green(tracePlay.pixels[1]) ||
-        !white(tracePlay.pixels[2])) {
+        !white(tracePlay.pixels[2]) || !white(tracePlay.pixels[3])) {
       throw new Error("The personal recording did not show the page as it changed.");
     }
 

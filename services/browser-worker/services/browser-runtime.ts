@@ -993,13 +993,23 @@ export class BrowserRuntime implements BrowserExecutor {
         ...(input.modifiers ? { modifiers: input.modifiers } : {}),
       };
     }
+    if (context.signal?.aborted) throw abortSignalError(context.signal, "Click was cancelled before dispatch.");
+    if (input.expect && await this.pageRead.observeCondition(input.expect, context.signal)) {
+      throw new AppError("STATE_NOT_REACHED", "Expected state already present. No click was dispatched.");
+    }
     await this.beginNavigation(tab.tabId, "click");
     const actionStarted = performance.now();
-    const response = await this.driver.click(action);
+    const response = await this.driver.click(action, context.signal === undefined ? {} : { signal: context.signal });
     this.updateSelectedTab(tab.tabId, response);
     this.updateRequestedUrl(tab.tabId);
     await this.checkpoint();
-    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(actionStarted), context);
+    const remaining = context.deadline === undefined ? 10_000 : remainingOperationTimeMs(context.deadline);
+    const verified = input.expect && remaining > 0 ? await this.pageRead.waitCondition({
+      ...input.expect, timeoutMs: Math.min(input.expect.timeoutMs ?? 3000, remaining),
+    }, context.signal) : false;
+    if (context.signal?.aborted) return { tabId: tab.tabId, completed: true, unverified: true };
+    return { ...await this.withActionState(tab.tabId, input.knownRevision, elapsedMs(actionStarted), context),
+      unverified: !verified };
   }
 
   async hover(
@@ -1237,6 +1247,7 @@ export class BrowserRuntime implements BrowserExecutor {
     try {
       for (const [index, step] of input.steps.entries()) {
         const stepStarted = performance.now();
+        let unverified = false;
         switch (step.action) {
           case "navigate": {
             const current = this.tabsRegistry.assertNavigable(tab.tabId, step.url);
@@ -1279,6 +1290,7 @@ export class BrowserRuntime implements BrowserExecutor {
             });
             this.updateSelectedTab(tab.tabId, response);
             this.updateRequestedUrl(tab.tabId);
+            unverified = true;
             break;
           }
           case "fill": {
@@ -1353,6 +1365,7 @@ export class BrowserRuntime implements BrowserExecutor {
           }
         }
         results.push({ index, action: step.action, completed: true,
+          ...(unverified ? { unverified: true } : {}),
           durationMs: Math.max(0, performance.now() - stepStarted) });
       }
       const snapshot = input.finalSnapshot
@@ -1373,6 +1386,7 @@ export class BrowserRuntime implements BrowserExecutor {
         tabId: tab.tabId,
         completed: true,
         steps: results,
+        ...(results.some((step) => step.unverified) ? { unverified: true } : {}),
         actionSummary: results.map((result) => ({ index: result.index, action: result.action,
           durationMs: result.durationMs ?? 0 })),
         ...(screenshot === undefined ? {} : { screenshot }),
