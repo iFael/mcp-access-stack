@@ -476,6 +476,14 @@ export const browserFindResultSchema = z.object({
 }).strict();
 export type BrowserFindResult = z.infer<typeof browserFindResultSchema>;
 
+// One observable transition; a pre-existing condition is not proof of a click.
+export const browserClickExpectationSchema = z.union([
+  z.object({ text: z.string().min(1).max(10000), timeoutMs: z.number().int().positive().max(10000).optional() }).strict(),
+  z.object({ absentText: z.string().min(1).max(10000), timeoutMs: z.number().int().positive().max(10000).optional() }).strict(),
+  z.object({ url: z.url(), timeoutMs: z.number().int().positive().max(10000).optional() }).strict(),
+]);
+export type BrowserClickExpectation = z.infer<typeof browserClickExpectationSchema>;
+
 export const browserClickInputSchema = z
   .object({
     tabId: tabIdSchema,
@@ -487,6 +495,7 @@ export const browserClickInputSchema = z
     modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).optional(),
     confirmationId: confirmationIdSchema,
     knownRevision: knownRevisionSchema,
+    expect: browserClickExpectationSchema.optional(),
   })
   .strict()
   .refine((input) => Boolean(input.ref) !== (input.x !== undefined && input.y !== undefined) && ((input.x === undefined) === (input.y === undefined)), { message: "Specify either ref or both x and y." });
@@ -787,6 +796,7 @@ export const browserSequenceStepResultSchema = z
     index: z.number().int().nonnegative(),
     action: z.enum(["navigate", "click", "fill", "hover", "scroll", "drag", "formInput", "type", "press", "wait", "extract"]),
     completed: z.literal(true),
+    unverified: z.boolean().optional(),
     value: z.unknown().optional(),
     completeness: browserExtractionCompletenessSchema.optional(),
     durationMs: z.number().nonnegative().optional(),
@@ -797,6 +807,7 @@ export const browserSequenceResultSchema = z
     tabId: tabIdSchema,
     completed: z.literal(true),
     steps: z.array(browserSequenceStepResultSchema).max(20),
+    unverified: z.boolean().optional(),
     snapshot: browserSnapshotResultSchema.optional(),
     screenshot: z.lazy(() => browserScreenshotResultSchema).optional(),
     actionSummary: z.array(z.object({ index: z.number().int().nonnegative(), action: z.string().max(64), durationMs: z.number().nonnegative() }).strict()).max(200).optional(),

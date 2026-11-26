@@ -993,13 +993,18 @@ export class BrowserRuntime implements BrowserExecutor {
         ...(input.modifiers ? { modifiers: input.modifiers } : {}),
       };
     }
+    if (input.expect && await this.pageRead.observeCondition(input.expect)) {
+      throw new AppError("STATE_NOT_REACHED", "Expected state already present. No click was dispatched.");
+    }
     await this.beginNavigation(tab.tabId, "click");
     const actionStarted = performance.now();
     const response = await this.driver.click(action);
     this.updateSelectedTab(tab.tabId, response);
     this.updateRequestedUrl(tab.tabId);
     await this.checkpoint();
-    return this.withActionState(tab.tabId, input.knownRevision, elapsedMs(actionStarted), context);
+    const verified = input.expect ? await this.pageRead.waitCondition(input.expect) : false;
+    return { ...await this.withActionState(tab.tabId, input.knownRevision, elapsedMs(actionStarted), context),
+      unverified: !verified };
   }
 
   async hover(
@@ -1237,6 +1242,7 @@ export class BrowserRuntime implements BrowserExecutor {
     try {
       for (const [index, step] of input.steps.entries()) {
         const stepStarted = performance.now();
+        let unverified = false;
         switch (step.action) {
           case "navigate": {
             const current = this.tabsRegistry.assertNavigable(tab.tabId, step.url);
@@ -1279,6 +1285,7 @@ export class BrowserRuntime implements BrowserExecutor {
             });
             this.updateSelectedTab(tab.tabId, response);
             this.updateRequestedUrl(tab.tabId);
+            unverified = true;
             break;
           }
           case "fill": {
@@ -1353,6 +1360,7 @@ export class BrowserRuntime implements BrowserExecutor {
           }
         }
         results.push({ index, action: step.action, completed: true,
+          ...(unverified ? { unverified: true } : {}),
           durationMs: Math.max(0, performance.now() - stepStarted) });
       }
       const snapshot = input.finalSnapshot
@@ -1373,6 +1381,7 @@ export class BrowserRuntime implements BrowserExecutor {
         tabId: tab.tabId,
         completed: true,
         steps: results,
+        ...(results.some((step) => step.unverified) ? { unverified: true } : {}),
         actionSummary: results.map((result) => ({ index: result.index, action: result.action,
           durationMs: result.durationMs ?? 0 })),
         ...(screenshot === undefined ? {} : { screenshot }),

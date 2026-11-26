@@ -941,7 +941,7 @@ describe("BrowserRuntime Playwright layer", () => {
 
     await expect(
       runtime.click({ tabId: tab.tabId, ref: "e7", confirmationId }),
-    ).resolves.toEqual({ tabId: tab.tabId, completed: true });
+    ).resolves.toEqual({ tabId: tab.tabId, completed: true, unverified: true });
     expect(fake.calls.some((call) => call.name === "browser_click")).toBe(true);
   });
 

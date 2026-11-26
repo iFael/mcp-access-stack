@@ -511,7 +511,7 @@ function definitions(
       () => e.evaluate(assumeParsed(v)),
       (activeContext) => e.evaluate(assumeParsed(v), activeContext),
     )),
-    d("browser_click", "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Supports authorized deletions: ACTION_REQUIRES_CONFIRMATION supplies a one-use confirmationId; after the user approves the exact action, repeat the same click with that ID. Site-wide grants do not authorize deletions. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserClickInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_click", "Clicks a fresh element ref OR viewport CSS coordinates x/y after semantic hit-testing and returns updated semantic state. Optional expect verifies a new text, absentText or URL condition after one dispatch; unverified=true means inspect before retry, never assume the business effect. Supports authorized deletions: ACTION_REQUIRES_CONFIRMATION supplies a one-use confirmationId; after the user approves the exact action, repeat the same click with that ID. Site-wide grants do not authorize deletions. Use the returned state instead of calling browser_snapshot again. For 2+ known mutations needing no intermediate observation, prefer browser_sequence.", c.browserClickInputSchema, c.browserActionResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.click(assumeParsed(v)),
       (activeContext) => e.click(assumeParsed(v), activeContext),
@@ -561,7 +561,7 @@ function definitions(
       () => e.extract(assumeParsed(v)),
       (activeContext) => e.extract(assumeParsed(v), activeContext),
     )),
-    d("browser_sequence", "Executes up to 20 typed steps (navigate, click, fill, hover, scroll, drag, formInput, type, press, wait, extract) under one owned-tab lock, returning per-step durations and actionSummary; finalSnapshot and finalScreenshot are optional. Split after navigation when fresh refs are required. Not atomic: earlier side effects can remain after failure, so inspect before retrying. Confirmation and policy checks are required for every relevant step.", c.browserSequenceInputSchema, c.browserSequenceResultSchema, false, (v, context) => callWithOptionalContext(
+    d("browser_sequence", "Executes up to 20 typed steps (navigate, click, fill, hover, scroll, drag, formInput, type, press, wait, extract) under one owned-tab lock, returning per-step durations, unverified markers and actionSummary; finalSnapshot and finalScreenshot are optional. Split after navigation when fresh refs are required. Not atomic: earlier side effects can remain after failure, so inspect before retrying. Confirmation and policy checks are required for every relevant step.", c.browserSequenceInputSchema, c.browserSequenceResultSchema, false, (v, context) => callWithOptionalContext(
       context,
       () => e.sequence(assumeParsed(v)),
       (activeContext) => e.sequence(assumeParsed(v), activeContext),

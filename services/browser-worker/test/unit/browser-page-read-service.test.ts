@@ -143,6 +143,22 @@ describe("BrowserPageReadService", () => {
     expect(updateSelectedTab).toHaveBeenCalledTimes(1);
   });
 
+  it("observes an exact condition without treating unavailable data as a match", async () => {
+    let now = 0;
+    const driver = new FakePageDriver([
+      response({ result: null }), response({ result: false }),
+      response({ result: false }), response({ result: true }),
+      response({ result: false }), response({ result: false }),
+    ]);
+    const service = makeService({ driver, now: () => now,
+      delay: async (ms) => { now += ms; }, pollIntervalMs: 100 });
+    await expect(service.observeCondition({ absentText: "Deleting" })).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    await expect(service.observeCondition({ text: "Saved" })).resolves.toBe(false);
+    await expect(service.waitCondition({ url: "https://example.test/saved", timeoutMs: 300 })).resolves.toBe(true);
+    await expect(service.waitCondition({ text: "Saved", timeoutMs: 200 })).resolves.toBe(false);
+    expect(driver.calls.every((call) => call.name === "evaluate")).toBe(true);
+  });
+
   it("returns typed extraction values without textual parsing", async () => {
     const driver = new FakePageDriver([
       response({ result: "hello" }),

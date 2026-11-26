@@ -329,6 +329,9 @@ export class PersonalBrowserBridge implements PersonalBrowserExecutor {
   async click(...args: Parameters<BrowserExecutor["click"]>): ReturnType<BrowserExecutor["click"]> {
     this.requireGuardedActions();
     const [input, context] = args;
+    if (input.expect && !this.peerInfo?.capabilities.includes("clickPostconditionV1")) {
+      throw new AppError("BROWSER_CAPABILITY_UNSUPPORTED", "Click verification requires an updated personal Chrome extension. No click was dispatched.");
+    }
     let ref = input.ref;
     if (!ref) {
       if (input.x === undefined || input.y === undefined) {

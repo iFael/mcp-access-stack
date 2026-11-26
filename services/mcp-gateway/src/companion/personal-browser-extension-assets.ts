@@ -72,6 +72,7 @@ export const PERSONAL_BROWSER_CAPABILITIES = [
   "goForward",
   "tabGroups",
   "guardedActionsV1",
+  "clickPostconditionV1",
   "chromeConfirmationV1",
   "snapshotRevisionV1",
   "frameSequenceMutationsV1",
@@ -2284,6 +2285,15 @@ async function click(input, signal) {
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, modifiers,
     });
+    if (input.expect) {
+      const [observed] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: waitProbe,
+        args: [input.expect.text ?? null, null, input.expect.url ?? null, input.expect.absentText ?? null],
+      });
+      if (observed?.result !== false) {
+        throw coded("STATE_NOT_REACHED", "Expected state already present or unavailable. No click was dispatched.");
+      }
+    }
     // Hover handlers can replace the hit target. Bind the final click to the
     // exact observed element, not merely a matching label in the same frame.
     if (pixel && input.guard.inspected) {
@@ -2294,13 +2304,31 @@ async function click(input, signal) {
       if (!samePersonalPixelSemanticTarget(semantic?.result, input.guard.inspected)) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "The classified pixel target changed after hover.");
       }
+    } else if (!pixel && input.ref.startsWith("ax-")) {
+      const current = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
+      if (current.x !== point.x || current.y !== point.y) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The accessibility target moved after hover. No click was dispatched.");
+      }
+    } else {
+      const [check] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId },
+        func: pixel ? probePersonalPixelTarget : probeGuardedElement,
+        args: pixel ? [point.x, point.y, input.guard.url] :
+          [input.ref, input.guard, false, point.x, point.y, true],
+      });
+      const current = check?.result;
+      if (!current || current.error || current.stale || current.outside || current.empty ||
+          current.x !== point.x || current.y !== point.y ||
+          (pixel && point.hitId !== undefined && current.hitId !== point.hitId)) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The target changed after hover. No click was dispatched.");
+      }
     }
     throwIfAborted(signal, "click", false);
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mousePressed", x: point.x, y: point.y, button, buttons, clickCount, modifiers,
     });
     const held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
-    let interrupted = false;
+    // The dialog may interrupt the release; neither path proves the effect.
     let notify;
     const opened = new Promise((resolve) => { notify = resolve; });
     if (held) held.dialogWaiter = notify;
@@ -2308,14 +2336,22 @@ async function click(input, signal) {
       const released = chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
         type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, clickCount, modifiers,
       });
-      interrupted = await Promise.race([released.then(() => false), opened.then(() => true)]);
+      await Promise.race([released.then(() => false), opened.then(() => true)]);
       if (held?.dialogHandling && held.dialog?.at >= clickStartedAt) await held.dialogHandling;
     } finally {
       if (held?.dialogWaiter === notify) delete held.dialogWaiter;
     }
     const dialog = held?.dialog;
+    let verified = false;
+    if (input.expect && dialog?.state !== "open") {
+      try {
+        await wait({ tabId: input.tabId, ...input.expect, timeoutMs: input.expect.timeoutMs ?? 3000 }, signal);
+        verified = true;
+      } catch { /* The click was dispatched; never retry because observation failed. */ }
+    }
     return { tabId: input.tabId, completed: true,
-      ...(interrupted ? { unverified: true } : {}),
+      // Dispatch alone cannot prove the application accepted the action.
+      unverified: !verified,
       ...(dialog && dialog.at >= clickStartedAt ? { dialog: {
         state: dialog.state, dialogType: dialog.dialogType, message: dialog.message,
       } } : {}),
@@ -2611,15 +2647,15 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
     delete globalThis.__mcpV3EditorMutation;
     return { ready: false };
   }
-  let element = ref ? globalThis.__mcpV3OwnedRefElements?.get(ref) : document.activeElement;
-  if (!ref) {
-    // The focused control of a FRAMESET lives in the active child document.
-    // Ignore stale focus kept by inactive frames.
-    if (document.hasFocus?.() === false) return { ready: false };
-    for (let depth = 0; depth < 4 && element?.shadowRoot?.activeElement; depth += 1) {
-      element = element.shadowRoot.activeElement;
-    }
+  // Verify the actual focused element even when an explicit ref was supplied.
+  // The focused control of a FRAMESET lives in the active child document.
+  if (document.hasFocus?.() === false) return { ready: false };
+  let active = document.activeElement;
+  for (let depth = 0; depth < 4 && active?.shadowRoot?.activeElement; depth += 1) {
+    active = active.shadowRoot.activeElement;
   }
+  const element = ref ? globalThis.__mcpV3OwnedRefElements?.get(ref) : active;
+  if (!element || element !== active && !element.contains?.(active)) return { ready: false };
   const tag = String(element?.tagName || "").toLowerCase();
   const type = String(element?.getAttribute?.("type") || "text").toLowerCase();
   const role = element?.getAttribute?.("role");
@@ -2634,8 +2670,14 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   const host = element.closest?.(".monaco-editor, .cm-editor, [contenteditable='true']") ||
     (element.editContext != null ? element.parentElement : null) || element;
   const plain = tag === "input" || tag === "textarea";
-  const value = typeof element.value === "string" ? element.value :
-    String((host === element ? element : host).textContent || "");
+  const contextText = element.editContext?.text;
+  const virtualEditor = !!element.closest?.(".monaco-editor, .cm-editor");
+  // Hidden textareas and rendered virtual lines are not the full editor model.
+  const exact = typeof contextText === "string" || !virtualEditor &&
+    (typeof element.value === "string" || element.isContentEditable);
+  const value = typeof contextText === "string" ? contextText :
+    typeof element.value === "string" ? element.value :
+    String(element.innerText ?? (host === element ? element : host).textContent ?? "");
   if (stage === "before") {
     prior?.observer?.disconnect();
     const record = { element, host, value, mutated: false };
@@ -2646,7 +2688,7 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
       } catch { record.observer?.disconnect(); }
     }
     globalThis.__mcpV3EditorMutation = record;
-    return { ready: true, alreadyEqual: value === expectedText,
+    return { ready: true, alreadyEqual: exact && value === expectedText,
       ...((element.onkeyup || element.onkeydown || element.onkeypress ||
         element.hasAttribute?.("onkeyup") || element.hasAttribute?.("onkeydown") ||
         element.hasAttribute?.("onkeypress")) ? { keyHandlers: true } : {}),
@@ -2655,8 +2697,10 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   }
   if (!prior || prior.element !== element) return { ready: false };
   const changed = value !== prior.value || prior.mutated;
-  const matches = value === expectedText;
-  if (changed || matches) {
+  const matches = exact && value === expectedText;
+  // A mutation is not an exact replacement. Keep observing until the
+  // expected value arrives (or the caller cleans up its bounded observation).
+  if (matches || expectedText === null && changed) {
     prior.observer?.disconnect();
     delete globalThis.__mcpV3EditorMutation;
   }
@@ -2742,23 +2786,23 @@ async function fill(input, signal) {
         const [after] = await chrome.scripting.executeScript({
           target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
           args: ["after", input.ref, input.value],
-        });
-        verified = after?.result?.ready === true &&
-          (after.result.matches === true || after.result.plain !== true && after.result.changed === true);
+        }).catch(() => []);
+        verified = after?.result?.ready === true && after.result.matches === true;
         if (verified) break;
         await delay(100, signal);
       }
       if (!verified) {
-        await chrome.scripting.executeScript({ target: { tabId: chromeTabId },
-          func: observePersonalEditableMutation, args: ["cleanup", null, null] }).catch(() => undefined);
         return { tabId: input.tabId, completed: true, unverified: true };
       }
     }
-    return { tabId: input.tabId, completed: true };
+    // AX dispatch currently has no equivalent exact-content observation.
+    return { tabId: input.tabId, completed: true, ...(input.ref.startsWith("ax-") ? { unverified: true } : {}) };
   } catch (error) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
+    await chrome.scripting.executeScript({ target: { tabId: chromeTabId },
+      func: observePersonalEditableMutation, args: ["cleanup", null, null] }).catch(() => undefined);
     await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
@@ -3071,14 +3115,16 @@ async function typeText(input, signal) {
     } else {
       await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.text });
     }
-    let unverified = false;
+    // Multiline, submission, or other paths without an exact read-back are
+    // dispatched, not verified.
+    let unverified = input.text.length > 0 && !verifyTypedChange;
     if (verifyTypedChange) {
       let changed = false;
       for (let attempt = 0; attempt < 4; attempt += 1) {
         const observed = await chrome.scripting.executeScript({
           target: { tabId: chromeTabId, frameIds: [focused[0].frameId] },
           func: observePersonalEditableMutation, args: ["after", null, null],
-        });
+        }).catch(() => []);
         changed = observed[0]?.documentId === focused[0].documentId &&
           observed[0]?.result?.ready === true && observed[0].result.changed === true;
         if (changed) break;
@@ -3165,13 +3211,17 @@ async function wait(input, signal) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     throwIfAborted(signal, "wait", false);
+    const slice = Math.min(250, deadline - Date.now());
+    if (slice <= 0) break;
+    const started = Date.now();
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       func: waitProbe,
-      args: [input.text ?? null, input.ref ?? null, input.url ?? null, input.absentText ?? null],
+      args: [input.text ?? null, input.ref ?? null, input.url ?? null, input.absentText ?? null, slice],
     }).catch(() => []);
-    if (result?.result) return { tabId: input.tabId, completed: true };
-    await delay(200, signal);
+    if (result?.result === true) return { tabId: input.tabId, completed: true };
+    // Navigation can destroy the script context; avoid a busy loop.
+    if (Date.now() - started < slice) await delay(Math.min(50, Math.max(0, deadline - Date.now())), signal);
   }
   throw coded("STATE_NOT_REACHED", "The requested personal browser state was not reached before timeout.");
 }
@@ -5008,9 +5058,11 @@ async function sequence(input, signal, timing) {
       completed: true,
       durationMs: Math.max(0, performance.now() - started),
       ...(step.action === "extract" ? { value: value.value } : {}),
+      ...(value?.unverified === true ? { unverified: true } : {}),
     });
   }
   const response = { tabId: input.tabId, completed: true, steps: results,
+    ...(results.some((step) => step.unverified) ? { unverified: true } : {}),
     actionSummary: results.map((r) => ({ index: r.index, action: r.action, durationMs: r.durationMs })),
   };
   if (input.finalSnapshot) {
@@ -7089,7 +7141,7 @@ function inspectPointInDocument(x, y) {
   return null;
 }
 
-function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
+function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY, recheckOnly = false) {
   if (!guard || typeof guard.url !== "string" || guard.ref !== ref || guard.url.split("#", 1)[0] !== location.href.split("#", 1)[0]) return { error: "stale_page" };
   const element = globalThis.__mcpV3OwnedRefElements?.get(ref);
   if (!element || !element.isConnected) return { error: "stale_ref" };
@@ -7118,7 +7170,8 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
     (element.isContentEditable && ["textbox", "searchbox"].includes(role) ? "" : element.innerText || element.textContent) || "").replace(/\\s+/gu, " ").trim().slice(0, 500);
   if (guard.role !== role || guard.name !== name) return { error: "target_changed" };
   if (focus && !(element instanceof HTMLInputElement && !["checkbox", "radio", "file", "button", "submit", "reset", "hidden"].includes(type)) &&
-      !(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLElement && element.isContentEditable)) {
+      !(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLElement &&
+        (element.isContentEditable || element.editContext != null))) {
     return { error: "not_editable" };
   }
   // Monaco's input can be tiny or covered by its own rendered text.
@@ -7127,7 +7180,7 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
     (tag === "textarea" || element.isContentEditable || element.getAttribute("role") === "textbox")
     ? element.closest?.(".monaco-editor,.cm-editor") : null;
   const clickSurface = editorHost?.isConnected && editorHost.contains?.(element) ? editorHost : element;
-  clickSurface.scrollIntoView({ block: "center", inline: "center" });
+  if (!recheckOnly) clickSurface.scrollIntoView({ block: "center", inline: "center" });
   if (focus) element.focus?.();
   const rect = clickSurface.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return { error: "not_visible" };
@@ -7144,28 +7197,42 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY) {
       x >= rect.right || y >= rect.bottom || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
     return { error: "point_outside_target" };
   }
-  let top = document.elementFromPoint(x, y);
-  for (let depth = 0; depth < 6; depth += 1) {
-    const inner = top?.shadowRoot?.elementFromPoint?.(x, y);
-    if (!inner || inner === top) break;
-    top = inner;
+  function hitsTarget(x, y) {
+    let top = document.elementFromPoint(x, y);
+    for (let depth = 0; depth < 6; depth += 1) {
+      const inner = top?.shadowRoot?.elementFromPoint?.(x, y);
+      if (!inner || inner === top) break;
+      top = inner;
+    }
+    // A native label is an authorized hit target for its own checkbox/radio.
+    // A different overlay or nested interactive control remains forbidden.
+    const associatedLabel = ["checkbox", "radio"].includes(role) &&
+      Array.from(element.labels || []).some((label) =>
+        (top === label || label.contains(top)) &&
+        !top?.closest?.("a,button,input,select,textarea,[role=button],[role=link]"));
+    // Only a visual layer inside the same editor may cover an editing input.
+    // Buttons, links, nested actions and unrelated overlays remain blocked.
+    const editorHit = (editorPointRef || clickSurface !== element) &&
+      clickSurface.contains?.(top) &&
+      !top?.closest?.('a[href],button,[role="button"],[role="link"],[role="menuitem"],input[type="submit"],input[type="button"]');
+    if (!top || (editorPointRef && !editorHit) ||
+        (top !== element && !element.contains(top) && !associatedLabel && !editorHit)) {
+      return false;
+    }
+    return true;
   }
-  // A native label is an authorized hit target for its own checkbox/radio.
-  // A different overlay or nested interactive control remains forbidden.
-  const associatedLabel = ["checkbox", "radio"].includes(role) &&
-    Array.from(element.labels || []).some((label) =>
-      (top === label || label.contains(top)) &&
-      !top?.closest?.("a,button,input,select,textarea,[role=button],[role=link]"));
-  // Only a visual layer inside the same editor may cover an editing input.
-  // Buttons, links, nested actions and unrelated overlays remain blocked.
-  const editorHit = (editorPointRef || clickSurface !== element) &&
-    clickSurface.contains?.(top) &&
-    !top?.closest?.('a[href],button,[role="button"],[role="link"],[role="menuitem"],input[type="submit"],input[type="button"]');
-  if (!top || (editorPointRef && !editorHit) ||
-      (top !== element && !element.contains(top) && !associatedLabel && !editorHit)) {
-    return { error: "obscured" };
+  if (hitsTarget(x, y)) return { x, y };
+  // Coordinates supplied by the caller are exact. Only auto-positioned
+  // semantic targets may try other points within the same visible surface.
+  if (coordinateX == null && coordinateY == null) {
+    for (const [fx, fy] of [[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75],
+      [0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) {
+      const px = left + (right - left) * fx;
+      const py = topEdge + (bottom - topEdge) * fy;
+      if (hitsTarget(px, py)) return { x: px, y: py };
+    }
   }
-  return { x, y };
+  return { error: "obscured" };
 }
 
 function parseChromeKey(input) {
@@ -7206,12 +7273,36 @@ function parseChromeKey(input) {
   };
 }
 
-function waitProbe(text, ref, url, absentText) {
-  if (typeof ref === "string" && !globalThis.__mcpV3OwnedRefElements?.get(ref)?.isConnected) return false;
-  if (typeof text === "string" && !(document.body?.innerText || "").includes(text)) return false;
-  if (typeof url === "string" && location.href !== url) return false;
-  if (typeof absentText === "string" && (document.body?.innerText || "").includes(absentText)) return false;
-  return true;
+function waitProbe(text, ref, url, absentText, observeMs = 0) {
+  const matches = () => {
+    if (typeof ref === "string" && !globalThis.__mcpV3OwnedRefElements?.get(ref)?.isConnected) return false;
+    if ((typeof text === "string" || typeof absentText === "string") &&
+        (!document.body || document.readyState === "loading")) return null;
+    if (typeof text === "string" && !(document.body.innerText || "").includes(text)) return false;
+    if (typeof url === "string" && location.href !== url) return false;
+    if (typeof absentText === "string" && (document.body.innerText || "").includes(absentText)) return false;
+    return true;
+  };
+  const initial = matches();
+  if (!observeMs || initial === true) return initial;
+  return new Promise((resolve) => {
+    let observer, timer, poll, finished = false;
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      observer?.disconnect(); clearTimeout(timer); clearInterval(poll);
+      resolve(value);
+    };
+    const check = () => { if (matches() === true) finish(true); };
+    try {
+      observer = new MutationObserver(check);
+      observer.observe(document.documentElement || document, { subtree: true, childList: true, attributes: true, characterData: true });
+      // URL-only history changes do not necessarily produce a DOM mutation.
+      poll = setInterval(check, 50);
+      timer = setTimeout(() => finish(matches() === true), observeMs);
+      check();
+    } catch { finish(false); }
+  });
 }
 
 function extractPage(ref, selector, format, expectedUrl) {
