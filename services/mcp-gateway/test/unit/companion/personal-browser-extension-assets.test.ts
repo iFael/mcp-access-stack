@@ -752,7 +752,7 @@ describe("personal browser extension assets", () => {
     let changedLabel = false;
     let selected = false;
     const context = vm.createContext({
-      performance: { now: () => 5 }, Date, JSON, Math, setTimeout,
+      performance: { now: () => 5 }, Date, JSON, Math, setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       delay: (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
@@ -1526,6 +1526,7 @@ describe("personal browser extension assets", () => {
     let changed = false;
     let focused = true;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -2097,6 +2098,7 @@ describe("personal browser extension assets", () => {
     const commands: string[] = [];
     const phases: string[] = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw Object.assign(new Error("deadline"), { code: "OPERATION_CANCELLED" }); },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -3032,6 +3034,7 @@ describe("personal browser extension assets", () => {
     let kind: Record<string, unknown> = { kind: "checkbox", checked: false };
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3082,6 +3085,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -3499,6 +3503,7 @@ describe("personal browser extension assets", () => {
     let actualUrl = "https://example.com/";
     let failTree = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       crypto: { randomUUID: () => "document-uuid" },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
@@ -3663,7 +3668,7 @@ describe("personal browser extension assets", () => {
     const commands: string[] = [];
     const context = vm.createContext({
       URL, Date, Map, Object, String, Promise, Number, Uint8Array, TextDecoder, atob,
-      setTimeout: (fn: () => void) => { fn(); return 1; },
+      setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
       crypto: { randomUUID: () => "uuid" },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
@@ -3750,7 +3755,7 @@ describe("personal browser extension assets", () => {
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
-      setTimeout: (fn: () => void) => { fn(); return 1; },
+      setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       sanitizePersonalDiagnosticText,
       chrome: { debugger: {
@@ -3983,6 +3988,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -4033,6 +4039,7 @@ describe("personal browser extension assets", () => {
     const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
     let probe: Record<string, unknown> = { x: 40, y: 60 };
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -4087,6 +4094,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: (id: string) => Number(id.slice("personal:".length)),
       requireOwnedMetadata: async (id: number) => {
         if (id !== 7) throw Object.assign(new Error("not owned"), { code: "TAB_NOT_FOUND" });
@@ -4221,6 +4229,86 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await releasing;
     expect(await acquiring).toBe("acquired");
     expect(calls).toEqual(["attach", "detach", "attach"]);
+  });
+
+  it("bounds a stalled debugger attach, rejects competing attaches and retires a late session", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<void>();
+    const detached = deferred<void>();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const calls: string[] = [];
+    const transitions = new Map();
+    const held = new Map();
+    const ctx = vm.createContext({
+      setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalDebuggerTransitions: transitions, __mcpV3PersonalTaskDebuggers: held,
+      holdPersonalTaskDebugger: () => { calls.push("hold"); held.set("7", { arm: () => undefined }); },
+      chrome: { debugger: {
+        attach: () => { calls.push("attach"); return pending.promise; },
+        detach: async () => { calls.push("detach"); detached.resolve(); },
+      } },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger"]) vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const first = attach({ tabId: 7 }).catch((error: { code: string }) => error.code);
+    const second = attach({ tabId: 7 }).catch((error: { code: string }) => error.code);
+    expect(calls).toEqual(["attach"]);
+    for (const callback of [...timers.values()]) callback();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([Promise.all([first, second]), new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toEqual(["BROWSER_WORKER_TIMEOUT", "BROWSER_WORKER_TIMEOUT"]);
+      expect(transitions.has("7")).toBe(true);
+      pending.resolve();
+      await detached.promise;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(calls).toEqual(["attach", "detach"]);
+      expect(transitions.size).toBe(0);
+      expect(held.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve();
+      await Promise.all([first, second]);
+    }
+  });
+
+  it("does not reuse a debugger while its Page.enable setup is pending", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const enabled = deferred<void>();
+    const started = deferred<void>();
+    const calls: string[] = [];
+    const transitions = new Map();
+    const held = new Map();
+    const ctx = vm.createContext({
+      setTimeout, clearTimeout,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalDebuggerTransitions: transitions, __mcpV3PersonalTaskDebuggers: held,
+      holdPersonalTaskDebugger: () => { held.set("7", { arm: () => undefined }); },
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        onEvent: {},
+        sendCommand: async (_: unknown, method: string) => { calls.push(method); started.resolve(); return enabled.promise; },
+      } },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger"]) vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const first = attach({ tabId: 7 });
+    await started.promise;
+    let reused = false;
+    const second = attach({ tabId: 7 }).then(value => { reused = true; return value; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(reused).toBe(false);
+      expect(calls).toEqual(["attach", "Page.enable"]);
+    } finally {
+      enabled.resolve();
+      await Promise.all([first, second]);
+    }
+    expect(reused).toBe(true);
+    expect(transitions.size).toBe(0);
   });
 
   it("serializes concurrent debugger attachments on the same Chrome tab", async () => {
@@ -4412,6 +4500,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     let detached = 0;
     const listeners = new Set<Function>();
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       Date, Map, Promise,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
@@ -4637,7 +4726,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       cancellationError: () => new Error("cancelled"),
-      setTimeout: (fn: () => void) => { fn(); return 1; },
+      setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       sanitizePersonalDiagnosticText,
       chrome: {
@@ -4729,7 +4818,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const worker = () => {
       const context = vm.createContext({
         chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}), throwIfAborted: () => undefined,
-        cancellationError: () => new Error("cancelled"), setTimeout: (fn: () => void) => { fn(); return 1; },
+        cancellationError: () => new Error("cancelled"), setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
         coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
         sanitizePersonalDiagnosticText, chrome,
       });
@@ -6336,6 +6425,9 @@ function extractFunction(source: string, name: string): string {
       depth -= 1;
       if (depth === 0) {
         const body = source.slice(start, index + 1);
+        if (name === "attachGuardedDebugger") {
+          return extractFunction(source, "waitPersonalDebuggerTransition") + "\n" + body;
+        }
         if (name === "readPersonalNetwork") {
           return ["safeNetworkUrl", "safeNetworkHeaders", "safeNetworkBody",
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]

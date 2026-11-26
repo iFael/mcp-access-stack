@@ -179,32 +179,60 @@ function borrowPersonalDebugger(target) {
 // the task finishes or pauses, the tab leaves the task, the user takes the turn
 // or the tab sits idle; an action only borrows it. Without that hold, which the
 // worker installs, the action attaches and detaches the debugger itself.
+async function waitPersonalDebuggerTransition(pending, onTimeout) {
+  let timer;
+  try {
+    const limit = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        onTimeout?.();
+        reject(coded("BROWSER_WORKER_TIMEOUT", "Chrome debugger transition did not complete; no new input was dispatched."));
+      }, 8000);
+    });
+    return await Promise.race([pending, limit]);
+  } finally { clearTimeout(timer); }
+}
+
 async function attachGuardedDebugger(target) {
   const key = String(target.tabId);
   if (globalThis.__mcpV3PersonalPendingInput?.has(key)) {
     throw coded("EXECUTION_STATE_INVALID", "Previous CDP input is unresolved; no new debugger action was dispatched.");
   }
   const transitions = globalThis.__mcpV3PersonalDebuggerTransitions;
-  const pending = transitions?.get(key);
-  if (pending) await pending;
+  // The transition covers attachment AND initialization, or late retirement.
+  // Do not start another attach while Chrome may still complete the old one.
+  while (transitions?.has(key)) await waitPersonalDebuggerTransition(transitions.get(key));
+  if (globalThis.__mcpV3PersonalPendingInput?.has(key)) {
+    throw coded("EXECUTION_STATE_INVALID", "Previous CDP input is unresolved; no new debugger action was dispatched.");
+  }
   if (borrowPersonalDebugger(target)) return false;
   const held = globalThis.__mcpV3PersonalTaskDebuggers;
   const current = held?.get(key);
   if (current) {
+    if (current.ready === false) throw coded("EXECUTION_STATE_INVALID", "Chrome debugger initialization was not confirmed.");
     current.arm();
     return false;
   }
-  const attaching = chrome.debugger.attach(target, "1.3");
-  transitions?.set(key, attaching);
-  try {
-    await attaching;
+  let abandoned = false;
+  const attaching = chrome.debugger.attach(target, "1.3").then(async () => {
+    if (abandoned) {
+      // The original caller timed out before attachment completed. Do not
+      // initialize or dispatch input on its late debugger session.
+      await chrome.debugger.detach(target);
+      return false;
+    }
     if (!held) return true;
     holdPersonalTaskDebugger(target.tabId);
+    const session = held.get(key);
+    session.ready = false;
     if (chrome.debugger.onEvent) await chrome.debugger.sendCommand(target, "Page.enable");
+    if (held.get(key) !== session) throw coded("EXECUTION_STATE_INVALID", "Chrome debugger detached during initialization.");
+    session.ready = true;
     return false;
-  } finally {
-    if (transitions?.get(key) === attaching) transitions.delete(key);
-  }
+  });
+  transitions?.set(key, attaching);
+  const clear = () => { if (transitions?.get(key) === attaching) transitions.delete(key); };
+  void attaching.then(clear, clear);
+  return await waitPersonalDebuggerTransition(attaching, () => { abandoned = true; });
 }
 
 async function detachGuardedDebugger(target, attached) {
