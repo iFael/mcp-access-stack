@@ -54,6 +54,7 @@ export interface GitProcessExecutor {
   listIgnoredPaths(cwd: string, signal?: AbortSignal): Promise<string[]>;
   hasTrackedPaths(cwd: string, relativePath: string, signal?: AbortSignal): Promise<boolean>;
   removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void>;
+  detachHead(cwd: string, headSha: string, signal?: AbortSignal): Promise<void>;
   stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   unstagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   writeTree(cwd: string, signal?: AbortSignal): Promise<string>;
@@ -179,6 +180,10 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
 
   async removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void> {
     await this.invoke(cwd, this.mutationArgs(["worktree", "remove", destination]), signal, [0], true);
+  }
+
+  async detachHead(cwd: string, headSha: string, signal?: AbortSignal): Promise<void> {
+    await this.invokeSuccess(cwd, this.mutationArgs(["switch", "--detach", "--no-overwrite-ignore", headSha]), signal);
   }
 
   async stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void> {

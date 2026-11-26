@@ -178,6 +178,55 @@ describe("GitRepositoryService isolated worktrees", () => {
     })).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
     expect(await readdir(external)).toEqual([]);
   });
+  it("detaches a clean registered worktree at the same SHA, preserving its branch and ignored runtime", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/old-main";
+    const target = path.join(source, destination);
+    git(source, ["switch", "-c", "feature/current"]);
+    git(source, ["worktree", "add", target, "main"]);
+    await writeWorkspaceFile(source, ".git/info/exclude", ".worktrees/\nruntime/\n");
+    await writeWorkspaceFile(target, "runtime/keep.txt", "preserve\n");
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha,
+      expectedWorktreeHeadSha: headSha, expectedBranch: "main" };
+
+    await expect(service.detachWorktree(input)).resolves.toEqual({
+      root: ".", destination, sourceHeadSha: headSha, headSha,
+      previousBranch: "main", detached: true,
+    });
+    expect(git(target, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("HEAD");
+    expect(git(target, ["rev-parse", "HEAD"]).trim()).toBe(headSha);
+    expect(git(source, ["rev-parse", "refs/heads/main"]).trim()).toBe(headSha);
+    expect(currentBranch()).toBe("feature/current");
+    expect(await readFile(path.join(target, "runtime/keep.txt"), "utf8")).toBe("preserve\n");
+    expect(await readFile(path.join(target, "base.txt"), "utf8")).toBe("base\n");
+    git(source, ["switch", "main"]);
+    expect(currentBranch()).toBe("main");
+  });
+
+  it("refuses detach for stale source, target or branch identity and for dirty worktrees", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/old-feature";
+    const target = path.join(source, destination);
+    git(source, ["worktree", "add", "-b", "feature/old", target, headSha]);
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha,
+      expectedWorktreeHeadSha: headSha, expectedBranch: "feature/old" };
+
+    await expect(service.detachWorktree({ ...input, expectedSourceHeadSha: "f".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await expect(service.detachWorktree({ ...input, expectedWorktreeHeadSha: "e".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await expect(service.detachWorktree({ ...input, expectedBranch: "feature/wrong" }))
+      .rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    await writeWorkspaceFile(target, "base.txt", "local change\n");
+    await expect(service.detachWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(await readFile(path.join(target, "base.txt"), "utf8")).toBe("local change\n");
+    await writeWorkspaceFile(target, "base.txt", "base\n");
+    await writeWorkspaceFile(target, "untracked.txt", "local file\n");
+    await expect(service.detachWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(git(target, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/old");
+    expect(await readFile(path.join(target, "untracked.txt"), "utf8")).toBe("local file\n");
+  });
+
   it("removes only a registered clean worktree without changing a dirty source checkout", async () => {
     const { service, headSha, source } = await setupRemote();
     const destination = ".worktrees/clean-main";

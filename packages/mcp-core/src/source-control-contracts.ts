@@ -187,6 +187,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_create_branch",
   "git_create_worktree",
   "git_remove_worktree",
+  "git_detach_worktree",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -298,6 +299,27 @@ export const gitRemoveWorktreeResultSchema = z.object({
   removed: z.literal(true),
 }).strict();
 export type GitRemoveWorktreeResult = z.infer<typeof gitRemoveWorktreeResultSchema>;
+
+// Release an attached branch without removing its checkout or changing a ref.
+export const gitDetachWorktreeInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  destination: gitCreateWorktreeInputSchema.shape.destination,
+  expectedSourceHeadSha: gitShaSchema,
+  expectedWorktreeHeadSha: gitShaSchema,
+  expectedBranch: gitBranchSchema.refine((branch) => branch !== "HEAD"),
+}).strict();
+export type GitDetachWorktreeInput = z.input<typeof gitDetachWorktreeInputSchema>;
+
+export const gitDetachWorktreeResultSchema = z.object({
+  root: rootSchema,
+  destination: gitDetachWorktreeInputSchema.shape.destination,
+  sourceHeadSha: gitShaSchema,
+  headSha: gitShaSchema,
+  previousBranch: gitBranchSchema,
+  detached: z.literal(true),
+}).strict();
+export type GitDetachWorktreeResult = z.infer<typeof gitDetachWorktreeResultSchema>;
 
 export const gitStagePathsInputSchema = z
   .object({

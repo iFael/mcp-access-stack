@@ -7,6 +7,7 @@ const cases = [
   ["createBranch", "gitCreateBranch"],
   ["createWorktree", "gitCreateWorktree"],
   ["removeWorktree", "gitRemoveWorktree"],
+  ["detachWorktree", "gitDetachWorktree"],
   ["stagePaths", "gitStagePaths"],
   ["unstagePaths", "gitUnstagePaths"],
   ["commit", "gitCommit"],

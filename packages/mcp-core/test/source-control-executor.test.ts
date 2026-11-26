@@ -13,6 +13,7 @@ import type {
   GitCreateBranchInput,
   GitCreateWorktreeInput,
   GitRemoveWorktreeInput,
+  GitDetachWorktreeInput,
   GitMergeBranchInput,
   GitSyncBranchInput,
   GitPushBranchInput,
@@ -34,7 +35,7 @@ describe("source-control executor ports", () => {
     expect(sourceControlExecutorModule).toBeDefined();
   });
 
-  test("keeps GitRepositoryExecutor limited to exactly ten typed methods", async () => {
+  test("keeps GitRepositoryExecutor limited to exactly eleven typed methods", async () => {
     const calls: string[] = [];
     const executor: GitRepositoryExecutor = {
       async createBranch(input: GitCreateBranchInput) {
@@ -51,6 +52,11 @@ describe("source-control executor ports", () => {
         calls.push("removeWorktree");
         return { root: input.root ?? ".", destination: input.destination, sourceHeadSha: input.expectedSourceHeadSha,
           removedWorktreeHeadSha: input.expectedWorktreeHeadSha, removed: true as const };
+      },
+      async detachWorktree(input: GitDetachWorktreeInput) {
+        calls.push("detachWorktree");
+        return { root: input.root ?? ".", destination: input.destination, sourceHeadSha: input.expectedSourceHeadSha,
+          headSha: input.expectedWorktreeHeadSha, previousBranch: input.expectedBranch, detached: true as const };
       },
       async stagePaths(input: GitStagePathsInput) {
         calls.push("stagePaths");
@@ -120,6 +126,7 @@ describe("source-control executor ports", () => {
       "commit",
       "createBranch",
       "createWorktree",
+      "detachWorktree",
       "mergeBranch",
       "publishTag",
       "pushBranch",
@@ -132,6 +139,7 @@ describe("source-control executor ports", () => {
     await executor.createBranch({ workspaceId: "repo", branch: "feature/x", expectedHeadSha: shaA });
     await executor.createWorktree({ workspaceId: "repo", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB });
     await executor.removeWorktree({ workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB });
+    await executor.detachWorktree({ workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB, expectedBranch: "main" });
     await executor.stagePaths({ workspaceId: "repo", paths: ["src/a.ts"] });
     await executor.unstagePaths({ workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB });
     await executor.commit({ workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB });
@@ -144,6 +152,7 @@ describe("source-control executor ports", () => {
       "createBranch",
       "createWorktree",
       "removeWorktree",
+      "detachWorktree",
       "stagePaths",
       "unstagePaths",
       "commit",

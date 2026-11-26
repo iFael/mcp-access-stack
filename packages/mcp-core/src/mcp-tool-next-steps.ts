@@ -71,6 +71,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   git_create_branch: "patch_files for the change, then git_commit_paths.",
   git_create_worktree: "inspect_workspace_git with root set to the returned destination; the original checkout is not synchronized.",
   git_remove_worktree: "inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
+  git_detach_worktree: "inspect_workspace_git with the source and target roots; git_sync_branch on the primary checkout when clean.",
   git_stage_paths: "git_commit.",
   git_unstage_paths: "git_stage_paths for the paths to keep.",
   git_commit: "git_push_branch.",

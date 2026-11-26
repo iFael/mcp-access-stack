@@ -8,6 +8,8 @@ import type {
   GitCreateWorktreeResult,
   GitRemoveWorktreeInput,
   GitRemoveWorktreeResult,
+  GitDetachWorktreeInput,
+  GitDetachWorktreeResult,
   GitHubCreatePullRequestInput,
   GitHubCreatePullRequestResult,
   GitHubClosePullRequestInput,
@@ -65,6 +67,10 @@ export interface GitRepositoryExecutor {
     input: GitRemoveWorktreeInput,
     context?: OperationContext,
   ): Promise<GitRemoveWorktreeResult>;
+  detachWorktree(
+    input: GitDetachWorktreeInput,
+    context?: OperationContext,
+  ): Promise<GitDetachWorktreeResult>;
   stagePaths(
     input: GitStagePathsInput,
     context?: OperationContext,

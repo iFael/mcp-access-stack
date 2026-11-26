@@ -112,6 +112,11 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(), removedWorktreeHeadSha: input.expectedWorktreeHeadSha.toLowerCase(),
       removed: true as const,
     })),
+    detachWorktree: jest.fn<GitRepositoryExecutor["detachWorktree"]>(async (input) => ({
+      root: input.root ?? ".", destination: input.destination,
+      sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(), headSha: input.expectedWorktreeHeadSha.toLowerCase(),
+      previousBranch: input.expectedBranch, detached: true as const,
+    })),
     stagePaths: jest.fn<GitRepositoryExecutor["stagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: SHA_A,
@@ -584,6 +589,25 @@ describe("LocalAgent direct authorization and mutation receipts", () => {
     expect(first).toMatchObject({ removed: true, sourceHeadSha: SHA_A, removedWorktreeHeadSha: SHA_B });
     expect(again).toEqual(first);
     expect(allowed.gitExecutor.removeWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies detach without worktree capability and replays the authorized receipt", async () => {
+    const input = { workspaceId: "test", destination: ".worktrees/old-main",
+      expectedSourceHeadSha: SHA_A, expectedWorktreeHeadSha: SHA_B, expectedBranch: "main" };
+    const denied = await setupAgent({ capabilities: ["git.branch.write"] });
+    await expect(denied.agent.gitDetachWorktree(input, { idempotencyKey: "detach-denied" }))
+      .rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(denied.gitExecutor.detachWorktree).not.toHaveBeenCalled();
+    await fixture?.cleanup();
+    fixture = undefined;
+    const allowed = await setupAgent({ capabilities: ["git.worktree.write"] });
+    const first = await allowed.agent.gitDetachWorktree(input, { idempotencyKey: "detach-once" });
+    const replay = await allowed.agent.gitDetachWorktree(input, { idempotencyKey: "detach-once" });
+    expect(first).toMatchObject({ detached: true, headSha: SHA_B, previousBranch: "main" });
+    expect(replay).toEqual(first);
+    expect(allowed.gitExecutor.detachWorktree).toHaveBeenCalledTimes(1);
+    await expect(allowed.agent.gitDetachWorktree({ ...input, expectedBranch: "feature/other" },
+      { idempotencyKey: "detach-once" })).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
   });
 
   it("preserves confirmation flow in standard mode", async () => {

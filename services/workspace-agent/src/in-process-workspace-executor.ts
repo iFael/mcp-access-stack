@@ -267,6 +267,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   removeWorktree(...args: Parameters<GitRepositoryExecutor["removeWorktree"]>) {
     return this.agent.gitRemoveWorktree(...args);
   }
+  detachWorktree(...args: Parameters<GitRepositoryExecutor["detachWorktree"]>) {
+    return this.agent.gitDetachWorktree(...args);
+  }
   stagePaths(...args: Parameters<GitRepositoryExecutor["stagePaths"]>) {
     return this.agent.gitStagePaths(...args);
   }

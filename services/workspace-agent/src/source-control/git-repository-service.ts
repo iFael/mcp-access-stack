@@ -7,6 +7,7 @@ import {
   gitCreateBranchInputSchema,
   gitCreateWorktreeInputSchema,
   gitRemoveWorktreeInputSchema,
+  gitDetachWorktreeInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -21,6 +22,8 @@ import {
   type GitCreateWorktreeResult,
   type GitRemoveWorktreeInput,
   type GitRemoveWorktreeResult,
+  type GitDetachWorktreeInput,
+  type GitDetachWorktreeResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
   type GitSyncBranchInput,
@@ -169,38 +172,8 @@ export class GitRepositoryService implements GitRepositoryExecutor {
     assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha, sourceHead,
       "Source HEAD changed before worktree removal.");
 
-    const parentLogical = repository.logicalRoot === "." ? ".worktrees" : repository.logicalRoot + "/.worktrees";
-    const parent = await repository.security.authorizeExisting(parentLogical, "directory", true);
-    if (!samePath(parent.canonicalPath, path.join(repository.repositoryRoot, ".worktrees")) ||
-        !isContained(repository.repositoryRoot, parent.canonicalPath)) {
-      throw new AppError("PATH_OUTSIDE_WORKSPACE", "Worktree parent must be within the selected repository.");
-    }
-    const destination = path.join(parent.canonicalPath, parsed.destination.slice(".worktrees/".length));
-    let targetStat: Awaited<ReturnType<typeof lstat>>;
-    let markerStat: Awaited<ReturnType<typeof lstat>>;
-    try {
-      targetStat = await lstat(destination);
-      markerStat = await lstat(path.join(destination, ".git"));
-    } catch {
-      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree or its Git registration marker is missing.");
-    }
-    if (!targetStat.isDirectory() || targetStat.isSymbolicLink() ||
-        !markerStat.isFile() || markerStat.isSymbolicLink() ||
-        !samePath(await realpath(destination), destination)) {
-      throw new AppError("INVALID_PATH", "Worktree must be a real directory with an intact Git marker.");
-    }
-
-    const registrations = (await this.runner.listWorktrees(repository.repositoryRoot, context?.signal))
-      .filter((entry) => samePath(entry.path, destination));
-    if (registrations.length !== 1 || registrations[0]!.prunable) {
-      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree is missing or prunable; repair it separately before removal.");
-    }
-    assertSha("GIT_HEAD_MISMATCH", parsed.expectedWorktreeHeadSha, registrations[0]!.headSha,
-      "Registered worktree HEAD differs from the expected SHA.");
-    if (!samePath(await this.runner.showTopLevel(destination, context?.signal), destination) ||
-        await this.runner.headSha(destination, context?.signal) !== parsed.expectedWorktreeHeadSha) {
-      throw new AppError("GIT_HEAD_MISMATCH", "Worktree HEAD or Git root changed.");
-    }
+    const destination = await this.resolveRegisteredWorktree(
+      repository, parsed.destination, parsed.expectedWorktreeHeadSha, context?.signal);
     if (parsed.pruneGeneratedArtifacts &&
         !(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
       await this.pruneGeneratedArtifacts(repository.repositoryRoot, destination, parsed.expectedWorktreeHeadSha, context?.signal);
@@ -238,6 +211,92 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       removedWorktreeHeadSha: parsed.expectedWorktreeHeadSha,
       removed: true,
     };
+  }
+
+  async detachWorktree(
+    input: GitDetachWorktreeInput,
+    context?: OperationContext,
+  ): Promise<GitDetachWorktreeResult> {
+    const parsed = gitDetachWorktreeInputSchema.parse(input);
+    const signal = context?.signal;
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", signal);
+    const sourceHead = await this.runner.headSha(repository.repositoryRoot, signal);
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha, sourceHead,
+      "Source HEAD changed before worktree detach.");
+    const destination = await this.resolveRegisteredWorktree(
+      repository, parsed.destination, parsed.expectedWorktreeHeadSha, signal);
+    const logicalDestination = repository.logicalRoot === "." ? parsed.destination : repository.logicalRoot + "/" + parsed.destination;
+    await repository.security.authorizeExisting(logicalDestination, "directory", true);
+    const validateTarget = async () => {
+      if (await this.runner.currentBranch(destination, signal) !== parsed.expectedBranch ||
+          await this.runner.branchSha(repository.repositoryRoot, parsed.expectedBranch, signal) !== parsed.expectedWorktreeHeadSha) {
+        throw new AppError("GIT_BRANCH_CONFLICT", "Worktree branch differs from the expected branch.");
+      }
+      if (!(await this.runner.repositoryIsClean(destination, signal))) {
+        throw new AppError("GIT_INDEX_CHANGED", "Worktree contains modified or untracked files; preserve them before detach.");
+      }
+    };
+    await validateTarget();
+    await this.resolveRegisteredWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, signal);
+    assertSha("GIT_HEAD_MISMATCH", sourceHead, await this.runner.headSha(repository.repositoryRoot, signal),
+      "Source HEAD changed during detach preflight.");
+    await validateTarget();
+    try {
+      await this.runner.detachHead(destination, parsed.expectedWorktreeHeadSha, signal);
+      await this.resolveRegisteredWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, signal);
+      if (await this.runner.currentBranch(destination, signal) !== "HEAD" ||
+          await this.runner.branchSha(repository.repositoryRoot, parsed.expectedBranch, signal) !== parsed.expectedWorktreeHeadSha ||
+          await this.runner.headSha(repository.repositoryRoot, signal) !== sourceHead ||
+          !(await this.runner.repositoryIsClean(destination, signal))) {
+        throw new Error("Worktree detach could not be reconciled.");
+      }
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Worktree detach outcome is uncertain; inspect Git metadata before attempting another mutation.");
+    }
+    return { root: repository.logicalRoot, destination: parsed.destination, sourceHeadSha: sourceHead,
+      headSha: parsed.expectedWorktreeHeadSha, previousBranch: parsed.expectedBranch, detached: true };
+  }
+
+  private async resolveRegisteredWorktree(
+    repository: MutationRepositoryContext,
+    relativeDestination: string,
+    expectedWorktreeHeadSha: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const parentLogical = repository.logicalRoot === "." ? ".worktrees" : repository.logicalRoot + "/.worktrees";
+    const parent = await repository.security.authorizeExisting(parentLogical, "directory", true);
+    if (!samePath(parent.canonicalPath, path.join(repository.repositoryRoot, ".worktrees")) ||
+        !isContained(repository.repositoryRoot, parent.canonicalPath)) {
+      throw new AppError("PATH_OUTSIDE_WORKSPACE", "Worktree parent must be within the selected repository.");
+    }
+    const destination = path.join(parent.canonicalPath, relativeDestination.slice(".worktrees/".length));
+    let targetStat: Awaited<ReturnType<typeof lstat>>;
+    let markerStat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      targetStat = await lstat(destination);
+      markerStat = await lstat(path.join(destination, ".git"));
+    } catch {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree or its Git registration marker is missing.");
+    }
+    if (!targetStat.isDirectory() || targetStat.isSymbolicLink() ||
+        !markerStat.isFile() || markerStat.isSymbolicLink() ||
+        !samePath(await realpath(destination), destination)) {
+      throw new AppError("INVALID_PATH", "Worktree must be a real directory with an intact Git marker.");
+    }
+
+    const registrations = (await this.runner.listWorktrees(repository.repositoryRoot, signal))
+      .filter((entry) => samePath(entry.path, destination));
+    if (registrations.length !== 1 || registrations[0]!.prunable) {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree is missing or prunable; repair it separately before mutation.");
+    }
+    assertSha("GIT_HEAD_MISMATCH", expectedWorktreeHeadSha, registrations[0]!.headSha,
+      "Registered worktree HEAD differs from the expected SHA.");
+    if (!samePath(await this.runner.showTopLevel(destination, signal), destination) ||
+        await this.runner.headSha(destination, signal) !== expectedWorktreeHeadSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "Worktree HEAD or Git root changed.");
+    }
+    return destination;
   }
 
   private async pruneGeneratedArtifacts(source: string, destination: string, expectedHead: string, signal?: AbortSignal): Promise<void> {

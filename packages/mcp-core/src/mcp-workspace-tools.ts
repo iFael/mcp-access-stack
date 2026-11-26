@@ -111,6 +111,8 @@ import {
   gitCreateWorktreeResultSchema,
   gitRemoveWorktreeInputSchema,
   gitRemoveWorktreeResultSchema,
+  gitDetachWorktreeInputSchema,
+  gitDetachWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -224,6 +226,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_create_branch",
   "git_create_worktree",
   "git_remove_worktree",
+  "git_detach_worktree",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -2934,6 +2937,24 @@ const sourceControlMcpSchemas = {
       removed: z.literal(true),
     }).strict(),
   },
+  git_detach_worktree: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      destination: gitDetachWorktreeInputSchema.shape.destination,
+      expectedSourceHeadSha: mcpSourceControlSha,
+      expectedWorktreeHeadSha: mcpSourceControlSha,
+      expectedBranch: mcpSourceControlBranch,
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      destination: gitDetachWorktreeInputSchema.shape.destination,
+      sourceHeadSha: mcpSourceControlSha,
+      headSha: mcpSourceControlSha,
+      previousBranch: mcpSourceControlBranch,
+      detached: z.literal(true),
+    }).strict(),
+  },
   git_stage_paths: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -3285,6 +3306,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_remove_worktree: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+  git_detach_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
@@ -3388,6 +3410,31 @@ export function registerSourceControlTools(
             await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.removeWorktree(parsed, context)),
           );
           return sourceControlSuccess("Clean Git worktree removed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_detach_worktree", include)) {
+    server.registerTool(
+      "git_detach_worktree",
+      {
+        title: "Release a branch from an existing Git worktree",
+        description: "Detaches a registered worktree from its exact expected branch and HEAD without deleting directories or changing branch refs. Requires clean tracked and untracked state; ignored files are preserved. Never creates a worktree.",
+        inputSchema: sourceControlMcpSchemas.git_detach_worktree.input,
+        outputSchema: sourceControlMcpSchemas.git_detach_worktree.output,
+        annotations: sourceControlAnnotations.git_detach_worktree,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitDetachWorktreeInputSchema.parse(input);
+          const structuredContent = gitDetachWorktreeResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.detachWorktree(parsed, context)),
+          );
+          return sourceControlSuccess("Worktree branch released without removing the checkout.", structuredContent);
         } catch (error) { return toolError(error); }
       },
     );
@@ -4154,6 +4201,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitCreateBranch: "git_create_branch",
   gitCreateWorktree: "git_create_worktree",
   gitRemoveWorktree: "git_remove_worktree",
+  gitDetachWorktree: "git_detach_worktree",
   gitStagePaths: "git_stage_paths",
   gitUnstagePaths: "git_unstage_paths",
   gitCommit: "git_commit",

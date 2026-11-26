@@ -110,6 +110,8 @@ import {
   gitCreateWorktreeResultSchema,
   gitRemoveWorktreeInputSchema,
   gitRemoveWorktreeResultSchema,
+  gitDetachWorktreeInputSchema,
+  gitDetachWorktreeResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -162,6 +164,8 @@ import {
   type GitCreateWorktreeResult,
   type GitRemoveWorktreeInput,
   type GitRemoveWorktreeResult,
+  type GitDetachWorktreeInput,
+  type GitDetachWorktreeResult,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
   type GitHubClosePullRequestInput,
@@ -1264,6 +1268,37 @@ export class LocalAgent {
           resultSchema: gitRemoveWorktreeResultSchema,
           backend: async () => (await this.getGitRepositoryExecutor()).removeWorktree(parsed, activeContext),
           resultSha: (result) => result.removedWorktreeHeadSha,
+        });
+      },
+    );
+  }
+
+  async gitDetachWorktree(
+    input: GitDetachWorktreeInput,
+    context: OperationContext = {},
+  ): Promise<GitDetachWorktreeResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitDetachWorktree",
+      gitDetachWorktreeInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const root = parsed.root ?? ".";
+        const targetResource = localGitRepositoryTarget(workspace.id, root) + ":" + parsed.destination;
+        metadata.sourceControlCapability = "git.worktree.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedWorktreeHeadSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_detach_worktree",
+          capability: "git.worktree.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: gitDetachWorktreeResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).detachWorktree(parsed, activeContext),
+          resultSha: (result) => result.headSha,
         });
       },
     );
