@@ -11,6 +11,7 @@
 // PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
 // PERSONAL_SMOKE_RICH_FRAME_ONLY=1 checks editable and protected rich text in scriptable frames.
 // PERSONAL_SMOKE_PERFORMANCE_ONLY=1 measures paired verified actions and native bridge telemetry.
+// PERSONAL_SMOKE_OOPIF_FOCUS_ONLY=1 exercises independent nested navigation and focus samples.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -113,7 +114,18 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     submissions.push(url.search);
     return `<!doctype html><title>Done</title><body>
       <p id="ok">Salvo ${url.searchParams.get("nome")} ${url.searchParams.get("uf")}</p>
-      <input id="busca" onkeydown="if(event.key==='Enter'){document.getElementById('ok').textContent='Enter recebido: '+this.value}">`;
+      <input id="busca" onkeydown="if(event.key==='Enter'){document.getElementById('ok').textContent='Enter recebido: '+this.value}">
+      <script>
+        window.__focusTrace = [];
+        for (const type of ["pointerdown", "pointerup", "focusin", "focusout"]) {
+          document.addEventListener(type, event => {
+            if (window.__focusTrace.length < 20) window.__focusTrace.push({
+              type, id: event.target.id || "", tag: event.target.tagName, trusted: event.isTrusted,
+              x: event.clientX, y: event.clientY
+            });
+          }, true);
+        }
+      </script>`;
   },
   "menu-site.test/": (_url, port) => `<html><head><title>Legacy</title></head>
     <frameset cols="220,*"><frame name="menu" src="http://menu-site.test:${port}/menu">
@@ -1087,51 +1099,79 @@ async function main(): Promise<void> {
       throw new Error("The expected Chrome notification was not created: " + prefix);
     };
 
-    const opened = await bridge.open({ url: `http://parent-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
-    const tabId = opened.tab.tabId;
-    await bridge.snapshot({ tabId });
-    report("frames", (await bridge.profilePage!({ tabId })).frames);
-    const steps = [
-      { action: "fill" as const, framePath: ["a", "b"], locator: { name: "nome" }, value: "Maria" },
-      { action: "select" as const, framePath: ["a", "b"], locator: { name: "uf" }, value: "Minas" },
-      { action: "click" as const, framePath: ["a", "b"], locator: { tag: "button", text: "Salvar" } },
-      { action: "waitFor" as const, framePath: ["a", "b"], text: "Salvo", timeoutMs: 10_000 },
-      { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
-    ];
-    let confirmationId = "";
-    try {
-      await bridge.frameSequence!({ tabId, steps, timeoutMs: 60_000 });
-      throw new Error("A dangerous legacy click ran without confirmation.");
-    } catch (error) {
-      confirmationId = confirmationIdOf(error);
-    }
-    if (submissions.length) throw new Error("The form was submitted before confirmation.");
-    const saved = await bridge.frameSequence!({ tabId, timeoutMs: 60_000,
-      steps: steps.map((step) => (step.action === "click" ? { ...step, confirmationId } : step)) });
-    report("nested OOPIF fill/select/click", saved);
-    if (submissions.length !== 1 || !submissions[0]!.includes("nome=Maria") || !submissions[0]!.includes("uf=mg")) {
-      throw new Error(`Unexpected submissions ${JSON.stringify(submissions)}`);
-    }
+    const verifyNestedOopif = async (context: BrowserContext, tabId: string, url: string) => {
+      const beforeSubmissions = submissions.length;
+      await bridge.snapshot({ tabId });
+      report("frames", (await bridge.profilePage!({ tabId })).frames);
+      const steps = [
+        { action: "fill" as const, framePath: ["a", "b"], locator: { name: "nome" }, value: "Maria" },
+        { action: "select" as const, framePath: ["a", "b"], locator: { name: "uf" }, value: "Minas" },
+        { action: "click" as const, framePath: ["a", "b"], locator: { tag: "button", text: "Salvar" } },
+        { action: "waitFor" as const, framePath: ["a", "b"], text: "Salvo", timeoutMs: 10_000 },
+        { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
+      ];
+      let confirmationId = "";
+      try {
+        await bridge.frameSequence!({ tabId, steps, timeoutMs: 60_000 });
+        throw new Error("A dangerous legacy click ran without confirmation.");
+      } catch (error) {
+        confirmationId = confirmationIdOf(error);
+      }
+      if (submissions.length !== beforeSubmissions) throw new Error("The form was submitted before confirmation.");
+      const saved = await bridge.frameSequence!({ tabId, timeoutMs: 60_000,
+        steps: steps.map((step) => (step.action === "click" ? { ...step, confirmationId } : step)) });
+      report("nested OOPIF fill/select/click", saved);
+      if (submissions.length !== beforeSubmissions + 1 || !submissions.at(-1)!.includes("nome=Maria") || !submissions.at(-1)!.includes("uf=mg")) {
+        throw new Error(`Unexpected submissions ${JSON.stringify(submissions)}`);
+      }
 
-    await bridge.snapshot({ tabId });
-    const enterSteps = [
-      { action: "fill" as const, framePath: ["a", "b"], locator: { id: "busca" }, value: "pedido 42" },
-      { action: "press" as const, framePath: ["a", "b"], locator: { id: "busca" }, key: "Enter" },
-      { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
-    ];
-    let enterId = "";
-    try {
-      await bridge.frameSequence!({ tabId, steps: enterSteps });
-      throw new Error("Enter ran without confirmation.");
-    } catch (error) {
-      enterId = confirmationIdOf(error);
+      await bridge.snapshot({ tabId });
+      const enterSteps = [
+        { action: "fill" as const, framePath: ["a", "b"], locator: { id: "busca" }, value: "pedido 42" },
+        { action: "press" as const, framePath: ["a", "b"], locator: { id: "busca" }, key: "Enter" },
+        { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
+      ];
+      let enterId = "";
+      try {
+        await bridge.frameSequence!({ tabId, steps: enterSteps });
+        throw new Error("Enter ran without confirmation.");
+      } catch (error) {
+        enterId = confirmationIdOf(error);
+      }
+      const entered = await bridge.frameSequence!({ tabId,
+        steps: enterSteps.map((step) => (step.action === "press" ? { ...step, confirmationId: enterId } : step)) }).catch(async (error: unknown) => {
+          const parent = context.pages().find((page) => page.url() === url);
+          const child = parent?.frames().find((frame) => frame.name() === "b");
+          const state = await child?.evaluate(`(() => {
+            const target = document.getElementById("busca");
+            const rect = target?.getBoundingClientRect();
+            return { activeId: document.activeElement?.id || "", activeTag: document.activeElement?.tagName || "",
+              hasFocus: document.hasFocus(), rect: rect?.toJSON(), events: window.__focusTrace || [] };
+          })()`).catch(() => null);
+          report("nested OOPIF focus diagnostic", state ?? null);
+          throw error;
+        });
+      report("nested OOPIF Enter", entered);
+      if (!JSON.stringify(entered.steps.at(-1)).includes("Enter recebido: pedido 42")) {
+        throw new Error("Enter did not reach the nested field.");
+      }
+    };
+    if (process.env.PERSONAL_SMOKE_OOPIF_FOCUS_ONLY === "1") {
+      for (let sample = 0; sample < 8; sample++) {
+        const url = `http://parent-site.test:${sitePort}/?focus-sample=${sample}`;
+        const taskId = "personal-oopif-focus-" + sample;
+        const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+        try { await verifyNestedOopif(context, tabId, url); }
+        finally { await bridge.finishTask({ taskId }); }
+        report("nested OOPIF focus sample", { sample, completed: true });
+      }
+      console.log("\nPERSONAL BROWSER OOPIF FOCUS PASS");
+      return;
     }
-    const entered = await bridge.frameSequence!({ tabId,
-      steps: enterSteps.map((step) => (step.action === "press" ? { ...step, confirmationId: enterId } : step)) });
-    report("nested OOPIF Enter", entered);
-    if (!JSON.stringify(entered.steps.at(-1)).includes("Enter recebido: pedido 42")) {
-      throw new Error("Enter did not reach the nested field.");
-    }
+    const parentUrl = `http://parent-site.test:${sitePort}/`;
+    const opened = await bridge.open({ url: parentUrl, taskId: "personal-frame-smoke" });
+    const tabId = opened.tab.tabId;
+    await verifyNestedOopif(context, tabId, parentUrl);
 
     // Legacy frameset menu: expand a submenu, follow a link targeting another
     // (cross-site) frame, and do not collapse an already expanded level.
