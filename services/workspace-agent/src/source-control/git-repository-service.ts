@@ -1,4 +1,6 @@
-import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import path from "node:path";
 import {
   AppError,
@@ -8,6 +10,7 @@ import {
   gitCreateWorktreeInputSchema,
   gitRemoveWorktreeInputSchema,
   gitDetachWorktreeInputSchema,
+  gitStashPathsInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -24,6 +27,8 @@ import {
   type GitRemoveWorktreeResult,
   type GitDetachWorktreeInput,
   type GitDetachWorktreeResult,
+  type GitStashPathsInput,
+  type GitStashPathsResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
   type GitSyncBranchInput,
@@ -354,6 +359,110 @@ export class GitRepositoryService implements GitRepositoryExecutor {
     if (!(await this.runner.worktreeIsCompletelyClean(destination, signal))) {
       throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
         "Worktree is not completely clean after generated-artifact pruning.");
+    }
+  }
+
+  async stashPaths(input: GitStashPathsInput, context?: OperationContext): Promise<GitStashPathsResult> {
+    const parsed = gitStashPathsInputSchema.parse(input);
+    const signal = context?.signal;
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", signal);
+    const cwd = repository.repositoryRoot;
+    const paths = parsed.files.map((file) => file.path);
+    const expected = parsed.files.map((file) => file.status + " " + file.path).sort();
+    const validateInventory = async () => {
+      assertSha("GIT_HEAD_MISMATCH", parsed.expectedHeadSha, await this.runner.headSha(cwd, signal),
+        "Git HEAD changed before stash.");
+      if (await this.runner.currentBranch(cwd, signal) !== parsed.expectedBranch) {
+        throw new AppError("GIT_BRANCH_CONFLICT", "Git branch changed before stash.");
+      }
+      assertSha("GIT_INDEX_CHANGED", parsed.expectedIndexTreeSha, await this.runner.writeTree(cwd, signal),
+        "Git index changed before stash.");
+      if (await this.runner.stashSha(cwd, signal) !== parsed.expectedStashSha) {
+        throw new AppError("GIT_INDEX_CHANGED", "Git stash reference changed before checkpoint.");
+      }
+      const actual = (await this.runner.stashStatus(cwd, signal)).sort();
+      if (actual.length !== expected.length || actual.some((entry, index) => entry !== expected[index])) {
+        throw new AppError("GIT_INDEX_CHANGED", "Stash requires the exact complete inventory of changed files.");
+      }
+    };
+    const validateFiles = async () => {
+      let remaining = 64 * 1024 * 1024;
+      const limit = repository.workspace.limits.maxDeleteFileBytes ?? repository.workspace.limits.maxFileBytes;
+      for (const file of parsed.files) {
+        const logical = repository.logicalRoot === "." ? file.path : repository.logicalRoot + "/" + file.path;
+        repository.security.authorizeWriteLogical(logical);
+        await authorizeGitMutationPath(repository.security, repository.logicalRoot, file.path);
+        const absolute = path.join(cwd, file.path);
+        if (!samePath(await realpath(path.dirname(absolute)), path.dirname(absolute))) {
+          throw new AppError("INVALID_PATH", "Stash paths must not traverse links.");
+        }
+        if (file.expectedSha256 === null) {
+          try {
+            await lstat(absolute);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw error;
+          }
+          throw new AppError("GIT_INDEX_CHANGED", "A deleted stash path is present.");
+        }
+        const observed = await lstat(absolute);
+        if (!observed.isFile() || observed.isSymbolicLink() || observed.nlink !== 1 ||
+            !samePath(await realpath(absolute), absolute)) {
+          throw new AppError("INVALID_PATH", "Stash paths must be regular, unlinked files.");
+        }
+        if (observed.size > limit || observed.size > remaining) {
+          throw new AppError("FILE_TOO_LARGE", "Stash file exceeds the bounded checkpoint size.");
+        }
+        const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+          const sameFile = (stat: typeof observed) => stat.isFile() && stat.dev === observed.dev &&
+            stat.ino === observed.ino && stat.size === observed.size && stat.mode === observed.mode &&
+            stat.mtimeMs === observed.mtimeMs && stat.ctimeMs === observed.ctimeMs && stat.nlink === 1;
+          if (!sameFile(await handle.stat())) throw new AppError("GIT_INDEX_CHANGED", "Stash file changed before hashing.");
+          const hash = createHash("sha256");
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          let offset = 0;
+          while (offset < observed.size) {
+            if (signal?.aborted) throw signal.reason;
+            const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, observed.size - offset), offset);
+            if (!bytesRead) throw new AppError("GIT_INDEX_CHANGED", "Stash file shrank during hashing.");
+            hash.update(buffer.subarray(0, bytesRead));
+            offset += bytesRead;
+          }
+          if ((await handle.read(buffer, 0, 1, offset)).bytesRead !== 0 ||
+              hash.digest("hex") !== file.expectedSha256 || !sameFile(await handle.stat()) ||
+              !sameFile(await lstat(absolute))) {
+            throw new AppError("GIT_INDEX_CHANGED", "Stash file changed or its expected hash differs.");
+          }
+          remaining -= observed.size;
+        } finally {
+          await handle.close();
+        }
+      }
+      await this.runner.assertStashRegularPaths(cwd, paths, signal);
+    };
+    await validateInventory();
+    await validateFiles();
+    await validateInventory();
+    await validateFiles();
+    try {
+      await this.runner.stashPaths(cwd, paths, signal);
+      const stashSha = await this.runner.stashSha(cwd, signal);
+      if (!stashSha || stashSha === parsed.expectedStashSha ||
+          await this.runner.headSha(cwd, signal) !== parsed.expectedHeadSha ||
+          await this.runner.currentBranch(cwd, signal) !== parsed.expectedBranch ||
+          (await this.runner.stashStatus(cwd, signal)).length !== 0) {
+        throw new Error("Git stash could not be reconciled.");
+      }
+      const parents = await this.runner.stashParents(cwd, stashSha, signal);
+      if (parents.headSha !== parsed.expectedHeadSha || parents.indexTreeSha !== parsed.expectedIndexTreeSha) {
+        throw new Error("Git stash parents do not match the expected checkpoint.");
+      }
+      return { root: repository.logicalRoot, branch: parsed.expectedBranch, headSha: parsed.expectedHeadSha,
+        previousStashSha: parsed.expectedStashSha, stashSha, paths };
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Stash outcome is uncertain; inspect the stash reference and checkout before another mutation. Do not pop automatically.");
     }
   }
 

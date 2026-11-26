@@ -188,6 +188,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_create_worktree",
   "git_remove_worktree",
   "git_detach_worktree",
+  "git_stash_paths",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -320,6 +321,35 @@ export const gitDetachWorktreeResultSchema = z.object({
   detached: z.literal(true),
 }).strict();
 export type GitDetachWorktreeResult = z.infer<typeof gitDetachWorktreeResultSchema>;
+
+const stashFileSchema = z.object({
+  path: gitPathSchema,
+  status: z.enum([" M", "M ", "MM", "A ", "AM", "??", " D", "D ", "MD", "AD"]),
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
+}).strict().refine((file) => file.status.includes("D") === (file.expectedSha256 === null),
+  "Only a deleted file may have a null hash.");
+
+export const gitStashPathsInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  expectedHeadSha: gitShaSchema,
+  expectedBranch: gitBranchSchema.refine((branch) => branch !== "HEAD"),
+  expectedIndexTreeSha: gitShaSchema,
+  expectedStashSha: gitShaSchema.nullable(),
+  files: z.array(stashFileSchema).min(1).max(200),
+}).strict().refine((input) => new Set(input.files.map((file) => file.path)).size === input.files.length,
+  "Stash paths must be unique.");
+export type GitStashPathsInput = z.input<typeof gitStashPathsInputSchema>;
+
+export const gitStashPathsResultSchema = z.object({
+  root: rootSchema,
+  branch: gitBranchSchema,
+  headSha: gitShaSchema,
+  previousStashSha: gitShaSchema.nullable(),
+  stashSha: gitShaSchema,
+  paths: gitPathListSchema,
+}).strict();
+export type GitStashPathsResult = z.infer<typeof gitStashPathsResultSchema>;
 
 export const gitStagePathsInputSchema = z
   .object({

@@ -55,6 +55,11 @@ export interface GitProcessExecutor {
   hasTrackedPaths(cwd: string, relativePath: string, signal?: AbortSignal): Promise<boolean>;
   removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void>;
   detachHead(cwd: string, headSha: string, signal?: AbortSignal): Promise<void>;
+  stashStatus(cwd: string, signal?: AbortSignal): Promise<string[]>;
+  assertStashRegularPaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
+  stashSha(cwd: string, signal?: AbortSignal): Promise<string | null>;
+  stashPaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
+  stashParents(cwd: string, stashSha: string, signal?: AbortSignal): Promise<{ headSha: string; indexTreeSha: string }>;
   stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   unstagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void>;
   writeTree(cwd: string, signal?: AbortSignal): Promise<string>;
@@ -184,6 +189,47 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
 
   async detachHead(cwd: string, headSha: string, signal?: AbortSignal): Promise<void> {
     await this.invokeSuccess(cwd, this.mutationArgs(["switch", "--detach", "--no-overwrite-ignore", headSha]), signal);
+  }
+
+  async stashStatus(cwd: string, signal?: AbortSignal): Promise<string[]> {
+    const output = await this.invokeSuccess(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all",
+      "--no-renames", "--ignore-submodules=none"], signal);
+    return this.completeStashRecords(output);
+  }
+
+  private completeStashRecords(output: string): string[] {
+    if (Buffer.byteLength(output) >= MAX_STDOUT_BYTES || output.includes("\ufffd") ||
+        (output.length > 0 && !output.endsWith("\0"))) {
+      throw new AppError("GIT_INDEX_CHANGED", "Git stash inventory is incomplete or unsupported.");
+    }
+    return output.split("\0").filter(Boolean);
+  }
+
+  async assertStashRegularPaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void> {
+    const index = this.completeStashRecords(await this.invokeSuccess(cwd,
+      ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", ...paths], signal));
+    const base = this.completeStashRecords(await this.invokeSuccess(cwd,
+      ["--literal-pathspecs", "ls-tree", "-z", "HEAD", "--", ...paths], signal));
+    if (index.some((entry) => !/^100(?:644|755) [a-f0-9]{40} 0\t/u.test(entry)) ||
+        base.some((entry) => !/^100(?:644|755) blob [a-f0-9]{40}\t/u.test(entry))) {
+      throw new AppError("INVALID_PATH", "Stash accepts only regular files, not submodules or links.");
+    }
+  }
+
+  async stashSha(cwd: string, signal?: AbortSignal): Promise<string | null> {
+    const result = await this.invoke(cwd, ["rev-parse", "--verify", "refs/stash"], signal, [0, 128]);
+    return result.code === 0 ? parseSha(result.stdout.trim()) : null;
+  }
+
+  async stashPaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void> {
+    await this.invoke(cwd, this.mutationArgs(["--literal-pathspecs", "stash", "push", "--include-untracked",
+      "--message", "MCP explicit workspace checkpoint", "--", ...paths]), signal, [0], true);
+  }
+
+  async stashParents(cwd: string, stashSha: string, signal?: AbortSignal): Promise<{ headSha: string; indexTreeSha: string }> {
+    const headSha = parseSha((await this.invokeSuccess(cwd, ["rev-parse", stashSha + "^1"], signal)).trim());
+    const indexTreeSha = parseSha((await this.invokeSuccess(cwd, ["rev-parse", stashSha + "^2^{tree}"], signal)).trim());
+    return { headSha, indexTreeSha };
   }
 
   async stagePaths(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<void> {

@@ -11,6 +11,7 @@ import {
   gitCreateWorktreeInputSchema,
   gitRemoveWorktreeInputSchema,
   gitDetachWorktreeInputSchema,
+  gitStashPathsInputSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -86,6 +87,7 @@ describe("source-control contracts", () => {
     expect(core.gitCreateWorktreeInputSchema).toBe(gitCreateWorktreeInputSchema);
     expect(core.gitRemoveWorktreeInputSchema).toBe(gitRemoveWorktreeInputSchema);
     expect(core.gitDetachWorktreeInputSchema).toBe(gitDetachWorktreeInputSchema);
+    expect(core.gitStashPathsInputSchema).toBe(gitStashPathsInputSchema);
     expect(core.gitMergeBranchInputSchema).toBe(gitMergeBranchInputSchema);
     expect(core.githubMergePullRequestInputSchema).toBe(githubMergePullRequestInputSchema);
     expect(errorCodes).toEqual(expect.arrayContaining([
@@ -108,6 +110,7 @@ describe("source-control contracts", () => {
       "git_create_worktree",
       "git_remove_worktree",
       "git_detach_worktree",
+      "git_stash_paths",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -670,12 +673,26 @@ describe("source-control contracts", () => {
     })).toMatchObject({ status: "completed", merged: true, mergeSha: shaB });
   });
 
+  test("stash requires literal unique files, complete CAS inputs and deletion-specific null hashes", () => {
+    const input = { workspaceId: "repo", expectedHeadSha: shaA, expectedBranch: "main",
+      expectedIndexTreeSha: shaB, expectedStashSha: null,
+      files: [{ path: "src/a.ts", status: " M", expectedSha256: "a".repeat(64) }] };
+    expect(gitStashPathsInputSchema.safeParse(input).success).toBe(true);
+    expect(gitStashPathsInputSchema.safeParse({ ...input, expectedStashSha: undefined }).success).toBe(false);
+    expect(gitStashPathsInputSchema.safeParse({ ...input, files: [...input.files, ...input.files] }).success).toBe(false);
+    expect(gitStashPathsInputSchema.safeParse({ ...input, files: [{ path: "../outside", status: "??", expectedSha256: "a".repeat(64) }] }).success).toBe(false);
+    expect(gitStashPathsInputSchema.safeParse({ ...input, files: [{ ...input.files[0], expectedSha256: null }] }).success).toBe(false);
+    expect(gitStashPathsInputSchema.safeParse({ ...input, files: [{ path: "src/a.ts", status: " D", expectedSha256: null }] }).success).toBe(true);
+    expect(gitStashPathsInputSchema.safeParse({ ...input, files: [{ ...input.files[0], status: "UU" }] }).success).toBe(false);
+  });
+
   test("rejects unknown fields across every public input schema", () => {
     const fixtures: Array<[string, { parse(value: unknown): unknown }, Record<string, unknown>]> = [
       ["git_create_branch", gitCreateBranchInputSchema, { workspaceId: "repo", branch: "feature/x", expectedHeadSha: shaA }],
       ["git_create_worktree", gitCreateWorktreeInputSchema, { workspaceId: "repo", destination: ".worktrees/clean-main", expectedHeadSha: shaA, expectedRemoteSha: shaB }],
       ["git_remove_worktree", gitRemoveWorktreeInputSchema, { workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB }],
       ["git_detach_worktree", gitDetachWorktreeInputSchema, { workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB, expectedBranch: "main" }],
+      ["git_stash_paths", gitStashPathsInputSchema, { workspaceId: "repo", expectedHeadSha: shaA, expectedBranch: "main", expectedIndexTreeSha: shaB, expectedStashSha: null, files: [{ path: "src/a.ts", status: " M", expectedSha256: "a".repeat(64) }] }],
       ["git_stage_paths", gitStagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"] }],
       ["git_unstage_paths", gitUnstagePathsInputSchema, { workspaceId: "repo", paths: ["src/a.ts"], expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],
       ["git_commit", gitCommitInputSchema, { workspaceId: "repo", message: "commit", expectedHeadSha: shaA, expectedIndexTreeSha: shaB }],

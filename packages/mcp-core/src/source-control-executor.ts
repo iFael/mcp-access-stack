@@ -10,6 +10,8 @@ import type {
   GitRemoveWorktreeResult,
   GitDetachWorktreeInput,
   GitDetachWorktreeResult,
+  GitStashPathsInput,
+  GitStashPathsResult,
   GitHubCreatePullRequestInput,
   GitHubCreatePullRequestResult,
   GitHubClosePullRequestInput,
@@ -71,6 +73,10 @@ export interface GitRepositoryExecutor {
     input: GitDetachWorktreeInput,
     context?: OperationContext,
   ): Promise<GitDetachWorktreeResult>;
+  stashPaths(
+    input: GitStashPathsInput,
+    context?: OperationContext,
+  ): Promise<GitStashPathsResult>;
   stagePaths(
     input: GitStagePathsInput,
     context?: OperationContext,

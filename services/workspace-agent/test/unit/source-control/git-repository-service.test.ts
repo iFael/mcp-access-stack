@@ -1,7 +1,8 @@
 import { lstat, mkdir, readFile, readdir, rmdir, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
-import { AppError } from "@vs-code-gpt/shared";
+import { AppError, type GitStashPathsInput } from "@vs-code-gpt/shared";
 import { GitRepositoryService } from "../../../src/source-control/git-repository-service.js";
 import type { GitProcessExecutor } from "../../../src/source-control/git-process-runner.js";
 import { WorkspaceRegistry } from "../../../src/workspace-registry.js";
@@ -681,6 +682,100 @@ describe("GitRepositoryService fast-forward merge", () => {
       fastForwarded: true,
     });
     expect(head()).toBe(sourceSha);
+  });
+});
+
+describe("GitRepositoryService explicit stash", () => {
+  const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+
+  async function setupStash() {
+    const { headSha } = await setupRepository({ branch: "feature/stash" });
+    const root = fixture!.workspacePath;
+    await writePolicy(fixture!.policyPath, [{
+      ...makeWorkspacePolicy(root, { profile: "full-repo-write" }),
+      allowWrites: ["."],
+    }]);
+    const service = await GitRepositoryService.create(await WorkspaceRegistry.load(fixture!.policyPath));
+    await writeWorkspaceFile(root, ".git/info/exclude", "runtime/\n");
+    await writeWorkspaceFile(root, "runtime/keep.txt", "ignored\n");
+    await writeWorkspaceFile(root, "base.txt", "staged\n");
+    git(root, ["add", "base.txt"]);
+    await writeWorkspaceFile(root, "base.txt", "unstaged\n");
+    await writeWorkspaceFile(root, "note[1].txt", "untracked\n");
+    const input: GitStashPathsInput = {
+      workspaceId: "test", expectedHeadSha: headSha, expectedBranch: "feature/stash",
+      expectedIndexTreeSha: writeTree(), expectedStashSha: null,
+      files: [{ path: "base.txt", status: "MM", expectedSha256: sha256("unstaged\n") },
+        { path: "note[1].txt", status: "??", expectedSha256: sha256("untracked\n") }],
+    };
+    return { service, root, input };
+  }
+
+  it("preserves staged, unstaged and explicit untracked files in one native stash without touching ignored files", async () => {
+    const { service, root, input } = await setupStash();
+    const result = await service.stashPaths(input);
+    expect(result).toMatchObject({ root: ".", branch: input.expectedBranch, headSha: input.expectedHeadSha,
+      paths: ["base.txt", "note[1].txt"], previousStashSha: null, stashSha: expect.stringMatching(/^[a-f0-9]{40}$/u) });
+    expect(git(root, ["rev-parse", "refs/stash"]).trim()).toBe(result.stashSha);
+    expect(git(root, ["status", "--porcelain"]).trim()).toBe("");
+    expect(await readFile(path.join(root, "runtime/keep.txt"), "utf8")).toBe("ignored\n");
+    expect(head()).toBe(input.expectedHeadSha);
+    expect(currentBranch()).toBe(input.expectedBranch);
+    git(root, ["stash", "apply", "--index", result.stashSha]);
+    expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\n");
+    expect(git(root, ["show", ":base.txt"])).toBe("staged\n");
+    expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\n");
+  });
+
+  it("preserves a previously existing stash and checkpoints an explicit deletion", async () => {
+    const { service, root, input } = await setupStash();
+    const first = await service.stashPaths(input);
+    await unlink(path.join(root, "base.txt"));
+    const deletion: GitStashPathsInput = {
+      ...input, expectedIndexTreeSha: writeTree(), expectedStashSha: first.stashSha,
+      files: [{ path: "base.txt", status: " D", expectedSha256: null }],
+    };
+    const second = await service.stashPaths(deletion);
+    expect(second.previousStashSha).toBe(first.stashSha);
+    expect(second.stashSha).not.toBe(first.stashSha);
+    expect(git(root, ["rev-parse", "stash@{1}"]).trim()).toBe(first.stashSha);
+    expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("base\n");
+    git(root, ["stash", "apply", "--index", second.stashSha]);
+    await expect(lstat(path.join(root, "base.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(root, "runtime/keep.txt"), "utf8")).toBe("ignored\n");
+  });
+
+  it("refuses incomplete inventory, stale hashes, index, branch and stash CAS without clearing changes", async () => {
+    const { service, root, input } = await setupStash();
+    for (const invalid of [
+      { ...input, files: input.files.slice(0, 1) },
+      { ...input, expectedIndexTreeSha: "a".repeat(40) },
+      { ...input, expectedHeadSha: "b".repeat(40) },
+      { ...input, expectedBranch: "feature/wrong" },
+      { ...input, expectedStashSha: "c".repeat(40) },
+      { ...input, files: input.files.map((file) => ({ ...file, expectedSha256: "d".repeat(64) })) },
+    ]) {
+      await expect(service.stashPaths(invalid)).rejects.toThrow();
+      expect(git(root, ["stash", "list"])).toBe("");
+      expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\n");
+      expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\n");
+      expect(writeTree()).toBe(input.expectedIndexTreeSha);
+    }
+  });
+
+  it("refuses blocked and symbolic link paths before native stash", async () => {
+    const { service, root, input } = await setupStash();
+    await writeWorkspaceFile(root, ".env", "private\n");
+    await expect(service.stashPaths({ ...input, files: [...input.files,
+      { path: ".env", status: "??", expectedSha256: sha256("private\n") }] })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    await unlink(path.join(root, ".env"));
+    if (process.platform !== "win32") {
+      await symlink(path.join(root, "base.txt"), path.join(root, "link.txt"));
+      await expect(service.stashPaths({ ...input, files: [...input.files,
+        { path: "link.txt", status: "??", expectedSha256: sha256("unstaged\n") }] })).rejects.toThrow();
+      expect((await lstat(path.join(root, "link.txt"))).isSymbolicLink()).toBe(true);
+    }
+    expect(git(root, ["stash", "list"])).toBe("");
   });
 });
 

@@ -117,6 +117,10 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(), headSha: input.expectedWorktreeHeadSha.toLowerCase(),
       previousBranch: input.expectedBranch, detached: true as const,
     })),
+    stashPaths: jest.fn<GitRepositoryExecutor["stashPaths"]>(async (input) => ({
+      root: input.root ?? ".", branch: input.expectedBranch, headSha: input.expectedHeadSha,
+      previousStashSha: input.expectedStashSha, stashSha: SHA_B, paths: input.files.map((file) => file.path),
+    })),
     stagePaths: jest.fn<GitRepositoryExecutor["stagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: SHA_A,
@@ -608,6 +612,25 @@ describe("LocalAgent direct authorization and mutation receipts", () => {
     expect(allowed.gitExecutor.detachWorktree).toHaveBeenCalledTimes(1);
     await expect(allowed.agent.gitDetachWorktree({ ...input, expectedBranch: "feature/other" },
       { idempotencyKey: "detach-once" })).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
+  });
+
+  it("requires both worktree and index capabilities for stash and replays the exact receipt", async () => {
+    const input = { workspaceId: "test", expectedHeadSha: SHA_A, expectedBranch: "feature/stash",
+      expectedIndexTreeSha: SHA_B, expectedStashSha: null,
+      files: [{ path: "a.txt", status: " M" as const, expectedSha256: "a".repeat(64) }] };
+    const denied = await setupAgent({ capabilities: ["git.worktree.write"] });
+    await expect(denied.agent.gitStashPaths(input, { idempotencyKey: "stash-denied" }))
+      .rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(denied.gitExecutor.stashPaths).not.toHaveBeenCalled();
+    await fixture?.cleanup();
+    fixture = undefined;
+    const allowed = await setupAgent({ capabilities: ["git.worktree.write", "git.index.write"] });
+    const first = await allowed.agent.gitStashPaths(input, { idempotencyKey: "stash-once" });
+    expect(await allowed.agent.gitStashPaths(input, { idempotencyKey: "stash-once" })).toEqual(first);
+    expect(first).toMatchObject({ stashSha: SHA_B, paths: ["a.txt"] });
+    expect(allowed.gitExecutor.stashPaths).toHaveBeenCalledTimes(1);
+    await expect(allowed.agent.gitStashPaths({ ...input, expectedBranch: "feature/other" },
+      { idempotencyKey: "stash-once" })).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
   });
 
   it("preserves confirmation flow in standard mode", async () => {

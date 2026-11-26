@@ -13045,6 +13045,180 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "record the returned stash SHA; inspect_workspace_git to confirm cleanliness. Never automatically pop or drop a stash.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Creates one native Git stash for the exact complete inventory of regular changed files, including explicit untracked files. Requires expected HEAD, branch, index tree, previous stash SHA (null if absent), status and SHA-256 of each file (null only for deleted files). Respects workspace write policy; never includes ignored files, pops, drops, pushes or creates worktrees. Stop concurrent writers before use. Next: record the returned stash SHA; inspect_workspace_git to confirm cleanliness. Never automatically pop or drop a stash.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedBranch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "expectedIndexTreeSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "expectedStashSha": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expectedSha256": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "path": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  " M",
+                  "M ",
+                  "MM",
+                  "A ",
+                  "AM",
+                  "??",
+                  " D",
+                  "D ",
+                  "MD",
+                  "AD"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "expectedSha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "expectedHeadSha",
+        "expectedBranch",
+        "expectedIndexTreeSha",
+        "expectedStashSha",
+        "files"
+      ],
+      "type": "object"
+    },
+    "name": "git_stash_paths",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "previousStashSha": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "stashSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "branch",
+        "headSha",
+        "previousStashSha",
+        "stashSha",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "title": "Preserve explicit Git changes in a local stash"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "git_commit.",
       "securitySchemes": [
         {
@@ -31720,15 +31894,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "706bd3bb91f022d01043545aedc24c7cce5b628c1f3bebd569715e5cae4cf1db",
-  "serverVersion": "0.4.0-catalog.c706bd3bb91f0.sfda0215da136",
-  "toolCount": 136,
-  "toolSetRevision": "fda0215da1368ea6a85ec2eb90169398b04d8d3a996819bc3c41117574a006b8"
+  "contractRevision": "69fee080066dc451be47fca9f2a2e7de0e017b9a3d4201e80d78e6ddc255c0c4",
+  "serverVersion": "0.4.0-catalog.c69fee080066d.se843887b199f",
+  "toolCount": 137,
+  "toolSetRevision": "e843887b199fab26c5a89f4f7faefd3795615e935bb0d8e4a7bf301e21eed04b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c706bd3bb91f0.sfda0215da136"
+  "version": "0.4.0-catalog.c69fee080066d.se843887b199f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

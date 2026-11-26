@@ -1890,6 +1890,11 @@ class MockSourceControlExecutor {
     return { root: input.root ?? ".", destination: input.destination, sourceHeadSha: input.expectedSourceHeadSha,
       headSha: input.expectedWorktreeHeadSha, previousBranch: input.expectedBranch, detached: true as const };
   }
+  async stashPaths(input: any, context?: unknown) {
+    this.record("stashPaths", input, context);
+    return { root: input.root ?? ".", branch: input.expectedBranch, headSha: input.expectedHeadSha,
+      previousStashSha: input.expectedStashSha, stashSha: sourceControlShaB, paths: input.files.map((file: { path: string }) => file.path) };
+  }
   async stagePaths(input: any, context?: unknown) {
     this.record("stagePaths", input, context);
     if (this.stageError) throw this.stageError;
@@ -2043,6 +2048,7 @@ const sourceControlCases = [
   ["git_create_worktree", "createWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedHeadSha: sourceControlShaA, expectedRemoteSha: sourceControlShaB }],
   ["git_remove_worktree", "removeWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedSourceHeadSha: sourceControlShaA, expectedWorktreeHeadSha: sourceControlShaB }],
   ["git_detach_worktree", "detachWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedSourceHeadSha: sourceControlShaA, expectedWorktreeHeadSha: sourceControlShaB, expectedBranch: "main" }],
+  ["git_stash_paths", "stashPaths", { workspaceId: "ws", expectedHeadSha: sourceControlShaA, expectedBranch: "main", expectedIndexTreeSha: sourceControlShaB, expectedStashSha: null, files: [{ path: "a.txt", status: " M", expectedSha256: "a".repeat(64) }] }],
   ["git_stage_paths", "stagePaths", { workspaceId: "ws", paths: ["a.txt"] }],
   ["git_unstage_paths", "unstagePaths", { workspaceId: "ws", paths: ["a.txt"], expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
   ["git_commit", "commit", { workspaceId: "ws", message: "typed", expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
@@ -2075,6 +2081,7 @@ const expectedSourceControlAnnotations = {
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_remove_worktree: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   git_detach_worktree: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_stash_paths: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2101,12 +2108,13 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-seven source-control tools in the workspace surface", () => {
+  it("publishes twenty-eight source-control tools in the workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_create_worktree",
       "git_remove_worktree",
       "git_detach_worktree",
+      "git_stash_paths",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -2131,9 +2139,9 @@ describe("registerSourceControlTools", () => {
       "github_read",
       "github_issue_write",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(27);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(71);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(71);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(28);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(72);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(72);
     expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
   });
 

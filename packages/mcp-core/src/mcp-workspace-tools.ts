@@ -113,6 +113,8 @@ import {
   gitRemoveWorktreeResultSchema,
   gitDetachWorktreeInputSchema,
   gitDetachWorktreeResultSchema,
+  gitStashPathsInputSchema,
+  gitStashPathsResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -227,6 +229,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_create_worktree",
   "git_remove_worktree",
   "git_detach_worktree",
+  "git_stash_paths",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -2955,6 +2958,29 @@ const sourceControlMcpSchemas = {
       detached: z.literal(true),
     }).strict(),
   },
+  git_stash_paths: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      expectedHeadSha: mcpSourceControlSha,
+      expectedBranch: mcpSourceControlBranch,
+      expectedIndexTreeSha: mcpSourceControlSha,
+      expectedStashSha: mcpSourceControlSha.nullable(),
+      files: z.array(z.object({
+        path: mcpSourceControlPath,
+        status: z.enum([" M", "M ", "MM", "A ", "AM", "??", " D", "D ", "MD", "AD"]),
+        expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
+      }).strict()).min(1).max(200),
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      branch: mcpSourceControlBranch,
+      headSha: mcpSourceControlSha,
+      previousStashSha: mcpSourceControlSha.nullable(),
+      stashSha: mcpSourceControlSha,
+      paths: mcpSourceControlPaths,
+    }).strict(),
+  },
   git_stage_paths: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -3307,6 +3333,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_remove_worktree: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   git_detach_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  git_stash_paths: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
@@ -3435,6 +3462,31 @@ export function registerSourceControlTools(
             await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.detachWorktree(parsed, context)),
           );
           return sourceControlSuccess("Worktree branch released without removing the checkout.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_stash_paths", include)) {
+    server.registerTool(
+      "git_stash_paths",
+      {
+        title: "Preserve explicit Git changes in a local stash",
+        description: "Creates one native Git stash for the exact complete inventory of regular changed files, including explicit untracked files. Requires expected HEAD, branch, index tree, previous stash SHA (null if absent), status and SHA-256 of each file (null only for deleted files). Respects workspace write policy; never includes ignored files, pops, drops, pushes or creates worktrees. Stop concurrent writers before use.",
+        inputSchema: sourceControlMcpSchemas.git_stash_paths.input,
+        outputSchema: sourceControlMcpSchemas.git_stash_paths.output,
+        annotations: sourceControlAnnotations.git_stash_paths,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitStashPathsInputSchema.parse(input);
+          const structuredContent = gitStashPathsResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.stashPaths(parsed, context)),
+          );
+          return sourceControlSuccess("Explicit Git changes preserved in a local stash.", structuredContent);
         } catch (error) { return toolError(error); }
       },
     );
@@ -4202,6 +4254,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitCreateWorktree: "git_create_worktree",
   gitRemoveWorktree: "git_remove_worktree",
   gitDetachWorktree: "git_detach_worktree",
+  gitStashPaths: "git_stash_paths",
   gitStagePaths: "git_stage_paths",
   gitUnstagePaths: "git_unstage_paths",
   gitCommit: "git_commit",

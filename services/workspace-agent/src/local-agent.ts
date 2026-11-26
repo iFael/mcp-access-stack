@@ -112,6 +112,8 @@ import {
   gitRemoveWorktreeResultSchema,
   gitDetachWorktreeInputSchema,
   gitDetachWorktreeResultSchema,
+  gitStashPathsInputSchema,
+  gitStashPathsResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -166,6 +168,8 @@ import {
   type GitRemoveWorktreeResult,
   type GitDetachWorktreeInput,
   type GitDetachWorktreeResult,
+  type GitStashPathsInput,
+  type GitStashPathsResult,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
   type GitHubClosePullRequestInput,
@@ -1299,6 +1303,39 @@ export class LocalAgent {
           resultSchema: gitDetachWorktreeResultSchema,
           backend: async () => (await this.getGitRepositoryExecutor()).detachWorktree(parsed, activeContext),
           resultSha: (result) => result.headSha,
+        });
+      },
+    );
+  }
+
+  async gitStashPaths(
+    input: GitStashPathsInput,
+    context: OperationContext = {},
+  ): Promise<GitStashPathsResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitStashPaths",
+      gitStashPathsInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const targetResource = localGitRepositoryTarget(workspace.id, parsed.root ?? ".");
+        metadata.sourceControlCapability = "git.worktree.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedHeadSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_stash_paths",
+          capability: "git.worktree.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          beforeReceipt: () => assertSourceControlCapability({
+            policy: workspace, capability: "git.index.write", mutation: true,
+          }),
+          resultSchema: gitStashPathsResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).stashPaths(parsed, activeContext),
+          resultSha: (result) => result.stashSha,
         });
       },
     );
