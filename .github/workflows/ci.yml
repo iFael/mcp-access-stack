@@ -379,6 +379,12 @@ jobs:
         env:
           PERSONAL_SMOKE_HEADFUL: "1"
         run: xvfb-run -a npm run smoke:browser:personal-frames
+
+      - name: Verify genuinely hidden Chromium screenshots without focus emulation
+        env:
+          PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY: "1"
+          PERSONAL_SMOKE_NATIVE_BACKGROUND: "1"
+        run: npm run smoke:browser:personal-frames
   pr-workspace-agent-unit:
     needs: impact
     if: >-

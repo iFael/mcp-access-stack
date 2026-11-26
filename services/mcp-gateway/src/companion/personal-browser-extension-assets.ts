@@ -6536,30 +6536,39 @@ async function screenshot(input, signal, reportPhase) {
   let attached = false;
   let held;
   let interrupted;
+  let screencastStarted = false;
+  let screencastUncertain = false;
+  let screencastListener;
+  let captureCompleted = false;
   // Screenshot CDP commands are observational. Do not keep the tab queue
   // waiting forever for a renderer reply after their deadline/cancellation.
-  async function command(method, params) {
-    throwIfAborted(signal, "screenshot", false);
+  async function command(method, params, timeoutMs = 12000, cleanup = false) {
+    if (!cleanup) throwIfAborted(signal, "screenshot", false);
     let timer;
     let onAbort;
     const pending = chrome.debugger.sendCommand(target, method, params);
+    const markInterrupted = () => {
+      interrupted = interrupted ? Promise.allSettled([interrupted, pending]) : pending;
+    };
     try {
       const limit = new Promise((_, reject) => {
         timer = setTimeout(() => {
-          interrupted = pending;
+          markInterrupted();
           reject(coded("BROWSER_WORKER_TIMEOUT", "Screenshot CDP command timed out: " + method));
-        }, 12000);
-        onAbort = () => {
-          interrupted = pending;
-          reject(cancellationError("screenshot", signal, false));
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-        if (signal?.aborted) onAbort();
+        }, timeoutMs);
+        if (!cleanup) {
+          onAbort = () => {
+            markInterrupted();
+            reject(cancellationError("screenshot", signal, false));
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+          if (signal?.aborted) onAbort();
+        }
       });
       return await Promise.race([limit, pending]);
     } finally {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
     }
   }
   try {
@@ -6632,6 +6641,54 @@ async function screenshot(input, signal, reportPhase) {
       clip = { x: 0, y: 0, width, height, scale: 1 };
     }
 
+    // A genuinely hidden renderer may stop producing compositor surfaces.
+    // Keep only this debugger's surface alive for the duration of capture.
+    // Never activate the tab, retain screencast pixels, or publish a video.
+    const visibility = await command("Runtime.evaluate", {
+      expression: "document.visibilityState", returnByValue: true,
+    });
+    if (visibility?.result?.value === "hidden") {
+      reportPhase?.("cdp-capture");
+      let acknowledgeFirstFrame;
+      const firstFrame = new Promise(resolve => { acknowledgeFirstFrame = resolve; });
+      let acknowledging = false;
+      screencastListener = (source, method, params) => {
+        if (source.tabId !== chromeTabId || source.sessionId ||
+            method !== "Page.screencastFrame" || !Number.isInteger(params?.sessionId) ||
+            acknowledging) return;
+        acknowledging = true;
+        void chrome.debugger.sendCommand(target, "Page.screencastFrameAck", {
+          sessionId: params.sessionId,
+        }).then(() => acknowledgeFirstFrame(), () => {}).finally(() => { acknowledging = false; });
+      };
+      chrome.debugger.onEvent.addListener(screencastListener);
+      try {
+        await command("Page.startScreencast", {
+          format: "jpeg", quality: 50, maxWidth: 800, maxHeight: 600, everyNthFrame: 1,
+        }, 3000);
+        screencastStarted = true;
+      } catch (error) {
+        // An unacknowledged start can still complete later. Only the exact
+        // debugger's confirmed retirement can resolve that uncertainty.
+        screencastUncertain = !!interrupted;
+        throw error;
+      }
+      let frameTimer;
+      let frameAbort;
+      try {
+        await Promise.race([firstFrame, new Promise((_, reject) => {
+          frameTimer = setTimeout(() => reject(coded("BROWSER_WORKER_TIMEOUT",
+            "Hidden screenshot compositor did not produce a frame.")), 3000);
+          frameAbort = () => reject(cancellationError("screenshot", signal, false));
+          signal?.addEventListener("abort", frameAbort, { once: true });
+          if (signal?.aborted) frameAbort();
+        })]);
+      } finally {
+        clearTimeout(frameTimer);
+        signal?.removeEventListener("abort", frameAbort);
+      }
+    }
+
     let data = "";
     for (const quality of [80, 65, 50]) {
       throwIfAborted(signal, "screenshot", false);
@@ -6651,6 +6708,7 @@ async function screenshot(input, signal, reportPhase) {
       throw coded("LIMIT_EXCEEDED", "The personal browser screenshot exceeds the bounded MCP payload budget.");
     }
     throwIfAborted(signal, "screenshot", false);
+    captureCompleted = true;
     return {
       tabId: input.tabId,
       path: "personal://screenshot/" + crypto.randomUUID() + ".jpg",
@@ -6667,10 +6725,26 @@ async function screenshot(input, signal, reportPhase) {
     );
   } finally {
     reportPhase?.("debugger-detach");
-    // Use the same bounded recovery and exact-session fence as native input.
-    // A late observational reply must not leave a newer operation blocked.
-    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted);
-    else await detachGuardedDebugger(target, attached).catch(() => undefined);
+    try {
+      if (screencastStarted) {
+        try {
+          await command("Page.stopScreencast", undefined, 2000, true);
+        } catch {
+          screencastUncertain = true;
+        }
+      }
+    } finally {
+      if (screencastListener) chrome.debugger.onEvent.removeListener(screencastListener);
+      // Never leave an uncertain start/stop on a reusable debugger. Shared
+      // debuggers retain their fence until their exact owner retires them.
+      if (interrupted || screencastUncertain) {
+        await recoverInterruptedPersonalInput(target, attached, held,
+          interrupted ?? Promise.resolve(), undefined, screencastUncertain);
+      } else await detachGuardedDebugger(target, attached).catch(() => undefined);
+    }
+    if (captureCompleted && screencastUncertain) {
+      throw coded("EXECUTION_STATE_INVALID", "Screenshot screencast cleanup could not be confirmed.");
+    }
   }
 }
 

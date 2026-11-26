@@ -9,6 +9,7 @@
 // PERSONAL_SMOKE_FRAME_RECOVERY_ONLY=1 focuses on direct and nested frame input recovery.
 // PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
 // PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
+// PERSONAL_SMOKE_NATIVE_BACKGROUND=1 retains Chrome's normal background throttling for that test.
 // PERSONAL_SMOKE_RICH_FRAME_ONLY=1 checks editable and protected rich text in scriptable frames.
 // PERSONAL_SMOKE_PERFORMANCE_ONLY=1 measures paired verified actions and native bridge telemetry.
 // PERSONAL_SMOKE_OOPIF_FOCUS_ONLY=1 exercises independent nested navigation and focus samples.
@@ -18,7 +19,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { spawn, type ChildProcess } from "node:child_process";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
 
 interface LegacyFixtureRouter {
@@ -415,22 +417,58 @@ async function main(): Promise<void> {
   }
   await writeFile(extensionScript, smokeScript);
   let context: BrowserContext | undefined;
+  let nativeProcess: ChildProcess | undefined;
+  let nativeBrowser: Browser | undefined;
   try {
-    context = await chromium.launchPersistentContext(path.join(root, "profile"), {
-      channel: "chromium",
-      headless: process.env.PERSONAL_SMOKE_HEADFUL !== "1",
-      // No Playwright viewport emulation: page size follows the real window, as in a personal Chrome.
-      viewport: null,
-      ...(process.env.PERSONAL_SMOKE_CHROMIUM ? { executablePath: process.env.PERSONAL_SMOKE_CHROMIUM } : {}),
-      args: [
-        `--disable-extensions-except=${bridge.extensionDirectory}`,
-        `--load-extension=${bridge.extensionDirectory}`,
-        "--host-resolver-rules=MAP *.test 127.0.0.1",
-        "--no-proxy-server",
-        "--site-per-process",
-        "--window-size=1280,900",
-      ],
-    });
+    const profile = path.join(root, "profile");
+    const args = [
+      `--disable-extensions-except=${bridge.extensionDirectory}`,
+      `--load-extension=${bridge.extensionDirectory}`,
+      "--host-resolver-rules=MAP *.test 127.0.0.1",
+      "--no-proxy-server",
+      "--site-per-process",
+      "--window-size=1280,900",
+    ];
+    if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1") {
+      // Playwright's normal launch enables focus emulation on every page,
+      // masking the hidden compositor path of the real personal browser.
+      let launchError: Error | undefined;
+      const child = spawn(process.env.PERSONAL_SMOKE_CHROMIUM || chromium.executablePath(), [
+        ...args, "--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage",
+        "--disable-default-apps", "--disable-component-update", "--disable-background-networking", "--disable-sync",
+        // Match Playwright’s isolated Linux fixture launch, not the installed Chrome.
+        ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+        `--user-data-dir=${profile}`, "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=0",
+        ...(process.env.PERSONAL_SMOKE_HEADFUL === "1" ? [] : ["--headless=new"]),
+        "about:blank",
+      ], { stdio: ["ignore", "ignore", "pipe"] });
+      let startupLog = "";
+      child.stderr?.on("data", (chunk: Buffer) => { startupLog = (startupLog + chunk.toString()).slice(-3000); });
+      nativeProcess = child;
+      child.once("error", error => { launchError = error; });
+      let port = 0;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (launchError) throw launchError;
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error("Native Chromium exited before CDP startup: " + startupLog);
+        const raw = await readFile(path.join(profile, "DevToolsActivePort"), "utf8").catch(() => "");
+        port = Number(raw.split("\n")[0]);
+        if (Number.isInteger(port) && port > 0 && port <= 65535) break;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("Native Chromium CDP startup timed out: " + startupLog);
+      nativeBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true, timeout: 45_000 });
+      context = nativeBrowser.contexts()[0];
+      if (!context) throw new Error("Native Chromium did not expose its isolated profile.");
+    } else {
+      context = await chromium.launchPersistentContext(profile, {
+        channel: "chromium",
+        headless: process.env.PERSONAL_SMOKE_HEADFUL !== "1",
+        viewport: null,
+        ...(process.env.PERSONAL_SMOKE_CHROMIUM ? { executablePath: process.env.PERSONAL_SMOKE_CHROMIUM } : {}),
+        args,
+      });
+    }
     for (let attempt = 0; attempt < 100 && !bridge.isConnected(); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
@@ -716,8 +754,8 @@ async function main(): Promise<void> {
       const target = (await bridge.open({ url, taskId })).tab.tabId;
       const targetPage = await waitForFixturePage(context, url);
       const other = (await bridge.open({ url: url + "?other=1", taskId })).tab.tabId;
-      await waitForFixturePage(context, url + "?other=1");
-      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://"));
+      const otherPage = await waitForFixturePage(context, url + "?other=1");
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://") && new URL(candidate.url()).pathname === "/service-worker.js");
       if (!worker) throw new Error("Smoke extension worker unavailable.");
       const targetChrome = Number(target.split(":")[1]);
       const otherChrome = Number(other.split(":")[1]);
@@ -729,7 +767,11 @@ async function main(): Promise<void> {
       ] as const;
       const capture = async (tabId: string, options: (typeof modes)[number][1]) => {
         const started = performance.now();
-        const shot = await bridge.screenshot({ tabId, ...options });
+        const shot = await bridge.screenshot({ tabId, ...options }).catch(async (error: unknown) => {
+          report("background capture failure", { target: tabId === target ? "A" : "B", options, selection: await selection(),
+            visibility: await (tabId === target ? targetPage : otherPage).evaluate("document.visibilityState") });
+          throw error;
+        });
         const data = (shot as typeof shot & { contentBase64?: string }).contentBase64;
         if (!data || !shot.sizeBytes) throw new Error("Missing screenshot bytes");
         const elapsedMs = Math.round(performance.now() - started);
@@ -757,6 +799,11 @@ async function main(): Promise<void> {
       await bridge.selectTab({ tabId: other });
       const before = await selection();
       if (before.join(",") !== "false,true") throw new Error("Target is not inactive.");
+      const initialVisibility = await targetPage.evaluate("document.visibilityState");
+      report("background capture visibility", { selection: before, visibility: initialVisibility });
+      if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1" && initialVisibility !== "hidden") {
+        throw new Error("Native background test requires a truly hidden document.");
+      }
       for (const { name, options, foreground } of baselines) {
         const otherImage = await capture(other, options);
         const matches = (actual: number[], expected: number[]) => actual.length === 3 &&
@@ -771,6 +818,9 @@ async function main(): Promise<void> {
           const wrongTab = matches(background.pixels, [24, 74, 144]);
           const geometryMatches = name === "region" ? background.size.width === 120 && background.size.height === 80
             : name === "fullPage" ? background.size.height >= 1800 : background.size.width === foreground.size.width;
+          if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1") {
+            await targetPage.waitForFunction(() => document.visibilityState === "hidden", undefined, { timeout: 2000 });
+          }
           report("background screenshot", { name, sample, foregroundMs: foreground.elapsedMs,
             backgroundMs: background.elapsedMs, foregroundSize: foreground.size, size: background.size,
             pixels: background.pixels, identityMatches, wrongTab, geometryMatches,
@@ -1775,7 +1825,17 @@ async function main(): Promise<void> {
 
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
-    await context?.close().catch(() => undefined);
+    if (nativeBrowser) {
+      await nativeBrowser.close().catch(() => undefined);
+    } else await context?.close().catch(() => undefined);
+    if (nativeProcess && nativeProcess.exitCode === null && nativeProcess.signalCode === null) {
+      const child = nativeProcess;
+      child.kill();
+      for (let attempt = 0; attempt < 25 && child.exitCode === null && child.signalCode === null; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
     await bridge.close().catch(() => undefined);
     server.close();
     await rm(root, { recursive: true, force: true }).catch(() => undefined);

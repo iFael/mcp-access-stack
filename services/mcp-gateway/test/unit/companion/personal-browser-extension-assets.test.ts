@@ -5114,6 +5114,69 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(session.size).toBe(0);
   });
 
+  it.each(["success", "capture failure", "start rejection", "stop failure", "cancel"])(
+    "scopes hidden screenshot compositor lifecycle: %s", async scenario => {
+      const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+      const calls: string[] = [];
+      const acknowledgements: number[] = [];
+      const listeners = new Set<(source: {tabId: number; sessionId?: string}, method: string, params: {sessionId: number}) => void>();
+      const held = new Map([["7", { arm: () => undefined }]]);
+      const controller = new AbortController();
+      const context = vm.createContext({
+        MAX_FULL_PAGE_PIXELS: 40_000_000, MAX_SCREENSHOT_BASE64_CHARS: 3_000_000,
+        setTimeout, clearTimeout, chromeTabIdFrom: () => 7,
+        requireOwnedMetadata: async () => ({}),
+        throwIfAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw Object.assign(new Error("cancelled"), { code: "OPERATION_CANCELLED" }); },
+        cancellationError: () => Object.assign(new Error("cancelled"), { code: "OPERATION_CANCELLED" }),
+        coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+        crypto: { randomUUID: () => "example" }, base64ByteLength: () => 3,
+        __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: new Map(),
+        releasePersonalTaskDebugger: async () => { calls.push("retire"); held.clear(); return true; },
+        chrome: { debugger: {
+          onEvent: { addListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.add(fn),
+            removeListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.delete(fn) },
+          sendCommand: async (_target: unknown, method: string, params?: {sessionId: number}) => {
+            calls.push(method);
+            if (method === "Runtime.evaluate") return { result: { value: "hidden" } };
+            if (method === "Page.startScreencast") {
+              if (scenario === "start rejection") throw new Error("already active");
+              for (const listener of listeners) {
+                listener({ tabId: 8 }, "Page.screencastFrame", { sessionId: 1 });
+                listener({ tabId: 7, sessionId: "nested" }, "Page.screencastFrame", { sessionId: 2 });
+                listener({ tabId: 7 }, "Page.screencastFrame", { sessionId: 3 });
+              }
+            }
+            if (method === "Page.screencastFrameAck") acknowledgements.push(params!.sessionId);
+            if (method === "Page.captureScreenshot") {
+              if (scenario === "capture failure") throw new Error("capture failed");
+              if (scenario === "cancel") controller.abort();
+              return { data: "AQID" };
+            }
+            if (method === "Page.stopScreencast" && scenario === "stop failure") throw new Error("stop failed");
+            return {};
+          },
+        } },
+      });
+      vm.runInContext(extractFunction(serviceWorker, "screenshot"), context);
+      const screenshot = vm.runInContext("screenshot", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+      const result = screenshot({ tabId: "personal:7" }, controller.signal);
+      if (scenario === "success") await expect(result).resolves.toMatchObject({ sizeBytes: 3 });
+      else if (scenario === "stop failure") await expect(result).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+      else if (scenario === "cancel") await expect(result).rejects.toMatchObject({ code: "OPERATION_CANCELLED" });
+      else await expect(result).rejects.toBeDefined();
+      expect(acknowledgements).toEqual(scenario === "start rejection" ? [] : [3]);
+      expect(listeners.size).toBe(0);
+      expect(calls.filter(call => call === "Page.stopScreencast")).toHaveLength(scenario === "start rejection" ? 0 : 1);
+      // Cancellation after dispatch follows the existing interrupted-command
+      // recovery path, retiring the task debugger even after a confirmed stop.
+      expect(calls.includes("retire")).toBe(scenario === "stop failure" || scenario === "cancel");
+      if (scenario !== "start rejection") {
+        expect(calls.indexOf("Page.screencastFrameAck")).toBeLessThan(calls.indexOf("Page.captureScreenshot"));
+        expect(calls.indexOf("Page.captureScreenshot")).toBeLessThan(calls.indexOf("Page.stopScreencast"));
+      }
+    },
+  );
+
   it("bounds screenshot recovery when the exact debugger detach also stalls", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const capture = deferred<unknown>();
