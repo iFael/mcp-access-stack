@@ -6,6 +6,7 @@
 // PERSONAL_SMOKE_CHROMIUM overrides the Chromium executable when needed.
 // PERSONAL_SMOKE_ROBUSTNESS_ONLY=1 runs the focused editor/scroll regression.
 // PERSONAL_SMOKE_CDP_RECOVERY_ONLY=1 injects lost acknowledgements in an isolated profile.
+// PERSONAL_SMOKE_FRAME_RECOVERY_ONLY=1 focuses on direct and nested frame input recovery.
 // PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
@@ -48,6 +49,11 @@ const pages: Record<string, (url: URL, port: number) => string> = {
       }, {passive:true});
     </script>`,
   "recovery-site.test/runs": () => "<!doctype html><title>Run history</title><p>Run history destination</p>",
+  "frame-recovery-site.test/": (url, port) => `<!doctype html><title>Frame recovery</title>
+    <iframe name="content" src="http://${url.searchParams.has("nested") ? "frame-recovery-mid.test" : "recovery-site.test"}:${port}/"
+      style="width:640px;height:480px;border:0"></iframe>`,
+  "frame-recovery-mid.test/": (_url, port) => `<!doctype html><title>Nested frame recovery</title>
+    <iframe name="leaf" src="http://recovery-site.test:${port}/" style="width:500px;height:400px;border:0"></iframe>`,
   "editor-site.test/": () => `<!doctype html><title>Editor geometry fixture</title>
     <body style="margin:0;width:300vw;height:100vh">
       <div class="monaco-editor" style="position:fixed;left:75vw;top:80px;width:160vw;height:80px;background:#ddd;overflow:hidden">
@@ -296,7 +302,7 @@ async function main(): Promise<void> {
   }
   let smokeScript = originalScript.replace(listener,
     "chrome.notifications?.onButtonClicked?.addListener(globalThis.__mcpSmokeNotificationClick = (id, buttonIndex) => {");
-  if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
+  if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1" || process.env.PERSONAL_SMOKE_FRAME_RECOVERY_ONLY === "1") {
     // Lose only the acknowledgement after one real Chrome input command.
     // The fixture observes the actual effect; no production extension is patched.
     for (const [operation, expression] of [["scroll", "pending"], ["click", "released"], ["hover", "pending"], ["press", "down"]]) {
@@ -340,6 +346,16 @@ async function main(): Promise<void> {
       '(method === "Input.dispatchDragEvent" && params.type === "drop" && globalThis.__mcpSmokeDropAck === "drop" || ' +
       'method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" && globalThis.__mcpSmokeDropAck === "release") ' +
       '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value), signal, "drag"');
+    for (const [debuggee, operation] of [["target", "operation"], ["debuggee", '"frameSequence"']] as const) {
+      const call = 'chrome.debugger.sendCommand(' + debuggee + ', method, params)';
+      const needle = call + ', signal, ' + operation + ',';
+      if (smokeScript.split(needle).length !== 2) throw new Error("Frame lost-ack hook missing: " + operation);
+      const lost = call + '.then(value => (' +
+        'params.type === "mouseReleased" && globalThis.__mcpSmokeDropAck === "frame-click" || ' +
+        'method === "Input.insertText" && globalThis.__mcpSmokeDropAck === "frame-fill") ' +
+        '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value)';
+      smokeScript = smokeScript.replace(needle, lost + ', signal, ' + operation + ',');
+    }
     const captureNeedle = 'const pending = chrome.debugger.sendCommand(target, method, params);';
     if (smokeScript.split(captureNeedle).length !== 2) throw new Error("Screenshot lost-ack hook missing.");
     smokeScript = smokeScript.replace(captureNeedle,
@@ -536,6 +552,63 @@ async function main(): Promise<void> {
       report("late debugger detach recovery", { delayedFinish, ...lateDetach, finished: finished.completed });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
+      return;
+    }
+
+    if (process.env.PERSONAL_SMOKE_FRAME_RECOVERY_ONLY === "1") {
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://"));
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      const frameTask = "personal-frame-input-recovery";
+      for (const nested of [false, true]) {
+        const hostUrl = `http://frame-recovery-site.test:${sitePort}/${nested ? "?nested=1" : ""}`;
+        const frameTab = (await bridge.open({ url: hostUrl, taskId: frameTask })).tab.tabId;
+        const host = await waitForFixturePage(context, hostUrl);
+        const leaf = nested ? host.frameLocator('iframe[name="content"]').frameLocator('iframe[name="leaf"]')
+          : host.frameLocator('iframe[name="content"]');
+        await leaf.locator("#key-entry").waitFor();
+        const framePath = ["content", "leaf"];
+        await bridge.snapshot({ tabId: frameTab });
+        await worker.evaluate("globalThis.__mcpSmokeDropAck = 'frame-click'");
+        const clickResult = await (nested
+          ? bridge.frameSequence({ tabId: frameTab, steps: [
+            { action: "extract", framePath, locator: { id: "clicks" } },
+            { action: "click", framePath, locator: { id: "increase" } },
+            { action: "fill", framePath, locator: { id: "key-entry" }, value: "unexpected" },
+          ] })
+          : bridge.frameClick({ tabId: frameTab, frame: "content", selector: "#increase" }))
+          .then(() => ({ code: "completed", message: "" }), (error: { code?: string; message: string }) => error);
+        if (clickResult.code !== "EXECUTION_OUTCOME_UNKNOWN" ||
+            nested && !clickResult.message.includes("Completed step indexes: [0]") ||
+            await leaf.locator("#clicks").textContent() !== "Count 1" ||
+            await leaf.locator("#key-entry").inputValue() !== "") {
+          throw new Error("Frame click recovery failed: " + JSON.stringify(clickResult));
+        }
+        const clickShot = await bridge.screenshot({ tabId: frameTab });
+        if (!clickShot.sizeBytes) throw new Error("Capture after frame click failed.");
+        await bridge.snapshot({ tabId: frameTab });
+        await worker.evaluate("globalThis.__mcpSmokeDropAck = 'frame-fill'");
+        const fillResult = await (nested
+          ? bridge.frameSequence({ tabId: frameTab, steps: [
+            { action: "extract", framePath, locator: { id: "clicks" } },
+            { action: "fill", framePath, locator: { id: "key-entry" }, value: "frame input" },
+            { action: "click", framePath, locator: { id: "increase" } },
+          ] })
+          : bridge.frameFill({ tabId: frameTab, frame: "content", selector: "#key-entry", value: "frame input" }))
+          .then(() => ({ code: "completed", message: "" }), (error: { code?: string; message: string }) => error);
+        if (fillResult.code !== "EXECUTION_OUTCOME_UNKNOWN" ||
+            nested && !fillResult.message.includes("Completed step indexes: [0]") ||
+            await leaf.locator("#key-entry").inputValue() !== "frame input" ||
+            await leaf.locator("#insert-count").textContent() !== "1" ||
+            await leaf.locator("#clicks").textContent() !== "Count 1") {
+          throw new Error("Frame fill recovery failed: " + JSON.stringify(fillResult));
+        }
+        const fillShot = await bridge.screenshot({ tabId: frameTab });
+        if (!fillShot.sizeBytes) throw new Error("Capture after frame fill failed.");
+        report("frame input recovery", { nested, click: clickResult.code, fill: fillResult.code,
+          clicks: 1, insertions: 1, clickScreenshotBytes: clickShot.sizeBytes, fillScreenshotBytes: fillShot.sizeBytes });
+      }
+      await bridge.finishTask({ taskId: frameTask });
+      console.log("\nPERSONAL BROWSER FRAME RECOVERY PASS");
       return;
     }
 

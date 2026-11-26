@@ -606,7 +606,10 @@ async function runRequest(operation, input, signal, timing, reportPhase) {
       throwIfAborted(signal, operation, started);
       return result;
     } catch (error) {
-      if (signal.aborted) throw cancellationError(operation, signal, started);
+      // Keep the native interruption evidence, including completed frame steps.
+      if (signal.aborted && error?.code !== "EXECUTION_OUTCOME_UNKNOWN") {
+        throw cancellationError(operation, signal, started);
+      }
       throw error;
     }
   });
@@ -3950,7 +3953,8 @@ async function directFrameAction(input, signal, filling) {
   if (!input.guard || !input.guard.url || tab.url !== input.guard.url) {
     throw coded("BROWSER_CONFIRMATION_INVALID", "Frame action requires an observed parent tab URL.");
   }
-  throwIfAborted(signal, "frameAction", false);
+  const operation = filling ? "frameFill" : "frameClick";
+  throwIfAborted(signal, operation, false);
   let discovery;
   try {
     discovery = await chrome.scripting.executeScript({
@@ -4008,11 +4012,25 @@ async function directFrameAction(input, signal, filling) {
   if (before.url !== input.guard.url) throw coded("BROWSER_CONFIRMATION_INVALID", "The parent navigated.");
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
+  let pressed = false;
+  let dispatched = false;
+  const sendInput = async (method, params) => {
+    throwIfAborted(signal, operation, dispatched);
+    if (params.type === "mousePressed" || params.type === "keyDown") pressed = true;
+    dispatched = true;
+    await waitPersonalInputAcknowledgement(
+      chrome.debugger.sendCommand(target, method, params), signal, operation,
+      value => { interrupted = value; });
+    if (params.type === "mouseReleased" || params.type === "keyUp") pressed = false;
+  };
   try {
     attached = await attachGuardedDebugger(target);
-    throwIfAborted(signal, "frameAction", false);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
+    throwIfAborted(signal, operation, false);
     for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
-      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      await sendInput("Input.dispatchMouseEvent", {
         type, x: parent.result.x, y: parent.result.y,
         button: type === "mouseMoved" ? "none" : "left",
         buttons: type === "mousePressed" ? 1 : 0, clickCount: 1,
@@ -4030,25 +4048,28 @@ async function directFrameAction(input, signal, filling) {
       if (!focused || focused.frameId !== frame.frameId ||
           (frame.documentId && focused.documentId !== frame.documentId) ||
           !focused.result) throw coded("FRAME_NOT_READY", "The intended field did not receive native focus.");
-      await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+      await sendInput("Input.dispatchKeyEvent", {
         type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
       });
-      await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+      await sendInput("Input.dispatchKeyEvent", {
         type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
       });
       const [keyEvents] = await chrome.scripting.executeScript({
         target: { tabId: chromeTabId, frameIds: [frame.frameId] },
         func: personalFocusedFieldNeedsKeys, args: [frame.result.url],
       });
-      if (keyEvents?.result === true) await insertPersonalTextWithKeys(target, input.value, signal);
-      else await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+      if (keyEvents?.result === true) await insertPersonalTextWithKeys(target, input.value, signal, sendInput);
+      else await sendInput("Input.insertText", { text: input.value });
     }
     return { tabId: input.tabId, completed: true };
   } catch (error) {
+    if (pressed && !interrupted) interrupted = Promise.resolve();
+    if (interrupted) throw coded("EXECUTION_OUTCOME_UNKNOWN", "CDP frame input interrupted; inspect before another mutation.");
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native frame input is unavailable or the debugger is occupied.");
   } finally {
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted, undefined, pressed);
+    else await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -4956,12 +4977,26 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
   if (keys.length > 100) throw coded("LIMIT_EXCEEDED", "Chrome key sequence exceeds 100 inputs.");
   const debuggee = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
+  let pressed = false;
+  let dispatched = started;
+  const sendInput = async (method, params) => {
+    throwIfAborted(signal, "frameSequence", dispatched);
+    if (params.type === "mousePressed" || params.type === "keyDown") pressed = true;
+    dispatched = true;
+    await waitPersonalInputAcknowledgement(
+      chrome.debugger.sendCommand(debuggee, method, params), signal, "frameSequence",
+      value => { interrupted = value; });
+    if (params.type === "mouseReleased" || params.type === "keyUp") pressed = false;
+  };
   let holding = false;
   let watcher;
   const release = async () => {
     if (!holding) return;
     holding = false;
-    await detachGuardedDebugger(debuggee, attached).catch(() => undefined);
+    if (interrupted) await recoverInterruptedPersonalInput(debuggee, attached, held, interrupted, undefined, pressed);
+    else await detachGuardedDebugger(debuggee, attached).catch(() => undefined);
   };
   try {
     try {
@@ -4970,6 +5005,7 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
       // input would land on stale coordinates.
       attached = await attachGuardedDebugger(debuggee);
       holding = true;
+      held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
       if (attached || takeFreshPersonalDebugger(debuggee)) await settlePersonalViewport(debuggee, signal);
     } catch (error) {
       if (error?.code) throw error;
@@ -5027,12 +5063,12 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
         throw coded("BROWSER_CONFIRMATION_INVALID", "The owned tab navigated before native input.");
       }
       const dispatchKey = async (key) => {
-        await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", {
+        await sendInput("Input.dispatchKeyEvent", {
           type: "keyDown", key: key.key, code: key.code,
           windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
           modifiers: key.modifiers, ...(key.text ? { text: key.text } : {}),
         });
-        await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", {
+        await sendInput("Input.dispatchKeyEvent", {
           type: "keyUp", key: key.key, code: key.code,
           windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
           modifiers: key.modifiers,
@@ -5040,7 +5076,7 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
       };
       const clickPoint = async () => {
         for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
-          await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+          await sendInput("Input.dispatchMouseEvent", {
             type, x: point.x, y: point.y, button: type === "mouseMoved" ? "none" : "left",
             buttons: type === "mousePressed" ? 1 : 0, clickCount: 1,
           });
@@ -5053,8 +5089,8 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
         if (!(await verify("focus"))) throw coded("FRAME_NOT_READY", "The legacy field did not receive native focus.");
         await dispatchKey({ key: "a", code: "KeyA", keyCode: 65, modifiers: 2 });
         await dispatchKey({ key: "Backspace", code: "Backspace", keyCode: 8, modifiers: 0 });
-        if (observed?.keyEvents) await insertPersonalTextWithKeys(debuggee, step.value, signal);
-        else await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: step.value });
+        if (observed?.keyEvents) await insertPersonalTextWithKeys(debuggee, step.value, signal, sendInput);
+        else await sendInput("Input.insertText", { text: step.value });
       } else if (step.action === "select") {
         if (!(await verify("value", observed.option.value))) {
           await clickPoint();
@@ -5081,6 +5117,8 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
         }
       }
     } catch (error) {
+      if (pressed && !interrupted) interrupted = Promise.resolve();
+      if (interrupted) throw coded("EXECUTION_OUTCOME_UNKNOWN", "CDP legacy frame input interrupted; inspect before another mutation.");
       if (error?.code) throw error;
       throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Native legacy frame input is unavailable or the debugger is occupied.");
     } finally {

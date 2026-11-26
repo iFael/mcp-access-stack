@@ -1520,6 +1520,121 @@ describe("personal browser extension assets", () => {
     expect(reads).toBe(1);
   });
 
+  it.each([
+    ["direct", "click", "mousePressed"], ["direct", "click", "mouseReleased"],
+    ["direct", "fill", "insertText"], ["direct", "fill", "textKeyDown"],
+    ["legacy", "click", "mouseReleased"], ["legacy", "fill", "insertText"],
+    ["legacy", "fill", "textKeyDown"], ["legacy", "select", "ArrowDown"],
+    ["legacy", "press", "Enter"],
+    ["direct", "click", "mouseReleased", true], ["legacy", "fill", "insertText", true],
+  ] as const)("recovers interrupted %s frame %s at %s without replay or later steps", async (mode, action, lost, shared = false) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const dispatched = deferred<void>();
+    const controller = new AbortController();
+    const events: string[] = [];
+    const fences = new Map();
+    const viewport = { borrowers: 0 };
+    const guard = { url: "https://host.example/" };
+    const frame = { frameId: 17, documentId: "child-1", url: "https://child.example/" };
+    const observed = { target: { label: "Next", role: "button", submitLike: false },
+      point: { x: 25, y: 30 }, viewport: { width: 300, height: 200 },
+      editable: true, keyEvents: lost === "textKeyDown", option: { value: "mg", moves: 2 } };
+    const step = { action, framePath: ["content"], locator: { selector: "#field" }, value: "Hi", key: "Enter" };
+    const expectedTargets = action === "click" || action === "press" ? [{ index: 1, ...observed.target }] : [];
+    const ctx = vm.createContext({
+      setTimeout, clearTimeout, performance,
+      chromeTabIdFrom: (id: string) => Number(id.split(":")[1]), requireOwnedMetadata: async () => ({}),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      throwIfAborted: (signal?: AbortSignal) => {
+        if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "EXECUTION_OUTCOME_UNKNOWN" });
+      },
+      assertPersonalNavigationTarget: () => undefined, takeFreshPersonalDebugger: () => false,
+      settlePersonalViewport: async () => undefined, delay: async () => undefined,
+      probePersonalLegacyTarget: async () => ({ frame, observed, graph: {} }),
+      resolvePersonalFramePoint: async () => ({ x: 225, y: 130 }),
+      preflightPersonalLegacyTargets: async () => expectedTargets,
+      domIndex: async () => { events.push("index"); return { items: [], totalCount: 0, truncated: false }; },
+      personalLegacyEnter: (key: string) => key === "Enter",
+      parseChromeKey: (key: string) => ({ key, code: key, keyCode: 13, modifiers: 0 }),
+      watchPersonalFrameNavigations: () => ({
+        settle: async () => { events.push("settle"); },
+        dispose: () => { events.push("dispose"); },
+      }),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalViewportSessions: new Map(shared ? [["7", viewport]] : []),
+      refuseDuringPersonalHandoff: async () => undefined, refusePausedPersonalTab: async () => undefined,
+      cancellationError: () => Object.assign(new Error("generic cancellation"), { code: "EXECUTION_OUTCOME_UNKNOWN" }),
+      chrome: {
+        tabs: { get: async () => ({ url: guard.url }) },
+        debugger: { attach: async () => undefined, detach: async () => { events.push("detach"); },
+          sendCommand: async (_: unknown, method: string, params: Record<string, unknown>) => {
+            const name = method === "Input.insertText" ? "insertText" : params.text === "H" && params.type === "keyDown"
+              ? "textKeyDown" : params.type === "keyDown" ? String(params.key) : String(params.type);
+            events.push(name);
+            if (name === lost) { dispatched.resolve(); return pending.promise; }
+            return {};
+          } },
+        scripting: { executeScript: async ({ target, func }: { target: { allFrames?: boolean }; func: { name: string } }) => {
+          if (target.allFrames) return [{ frameId: 17, documentId: "child-1", result: { url: frame.url, name: "content" } }];
+          if (func.name === "probeDirectFrameControl") return [{ ...frame, result: { x: 25, y: 30 } }];
+          if (func.name === "probeDirectFrameElement") return [{ frameId: 0, result: { x: 225, y: 130 } }];
+          if (func.name === "confirmDirectFrameFocus") return [{ ...frame, result: true }];
+          if (func.name === "personalFocusedFieldNeedsKeys") return [{ ...frame, result: lost === "textKeyDown" }];
+          if (func.name === "verifyPersonalLegacyActionTarget") return [{ ...frame, result: action !== "select" }];
+          throw new Error("Unexpected probe: " + func.name);
+        } },
+      },
+    });
+    for (const name of ["describePersonalFrame", "probeDirectFrameControl", "probeDirectFrameElement",
+      "confirmDirectFrameFocus", "personalFocusedFieldNeedsKeys", "verifyPersonalLegacyActionTarget",
+      "physicalTypingKey", "insertPersonalTextWithKeys", "directFrameAction", "runPersonalLegacyMutation", "frameSequence", "runRequest", "enqueueMutation", "mutationQueueKey"])
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const direct = vm.runInContext("directFrameAction", ctx) as (input: unknown, signal: AbortSignal, filling: boolean) => Promise<unknown>;
+    const sequence = vm.runInContext("frameSequence", ctx) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const input = { tabId: "personal:7", guard };
+    vm.runInContext('const mutationQueues = new Map(); const MUTATING_OPERATIONS = new Set(["frameClick", "frameFill", "frameSequence", "snapshot"]); ', ctx);
+    ctx.perform = (operation: string, request: unknown, signal: AbortSignal) => operation === "snapshot" ? Promise.resolve("ready") :
+      operation === "frameSequence" ? sequence(request, signal) : direct(request, signal, operation === "frameFill");
+    const request = vm.runInContext("runRequest", ctx) as (operation: string, input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const result = (mode === "direct" ? request(action === "fill" ? "frameFill" : "frameClick",
+      { ...input, frame: "content", selector: "#field", value: "Hi" }, controller.signal) :
+      request("frameSequence", { ...input, phase: "execute", expectedTargets,
+        steps: [{ action: "index" }, step, { action: "index" }] }, controller.signal))
+      .then(() => ({ code: "completed", message: "" }), (error: { code: string; message: string }) => error);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([dispatched.promise.then(() => "dispatched"), result.then(error => error.code)]))
+        .resolves.toBe("dispatched");
+      const beforeAbort = [...events];
+      controller.abort("deadline");
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve({ code: "stuck" }), 500); })]))
+        .resolves.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN" });
+      const expected = [...beforeAbort, ...(shared ? [] : ["detach"]), ...(mode === "legacy" ? ["dispose"] : [])];
+      expect(events).toEqual(expected);
+      expect(fences.size).toBe(shared ? 1 : 0);
+      expect(viewport.borrowers).toBe(0);
+      const cleanSignal = new AbortController().signal;
+      if (shared) await expect(request("snapshot", input, cleanSignal)).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+      await expect(request("snapshot", { tabId: "personal:8" }, cleanSignal)).resolves.toBe("ready");
+      if (mode === "legacy") expect((await result).message).toContain("Completed step indexes: [0].");
+      pending.resolve({});
+      // The async sendCommand mock adopts pending.promise before its own acknowledgement settles.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (shared && action === "click") {
+        expect(fences.has("7")).toBe(true);
+        fences.get("7").detached();
+      }
+      expect(fences.size).toBe(0);
+      await expect(request("snapshot", input, cleanSignal)).resolves.toBe("ready");
+      expect(events).toEqual(expected);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("uses real CDP events for a uniquely identified direct cross-origin frame and verifies focus before filling", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -6488,6 +6603,11 @@ function extractFunction(source: string, name: string): string {
         }
         if (["click", "scroll", "hover", "screenshot", "press", "fill", "typeText", "drag"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
           return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
+            .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
+        }
+        if (["directFrameAction", "runPersonalLegacyMutation"].includes(name)) {
+          return ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+            "recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
             .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
         if (name !== "attachGuardedDebugger" && name !== "detachGuardedDebugger" &&
