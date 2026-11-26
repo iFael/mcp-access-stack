@@ -2640,7 +2640,7 @@ async function scroll(input, signal, reportPhase) {
 
 // Observe editable content in the isolated world without returning its text.
 // A completed CDP dispatch is not proof that a rich editor changed.
-function observePersonalEditableMutation(stage, ref, expectedText) {
+function observePersonalEditableMutation(stage, ref, expectedText, mode = "replace", point) {
   const prior = globalThis.__mcpV3EditorMutation;
   if (stage === "cleanup") {
     prior?.observer?.disconnect();
@@ -2656,6 +2656,15 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   }
   const element = ref ? globalThis.__mcpV3OwnedRefElements?.get(ref) : active;
   if (!element || element !== active && !element.contains?.(active)) return { ready: false };
+  if (point) {
+    let hit = document.elementFromPoint(point.x, point.y);
+    for (let depth = 0; depth < 6; depth += 1) {
+      const inner = hit?.shadowRoot?.elementFromPoint?.(point.x, point.y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    if (!hit || hit !== active && !active.contains?.(hit)) return { ready: false };
+  }
   const tag = String(element?.tagName || "").toLowerCase();
   const type = String(element?.getAttribute?.("type") || "text").toLowerCase();
   const role = element?.getAttribute?.("role");
@@ -2681,6 +2690,24 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   if (stage === "before") {
     prior?.observer?.disconnect();
     const record = { element, host, value, mutated: false };
+    if (mode === "insert" && exact && typeof expectedText === "string") {
+      let start = element.editContext?.selectionStart ?? element.selectionStart;
+      let end = element.editContext?.selectionEnd ?? element.selectionEnd;
+      // For rich or virtual DOMs there is no reliable mapping from visual
+      // selection offsets to the complete value. Certify only a single
+      // text-node contenteditable, native field, or exposed EditContext.
+      if (element.isContentEditable && !virtualEditor && element.childNodes?.length === 1 &&
+          element.firstChild?.nodeType === 3 && element.firstChild.textContent === value) {
+        const selection = element.ownerDocument?.getSelection?.();
+        if (selection?.anchorNode === element.firstChild && selection.focusNode === element.firstChild) {
+          start = Math.min(selection.anchorOffset, selection.focusOffset);
+          end = Math.max(selection.anchorOffset, selection.focusOffset);
+        }
+      }
+      if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && start <= end && end <= value.length) {
+        record.expectedValue = value.slice(0, start) + expectedText + value.slice(end);
+      }
+    }
     if (!plain && typeof MutationObserver !== "undefined") {
       try {
         record.observer = new MutationObserver(() => { record.mutated = true; });
@@ -2697,10 +2724,12 @@ function observePersonalEditableMutation(stage, ref, expectedText) {
   }
   if (!prior || prior.element !== element) return { ready: false };
   const changed = value !== prior.value || prior.mutated;
-  const matches = exact && value === expectedText;
-  // A mutation is not an exact replacement. Keep observing until the
-  // expected value arrives (or the caller cleans up its bounded observation).
-  if (matches || expectedText === null && changed) {
+  const matches = exact && (mode === "insert"
+    ? typeof prior.expectedValue === "string" && value === prior.expectedValue
+    : value === expectedText);
+  // A mutation is not proof of the intended text. Keep the original
+  // observation until it matches or the bounded caller cleans it up.
+  if (matches) {
     prior.observer?.disconnect();
     delete globalThis.__mcpV3EditorMutation;
   }
@@ -2728,8 +2757,10 @@ async function fill(input, signal) {
   let attached = false;
   try {
     attached = await attachGuardedDebugger(target);
-    let keyEvents = false;
-    if (!input.ref.startsWith("ax-")) {
+    const ax = input.ref.startsWith("ax-");
+    const observedRef = ax ? null : input.ref;
+    let point;
+    if (!ax) {
       // Revalidate and focus after attaching the debugger: its infobar can
       // change the viewport or the currently focused editor.
       const [revalidated] = await chrome.scripting.executeScript({
@@ -2739,19 +2770,8 @@ async function fill(input, signal) {
       if (!revalidated?.result || revalidated.result.error) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "Editable target changed after Chrome debugger attachment.");
       }
-      const [before] = await chrome.scripting.executeScript({
-        target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
-        args: ["before", input.ref, input.value],
-      });
-      if (before?.result?.ready !== true) throw coded("STATE_NOT_REACHED", "The requested field is not editable.");
-      keyEvents = before.result.keyHandlers === true;
-      if (before.result.protectedTokens === true) {
-        throw coded("ACTION_BLOCKED_BY_POLICY",
-          "This rich editor contains protected tokens. Click the insertion point and use browser_type; browser_fill could delete the tokens.");
-      }
-    }
-    if (input.ref.startsWith("ax-")) {
-      const point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
+    } else {
+      point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
       const [tokens] = await chrome.scripting.executeScript({
         target: { tabId: chromeTabId },
         func: (x, y) => {
@@ -2765,12 +2785,31 @@ async function fill(input, signal) {
         throw coded("ACTION_BLOCKED_BY_POLICY",
           "This rich editor contains protected tokens. Click the insertion point and use browser_type.");
       }
-      for (const [type, button] of [["mouseMoved", "none"], ["mousePressed", "left"], ["mouseReleased", "left"]]) {
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseMoved", x: point.x, y: point.y, button: "none",
+      });
+      const hovered = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
+      if (hovered.x !== point.x || hovered.y !== point.y) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The editable accessibility target moved after hover. No input was dispatched.");
+      }
+      for (const type of ["mousePressed", "mouseReleased"]) {
         await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
-          type, x: point.x, y: point.y, button, clickCount: 1,
+          type, x: point.x, y: point.y, button: "left", clickCount: 1,
         });
       }
+      point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
     }
+    const [before] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+      args: ["before", observedRef, input.value, "replace", point ?? null],
+    });
+    if (before?.result?.ready !== true) throw coded("STATE_NOT_REACHED", "The requested field does not have verified editable focus.");
+    if (before.result.protectedTokens === true) {
+      throw coded("ACTION_BLOCKED_BY_POLICY",
+        "This rich editor contains protected tokens. Click the insertion point and use browser_type; browser_fill could delete the tokens.");
+    }
+    const keyEvents = before.result.keyHandlers === true;
+    throwIfAborted(signal, "fill", false);
     // Select the focused field's existing content using trusted keyboard input.
     for (const event of [
       { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 },
@@ -2780,23 +2819,18 @@ async function fill(input, signal) {
     ]) await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", event);
     if (keyEvents) await insertPersonalTextWithKeys(target, input.value, signal);
     else await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
-    if (!input.ref.startsWith("ax-")) {
-      let verified = false;
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        const [after] = await chrome.scripting.executeScript({
-          target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
-          args: ["after", input.ref, input.value],
-        }).catch(() => []);
-        verified = after?.result?.ready === true && after.result.matches === true;
-        if (verified) break;
-        await delay(100, signal);
-      }
-      if (!verified) {
-        return { tabId: input.tabId, completed: true, unverified: true };
-      }
+    let verified = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const [after] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+        args: ["after", observedRef, input.value],
+      }).catch(() => []);
+      verified = after?.documentId === before.documentId &&
+        after?.result?.ready === true && after.result.matches === true;
+      if (verified) break;
+      if (attempt < 3) await delay(100, signal);
     }
-    // AX dispatch currently has no equivalent exact-content observation.
-    return { tabId: input.tabId, completed: true, ...(input.ref.startsWith("ax-") ? { unverified: true } : {}) };
+    return { tabId: input.tabId, completed: true, ...(!verified ? { unverified: true } : {}) };
   } catch (error) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
@@ -3059,13 +3093,14 @@ async function typeText(input, signal) {
   const target = { tabId: chromeTabId };
   let attached = false;
   let composing;
+  let focused;
   try {
     attached = await attachGuardedDebugger(target);
     const verifyTypedChange = input.text.length > 0 && !input.submit && !/[\\r\\n\\t]/u.test(input.text);
     if (verifyTypedChange) {
-      var focused = (await chrome.scripting.executeScript({
+      focused = (await chrome.scripting.executeScript({
         target: { tabId: chromeTabId, allFrames: true }, func: observePersonalEditableMutation,
-        args: ["before", null, null],
+        args: ["before", null, input.text, "insert"],
       })).filter((entry) => entry.result?.ready === true);
       if (focused.length !== 1) {
         throw coded("STATE_NOT_REACHED", "No unique editable field is focused. Click the editor before typing.");
@@ -3119,22 +3154,18 @@ async function typeText(input, signal) {
     // dispatched, not verified.
     let unverified = input.text.length > 0 && !verifyTypedChange;
     if (verifyTypedChange) {
-      let changed = false;
+      let verified = false;
       for (let attempt = 0; attempt < 4; attempt += 1) {
         const observed = await chrome.scripting.executeScript({
           target: { tabId: chromeTabId, frameIds: [focused[0].frameId] },
-          func: observePersonalEditableMutation, args: ["after", null, null],
+          func: observePersonalEditableMutation, args: ["after", null, input.text, "insert"],
         }).catch(() => []);
-        changed = observed[0]?.documentId === focused[0].documentId &&
-          observed[0]?.result?.ready === true && observed[0].result.changed === true;
-        if (changed) break;
-        await delay(100, signal);
+        verified = observed[0]?.documentId === focused[0].documentId &&
+          observed[0]?.result?.ready === true && observed[0].result.matches === true;
+        if (verified) break;
+        if (attempt < 3) await delay(100, signal);
       }
-      if (!changed) {
-        unverified = true;
-        await chrome.scripting.executeScript({ target: { tabId: chromeTabId },
-          func: observePersonalEditableMutation, args: ["cleanup", null, null] }).catch(() => undefined);
-      }
+      unverified = !verified;
     }
     if (input.submit) {
       for (const kind of ["keyDown", "keyUp"]) {
@@ -3155,6 +3186,12 @@ async function typeText(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
+    for (const entry of focused ?? []) {
+      await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId, frameIds: [entry.frameId] },
+        func: observePersonalEditableMutation, args: ["cleanup", null, null],
+      }).catch(() => undefined);
+    }
     await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
@@ -6881,6 +6918,11 @@ async function waitForTabComplete(tabId, timeoutMs, signal) {
     }
     signal?.addEventListener("abort", onAbort, { once: true });
     chrome.tabs.onUpdated.addListener(onUpdated);
+    // The load may finish between tabs.get and listener registration.
+    if (signal?.aborted) { onAbort(); return; }
+    chrome.tabs.get(tabId).then((latest) => onUpdated(tabId, latest), (error) => {
+      cleanup(); reject(error);
+    });
   });
 }
 
@@ -6921,6 +6963,12 @@ function snapshotPage(generation, compact = false) {
     "[aria-haspopup]",
   ].join(",");
   const refs = [];
+  const previousLive = globalThis.__mcpV3OwnedRefElements;
+  const previousLinks = globalThis.__mcpV3NavigationLinkKeys ?? new Map();
+  const previousByKey = new Map(Array.from(previousLinks, ([ref, key]) => [key, ref]));
+  const linkKeys = new Map();
+  globalThis.__mcpV3NavigationLinkKeys = linkKeys;
+  let idCounts;
   const liveRefs = new Map();
   globalThis.__mcpV3OwnedRefElements = liveRefs;
   const refMetadata = new Map();
@@ -6960,12 +7008,6 @@ function snapshotPage(generation, compact = false) {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) continue;
-    let ref = globalThis.__mcpV3StableElementRefs.get(element);
-    if (!ref) {
-      ref = "p-" + generation + "-" + (refs.length + 1);
-      globalThis.__mcpV3StableElementRefs.set(element, ref);
-    }
-    liveRefs.set(ref, element);
     // A native link, checkbox or field keeps its semantic role even when it
     // uses cursor:pointer or tabindex. The guarded click probe must see the
     // same role; only an otherwise generic element becomes a button.
@@ -6977,6 +7019,18 @@ function snapshotPage(generation, compact = false) {
        (element.childElementCount === 0 && style.cursor === "pointer"))
       ? "button" : nativeRole;
     const name = normalizeText(accessibleName(element, role)).slice(0, 500);
+    const key = navigationLinkKey(element, role, name);
+    let ref = globalThis.__mcpV3StableElementRefs.get(element);
+    if (ref && previousLinks.has(ref) && previousLinks.get(ref) !== key) ref = undefined;
+    if (!ref && key) {
+      const priorRef = previousByKey.get(key);
+      const priorElement = previousLive?.get(priorRef);
+      if (priorElement && !priorElement.isConnected && !liveRefs.has(priorRef)) ref = priorRef;
+    }
+    if (!ref || liveRefs.has(ref)) ref = "p-" + generation + "-" + (refs.length + 1);
+    globalThis.__mcpV3StableElementRefs.set(element, ref);
+    liveRefs.set(ref, element);
+    if (key) linkKeys.set(ref, key);
     const states = semanticStates(element, role);
     refs.push({ ref, role, name });
     refMetadata.set(ref, { ref, role, name });
@@ -7009,6 +7063,32 @@ function snapshotPage(generation, compact = false) {
     ...(fullText.length > 20000 ? { truncated: true } : {}),
     refs,
   };
+
+  // A recreated DOM node is not the original target. Only retain a ref for
+  // a uniquely keyed native same-origin navigation link with the exact same
+  // destination, name and page. Never infer a button/form identity from text.
+  function navigationLinkKey(element, role, name) {
+    const id = element.getAttribute("id");
+    if (role !== "link" || element.tagName !== "A" || !id || id.length > 128 ||
+        element.getRootNode?.() !== document || !name ||
+        element.getAttribute("download") !== null || element.getAttribute("onclick") !== null ||
+        element.getAttribute("target") && element.getAttribute("target") !== "_self") return undefined;
+    if (!idCounts) {
+      const identified = document.querySelectorAll("[id]");
+      idCounts = new Map();
+      if (identified.length <= 10000) {
+        for (const item of identified) {
+          const itemId = item.getAttribute("id");
+          idCounts.set(itemId, (idCounts.get(itemId) || 0) + 1);
+        }
+      }
+    }
+    if (idCounts.get(id) !== 1 || !/^https?:\\/\\//u.test(element.href || "")) return undefined;
+    try {
+      if (new URL(element.href).origin !== new URL(location.href).origin) return undefined;
+    } catch { return undefined; }
+    return JSON.stringify([location.href, id, element.href, name]);
+  }
 
   function defaultRole(element) {
     const tag = element.tagName.toLowerCase();
@@ -7169,6 +7249,10 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY, rechec
     element.getAttribute("placeholder") || element.getAttribute("title") || safeButtonValue ||
     (element.isContentEditable && ["textbox", "searchbox"].includes(role) ? "" : element.innerText || element.textContent) || "").replace(/\\s+/gu, " ").trim().slice(0, 500);
   if (guard.role !== role || guard.name !== name) return { error: "target_changed" };
+  const linkKey = globalThis.__mcpV3NavigationLinkKeys?.get(ref);
+  if (linkKey && (linkKey !== JSON.stringify([location.href, element.getAttribute("id"), element.href, name]) ||
+      element.getAttribute("download") !== null || element.getAttribute("onclick") !== null ||
+      element.getAttribute("target") && element.getAttribute("target") !== "_self")) return { error: "target_changed" };
   if (focus && !(element instanceof HTMLInputElement && !["checkbox", "radio", "file", "button", "submit", "reset", "hidden"].includes(type)) &&
       !(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLElement &&
         (element.isContentEditable || element.editContext != null))) {

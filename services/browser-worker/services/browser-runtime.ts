@@ -993,16 +993,21 @@ export class BrowserRuntime implements BrowserExecutor {
         ...(input.modifiers ? { modifiers: input.modifiers } : {}),
       };
     }
-    if (input.expect && await this.pageRead.observeCondition(input.expect)) {
+    if (context.signal?.aborted) throw abortSignalError(context.signal, "Click was cancelled before dispatch.");
+    if (input.expect && await this.pageRead.observeCondition(input.expect, context.signal)) {
       throw new AppError("STATE_NOT_REACHED", "Expected state already present. No click was dispatched.");
     }
     await this.beginNavigation(tab.tabId, "click");
     const actionStarted = performance.now();
-    const response = await this.driver.click(action);
+    const response = await this.driver.click(action, context.signal === undefined ? {} : { signal: context.signal });
     this.updateSelectedTab(tab.tabId, response);
     this.updateRequestedUrl(tab.tabId);
     await this.checkpoint();
-    const verified = input.expect ? await this.pageRead.waitCondition(input.expect) : false;
+    const remaining = context.deadline === undefined ? 10_000 : remainingOperationTimeMs(context.deadline);
+    const verified = input.expect && remaining > 0 ? await this.pageRead.waitCondition({
+      ...input.expect, timeoutMs: Math.min(input.expect.timeoutMs ?? 3000, remaining),
+    }, context.signal) : false;
+    if (context.signal?.aborted) return { tabId: tab.tabId, completed: true, unverified: true };
     return { ...await this.withActionState(tab.tabId, input.knownRevision, elapsedMs(actionStarted), context),
       unverified: !verified };
   }

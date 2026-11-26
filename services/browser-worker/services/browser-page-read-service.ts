@@ -96,26 +96,29 @@ export class BrowserPageReadService {
   }
 
   // Read only a boolean, never return the page or expected text.
-  async observeCondition(input: BrowserClickExpectation): Promise<boolean> {
+  async observeCondition(input: BrowserClickExpectation, signal?: AbortSignal): Promise<boolean> {
     const condition = JSON.stringify(input);
     const response = await this.options.driver.evaluate({ function:
       `(() => { const c = ${condition}; const body = document.body;
         if ("url" in c) return location.href === c.url;
         if (!body || document.readyState === "loading") return null;
-        return "text" in c ? body.innerText.includes(c.text) : !body.innerText.includes(c.absentText); })` });
+        return "text" in c ? body.innerText.includes(c.text) : !body.innerText.includes(c.absentText); })` },
+      signal === undefined ? {} : { signal });
     if (typeof response.result !== "boolean") {
       throw new AppError("STATE_NOT_REACHED", "Expected page condition is unavailable.");
     }
     return response.result;
   }
 
-  async waitCondition(input: BrowserClickExpectation): Promise<boolean> {
+  async waitCondition(input: BrowserClickExpectation, signal?: AbortSignal): Promise<boolean> {
     const deadline = this.now() + (input.timeoutMs ?? 3000);
     do {
-      try { if (await this.observeCondition(input)) return true; }
-      catch { /* Navigation may temporarily remove the document. */ }
+      if (signal?.aborted) return false;
+      try {
+        if (await this.observeCondition(input, signal) && !signal?.aborted) return true;
+      } catch { /* Navigation may temporarily remove the document. */ }
       const remaining = deadline - this.now();
-      if (remaining <= 0) return false;
+      if (remaining <= 0 || signal?.aborted) return false;
       await this.delay(Math.min(this.pollIntervalMs, remaining));
     } while (this.now() < deadline);
     return false;
