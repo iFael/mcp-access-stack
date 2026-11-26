@@ -10,6 +10,7 @@
 // PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
 // PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
 // PERSONAL_SMOKE_RICH_FRAME_ONLY=1 checks editable and protected rich text in scriptable frames.
+// PERSONAL_SMOKE_PERFORMANCE_ONLY=1 measures paired verified actions and native bridge telemetry.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -215,6 +216,15 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <body style="margin:0;height:100vh;background:#ffffff">
     <button onclick="document.body.style.background='#00c000'">Pintar</button>
     <button onclick="document.body.style.background='#ffffff'">Limpar</button>`,
+  "performance-site.test/": () => `<!doctype html><title>Personal performance</title><body>
+    <button id="run">Mostrar resultado</button><p id="result">pending</p><p id="clicks">0</p>
+    <script>
+      document.getElementById("run").onclick = () => {
+        const count = Number(document.getElementById("clicks").textContent) + 1;
+        document.getElementById("clicks").textContent = String(count);
+        setTimeout(() => { document.getElementById("result").textContent = "finished [" + count + "]"; }, 450);
+      };
+    </script>`,
   "quality-site.test/": () => `<!doctype html><title>Interaction quality</title><body>
     <button id="run">Mostrar resultado</button><button id="noop">Mostrar nada</button>
     <input id="entry" aria-label="Entry" value="abc def">
@@ -312,8 +322,12 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const sitePort = (server.address() as { port: number }).port;
   const root = await mkdtemp(path.join(os.tmpdir(), "personal-frame-smoke-"));
+  const latencyEvents: Array<Record<string, unknown>> = [];
   const bridge = await PersonalBrowserBridge.start({
     stateRoot: root, port: 34_000 + Math.floor(Math.random() * 1_000),
+    log: (entry) => {
+      if (process.env.PERSONAL_SMOKE_PERFORMANCE_ONLY === "1" && entry.event === "browser_latency" && entry.layer === "bridge") latencyEvents.push(entry);
+    },
   });
   // Test-only instrumentation in a throwaway profile: expose the exact
   // registered Chrome notification-click listener so headless CI can emulate
@@ -636,7 +650,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const verifyRichFrames = async () => {
+    const verifyRichFrames = async (context: BrowserContext) => {
       const taskId = "personal-rich-frame-compatibility";
       const failures: string[] = [];
       for (const variant of ["same", "cross", "nested"]) {
@@ -680,11 +694,11 @@ async function main(): Promise<void> {
       console.log("\nPERSONAL BROWSER RICH FRAME COMPATIBILITY PASS");
     };
     if (process.env.PERSONAL_SMOKE_RICH_FRAME_ONLY === "1") {
-      await verifyRichFrames();
+      await verifyRichFrames(context);
       return;
     }
 
-    const verifyBackgroundCapture = async () => {
+    const verifyBackgroundCapture = async (context: BrowserContext) => {
       const url = `http://capture-site.test:${sitePort}/`;
       const taskId = "personal-background-capture";
       const target = (await bridge.open({ url, taskId })).tab.tabId;
@@ -758,7 +772,7 @@ async function main(): Promise<void> {
       console.log("\nPERSONAL BROWSER BACKGROUND CAPTURE PASS");
     };
     if (process.env.PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY === "1") {
-      await verifyBackgroundCapture();
+      await verifyBackgroundCapture(context);
       return;
     }
 
@@ -823,6 +837,77 @@ async function main(): Promise<void> {
         screenshotBytes: shot.sizeBytes, incompleteVerified: false, exactVerified: true, redirectHits });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER FOREGROUND AND URL PASS");
+      return;
+    }
+
+    if (process.env.PERSONAL_SMOKE_PERFORMANCE_ONLY === "1") {
+      const modulePath = "../../benchmarks/browser/benchmark-browser-fast-path.mjs";
+      const { summarizeOperationBenchmark } = await import(modulePath) as {
+        summarizeOperationBenchmark: (runs: number[], bytes?: number[], warmups?: number) => unknown;
+      };
+      const url = `http://performance-site.test:${sitePort}/`;
+      const taskId = "personal-performance";
+      const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+      const page = await waitForFixturePage(context, url);
+      const warmups = 3;
+      const iterations = 20;
+      type Sample = { flowMs: number; snapshotMs: number; bridgeMs: number; actionMs: number; queueMs: number; responseBytes: number };
+      const samples: Record<"combined" | "separate", Sample[]> = { combined: [], separate: [] };
+      let clicks = 0;
+      for (let pair = 0; pair < warmups + iterations; pair += 1) {
+        const strategies = pair % 2 === 0 ? ["combined", "separate"] as const : ["separate", "combined"] as const;
+        for (const strategy of strategies) {
+          const started = performance.now();
+          const snapshot = await bridge.snapshot({ tabId });
+          const snapshotMs = performance.now() - started;
+          const ref = snapshot.refs.find((item) => item.name === "Mostrar resultado")?.ref;
+          if (!ref) throw new Error("Performance fixture action is missing.");
+          const expected = "finished [" + (++clicks) + "]";
+          const offset = latencyEvents.length;
+          const actionStarted = performance.now();
+          if (strategy === "combined") {
+            const result = await bridge.click({ tabId, ref, expect: { text: expected, timeoutMs: 4000 } });
+            if (result.unverified !== false) throw new Error("Combined postcondition was not verified.");
+          } else {
+            await bridge.click({ tabId, ref });
+            await bridge.wait({ tabId, text: expected, timeoutMs: 4000 });
+          }
+          const flowMs = performance.now() - actionStarted;
+          if (await page.locator("#result").textContent() !== expected ||
+              await page.locator("#clicks").textContent() !== String(clicks)) {
+            throw new Error("Performance fixture did not produce exactly one action.");
+          }
+          const events = latencyEvents.slice(offset);
+          const operations = strategy === "combined" ? ["browser_click"] : ["browser_click", "browser_wait"];
+          if (events.length !== operations.length ||
+              events.some((event, index) => event.operation !== operations[index] || event.outcome !== "success")) {
+            throw new Error("Unexpected bridge telemetry for " + strategy + ": " + JSON.stringify(events));
+          }
+          const sum = (key: string): number => events.reduce((total, event) => {
+            const value = event[key];
+            if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Missing telemetry: " + key);
+            return total + value;
+          }, 0);
+          const sample = { flowMs, snapshotMs, bridgeMs: sum("durationMs"),
+            actionMs: sum("extensionActionMs"), queueMs: sum("extensionQueueMs"), responseBytes: sum("responseBytes") };
+          if (pair === 0) report("first sample " + strategy, sample);
+          if (pair >= warmups) samples[strategy].push(sample);
+        }
+      }
+      for (const strategy of ["combined", "separate"] as const) {
+        const values = samples[strategy];
+        report("personal performance " + strategy, {
+          version: bridge.connectionInfo().extensionVersion, measuredScope: "isolated local bridge; excludes Edge and relay",
+          headful: process.env.PERSONAL_SMOKE_HEADFUL === "1", calls: strategy === "combined" ? 1 : 2,
+          flow: summarizeOperationBenchmark(values.map((item) => item.flowMs), values.map((item) => item.responseBytes), warmups),
+          snapshot: summarizeOperationBenchmark(values.map((item) => item.snapshotMs), [], warmups),
+          bridge: summarizeOperationBenchmark(values.map((item) => item.bridgeMs), [], warmups),
+          extensionAction: summarizeOperationBenchmark(values.map((item) => item.actionMs), [], warmups),
+          extensionQueue: summarizeOperationBenchmark(values.map((item) => item.queueMs), [], warmups),
+        });
+      }
+      await bridge.finishTask({ taskId });
+      console.log("\nPERSONAL BROWSER PERFORMANCE PASS");
       return;
     }
 
@@ -964,8 +1049,8 @@ async function main(): Promise<void> {
     }
 
     // Include both regressions in the existing full headless/headful CI smoke.
-    await verifyRichFrames();
-    await verifyBackgroundCapture();
+    await verifyRichFrames(context);
+    await verifyBackgroundCapture(context);
 
     // Every extension notification uses the embedded data: icon, which Chrome
     // only loads when the extension's CSP allows it.
