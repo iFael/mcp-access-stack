@@ -70,6 +70,8 @@ const PERSONAL_OPERATION_PHASES: Partial<Record<BrowserOperation, readonly strin
     "cdp-dpr", "cdp-capture", "debugger-detach"],
   scroll: ["queued", "ownership", "scroll-preflight", "debugger-attach", "scroll-ax",
     "cdp-wheel", "debugger-detach"],
+  click: ["queued", "ownership", "click-preflight", "debugger-attach", "cdp-move",
+    "click-revalidate", "cdp-press", "cdp-release", "click-postcondition", "debugger-detach"],
 };
 
 interface PendingCall {

@@ -146,6 +146,7 @@ const personalViewportSessions = new Map();
 const personalTaskDebuggers = new Map();
 const personalLegacyRefsByTab = new Map();
 const personalDebuggerTransitions = new Map();
+globalThis.__mcpV3PersonalPendingInput = new Map();
 globalThis.__mcpV3PersonalDebuggerTransitions = personalDebuggerTransitions;
 globalThis.__mcpV3PersonalViewportSessions = personalViewportSessions;
 globalThis.__mcpV3PersonalTaskDebuggers = personalTaskDebuggers;
@@ -180,6 +181,9 @@ function borrowPersonalDebugger(target) {
 // worker installs, the action attaches and detaches the debugger itself.
 async function attachGuardedDebugger(target) {
   const key = String(target.tabId);
+  if (globalThis.__mcpV3PersonalPendingInput?.has(key)) {
+    throw coded("EXECUTION_STATE_INVALID", "Previous CDP input is unresolved; no new debugger action was dispatched.");
+  }
   const transitions = globalThis.__mcpV3PersonalDebuggerTransitions;
   const pending = transitions?.get(key);
   if (pending) await pending;
@@ -308,10 +312,10 @@ async function releasePersonalTaskDebugger(chromeTabId) {
     heir.attached = true;
     return;
   }
-  const detaching = chrome.debugger.detach({ tabId: chromeTabId }).catch(() => undefined);
+  const detaching = chrome.debugger.detach({ tabId: chromeTabId }).then(() => true, () => false);
   transitions?.set(key, detaching);
   try {
-    await detaching;
+    return await detaching;
   } finally {
     if (transitions?.get(key) === detaching) transitions.delete(key);
   }
@@ -333,6 +337,7 @@ async function reloadPersonalExtensionWhenIdle(expectedVersion) {
         key.startsWith(PERSONAL_HANDOFF_PREFIX) && value &&
         typeof value.reason === "string" && value.done !== true);
       return inFlightRequests.size > 0 || mutationQueues.size > 0 ||
+        globalThis.__mcpV3PersonalPendingInput?.size > 0 ||
         personalRecordings.size > 0 || personalNetworkCaptures.size > 0 ||
         personalDialogArms.size > 0 || personalViewportSessions.size > 0 ||
         personalDebuggerTransitions.size > 0 ||
@@ -475,7 +480,7 @@ async function handleMessage(raw) {
   inFlightRequests.set(message.id, controller);
   const requestSocket = socket;
   // Report only fixed stage names, never DOM, arguments or CDP payloads.
-  const reportPhase = ["snapshot", "screenshot", "scroll"].includes(operation)
+  const reportPhase = ["snapshot", "screenshot", "scroll", "click"].includes(operation)
     ? (phase) => {
         if (socket !== requestSocket) return;
         try { send({ type: "request-phase", id: message.id, phase }); } catch {}
@@ -521,6 +526,10 @@ async function runRequest(operation, input, signal, timing, reportPhase) {
     await refuseDuringPersonalHandoff(operation, input);
     await refusePausedPersonalTab(operation, input);
     throwIfAborted(signal, operation, false);
+    if (queueKey && typeof input?.tabId === "string" && !["closeTab", "dialog", "videoStop"].includes(operation) &&
+        globalThis.__mcpV3PersonalPendingInput?.has(String(chromeTabIdFrom(input.tabId)))) {
+      throw coded("EXECUTION_STATE_INVALID", "Previous CDP input is unresolved; no new tab operation was dispatched.");
+    }
     try { return await perform(operation, input, signal, timing, reportPhase); }
     finally { if (timing) timing.actionMs += Math.max(0, performance.now() - started - (timing.snapshotMs - previousSnapshot)); }
   };
@@ -560,7 +569,7 @@ async function perform(operation, input, signal, timing, reportPhase) {
     case "navigate": return navigate(input, signal);
     case "snapshot": return snapshot(input, signal, reportPhase);
     case "evaluate": return evaluatePage(input, signal);
-    case "click": return click(input, signal);
+    case "click": return click(input, signal, reportPhase);
     case "hover": return hover(input, signal);
     case "drag": return drag(input, signal);
     case "scroll": return scroll(input, signal, reportPhase);
@@ -2205,7 +2214,8 @@ function samePersonalPixelSemanticTarget(actual, expected) {
     keys.every((key) => Object.hasOwn(actual, key) && actual[key] === expected[key]);
 }
 
-async function click(input, signal) {
+async function click(input, signal, reportPhase) {
+  reportPhase?.("click-preflight");
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "click", false);
@@ -2262,8 +2272,13 @@ async function click(input, signal) {
   }
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
+  const onInterrupted = value => { interrupted = value; };
   try {
+    reportPhase?.("debugger-attach");
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
     throwIfAborted(signal, "click", false);
     if (!pixel && input.ref.startsWith("ax-")) point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     else point = await revalidatePersonalClickAfterAttach(chromeTabId, target, input, point, pixel, attached, signal);
@@ -2282,9 +2297,11 @@ async function click(input, signal) {
     const modifiers = (input.modifiers ?? []).reduce((mask, part) => mask | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 }[part] ?? 0), 0);
     const clickStartedAt = Date.now();
     throwIfAborted(signal, "click", false);
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    reportPhase?.("cdp-move");
+    await waitPersonalInputAcknowledgement(chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: point.x, y: point.y, modifiers,
-    });
+    }), signal, "click", onInterrupted);
+    reportPhase?.("click-revalidate");
     if (input.expect) {
       const observed = await readPersonalWaitState(chromeTabId, input.expect, 0, 3000, signal);
       throwIfAborted(signal, "click", false);
@@ -2322,26 +2339,30 @@ async function click(input, signal) {
       }
     }
     throwIfAborted(signal, "click", false);
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    reportPhase?.("cdp-press");
+    await waitPersonalInputAcknowledgement(chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mousePressed", x: point.x, y: point.y, button, buttons, clickCount, modifiers,
-    });
-    const held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
+    }), signal, "click", onInterrupted);
     // The dialog may interrupt the release; neither path proves the effect.
     let notify;
     const opened = new Promise((resolve) => { notify = resolve; });
     if (held) held.dialogWaiter = notify;
     try {
+      reportPhase?.("cdp-release");
       const released = chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
         type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, clickCount, modifiers,
       });
-      await Promise.race([released.then(() => false), opened.then(() => true)]);
-      if (held?.dialogHandling && held.dialog?.at >= clickStartedAt) await held.dialogHandling;
+      await waitPersonalInputAcknowledgement(released, signal, "click", onInterrupted, opened);
+      if (held?.dialogHandling && held.dialog?.at >= clickStartedAt) {
+        await waitPersonalInputAcknowledgement(held.dialogHandling, signal, "click", onInterrupted);
+      }
     } finally {
       if (held?.dialogWaiter === notify) delete held.dialogWaiter;
     }
     const dialog = held?.dialog;
     let verified = false;
     if (input.expect && dialog?.state !== "open") {
+      reportPhase?.("click-postcondition");
       try {
         await wait({ tabId: input.tabId, ...input.expect, timeoutMs: input.expect.timeoutMs ?? 3000 }, signal);
         verified = true;
@@ -2361,7 +2382,9 @@ async function click(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    reportPhase?.("debugger-detach");
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted);
+    else await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -2560,6 +2583,65 @@ async function settlePersonalViewport(target, signal) {
   }
 }
 
+// Bound the acknowledgement, not the native effect. An interrupted command
+// must never be sent again merely because its reply was not observed.
+async function waitPersonalInputAcknowledgement(pending, signal, operation, onInterrupted, alternative) {
+  let timer;
+  let onAbort;
+  try {
+    const limit = new Promise((_, reject) => {
+      onAbort = () => {
+        onInterrupted(pending);
+        reject(coded("EXECUTION_OUTCOME_UNKNOWN", "CDP " + operation + " acknowledgement unavailable; inspect before another mutation."));
+      };
+      timer = setTimeout(onAbort, 8000);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    });
+    await Promise.race(alternative ? [pending, limit, alternative] : [pending, limit]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+// A native input whose reply never arrives may still have affected the page. Fence
+// that tab until the old command settles or its exact debugger is detached.
+// Shared sessions are not torn down just to recover a task-owned input.
+async function recoverInterruptedPersonalInput(target, attached, held, pending) {
+  const key = String(target.tabId);
+  const fences = globalThis.__mcpV3PersonalPendingInput;
+  const fence = {};
+  fences.set(key, fence);
+  let settled = false;
+  let cleaned = false;
+  const clear = () => {
+    if (settled && cleaned && fences.get(key) === fence) fences.delete(key);
+  };
+  const finished = () => { settled = true; clear(); };
+  void pending.then(finished, finished);
+  const recovery = (async () => {
+    try {
+      await detachGuardedDebugger(target, attached);
+      if (attached) settled = true;
+      else if (held && held.dialog?.state !== "open" && globalThis.__mcpV3PersonalTaskDebuggers?.get(key) === held &&
+          !globalThis.__mcpV3PersonalViewportSessions?.has(key) &&
+          !globalThis.__mcpV3PersonalDialogArms?.has(key) &&
+          !globalThis.__mcpV3PersonalNetworkCaptures?.has(key) &&
+          !globalThis.__mcpV3PersonalRecordings?.has(key)) {
+        if (await releasePersonalTaskDebugger(target.tabId)) settled = true;
+      }
+    } catch { /* An unconfirmed detach does not lift the fence. */ }
+    finally { cleaned = true; clear(); }
+  })();
+  // Keep the serialized queue bounded even if Chrome also stalls on detach.
+  // The fence remains until safe recovery, not merely until this timer fires.
+  let timer;
+  try {
+    await Promise.race([recovery, new Promise(resolve => { timer = setTimeout(resolve, 2000); })]);
+  } finally { clearTimeout(timer); }
+}
+
 async function scroll(input, signal, reportPhase) {
   reportPhase?.("scroll-preflight");
   const chromeTabId = chromeTabIdFrom(input.tabId);
@@ -2613,6 +2695,8 @@ async function scroll(input, signal, reportPhase) {
   const deltaY = input.direction === "up" ? -input.amount : input.direction === "down" ? input.amount : 0;
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
   try {
     reportPhase?.("debugger-attach");
     attached = await attachGuardedDebugger(target);
@@ -2623,16 +2707,21 @@ async function scroll(input, signal, reportPhase) {
     }
     throwIfAborted(signal, "scroll", false);
     reportPhase?.("cdp-wheel");
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
+    // Issue exactly one wheel event. Cancellation bounds the wait, not the
+    // browser's effect; a missing acknowledgement is never success.
+    const pending = chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
       type: "mouseWheel", x: point.x, y: point.y, deltaX, deltaY,
     });
+    await waitPersonalInputAcknowledgement(pending, signal, "scroll", value => { interrupted = value; });
     return { tabId: input.tabId, completed: true };
   } catch (error) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
     reportPhase?.("debugger-detach");
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted);
+    else await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 
@@ -7630,6 +7719,7 @@ chrome.tabs.onCreated?.addListener?.((tab) => {
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  globalThis.__mcpV3PersonalPendingInput.delete(String(tabId));
   personalViewportSessions.delete(String(tabId));
   void changeSessionMap(PERSONAL_PENDING_SHARES_KEY, (shares) => { delete shares[String(tabId)]; }).catch(() => undefined);
   const recording = personalRecordings.get(String(tabId));
