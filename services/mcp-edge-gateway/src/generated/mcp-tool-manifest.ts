@@ -31361,7 +31361,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create/revise/resolve a record with exact CAS; import all 12 legacy .codex sources losslessly; or activate the new authority only after verified off-host backup and curated decision. Import alone does not activate historical data. Records are not authorization for Git, deploy or infrastructure. Next: memory_context to verify the updated revision before proceeding.",
+    "description": "Create/revise/resolve a record with exact CAS. Create and revise require recordId, expectedRevision, kind, confidence, title, content and evidenceRefs (an empty array is allowed); revise supplies the full record, not a partial patch. Resolve requires recordId and expectedRevision without content fields. Import all 12 legacy .codex sources losslessly; or activate the new authority only after verified off-host backup and curated decision. Import alone does not activate historical data. Records are not authorization for Git, deploy or infrastructure. Next: memory_context to verify the updated revision before proceeding.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -31614,15 +31614,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "e0f6f5b2e5df88e409086200d1f79efcb2deb49524143d7ace01d04cec0d85fb",
-  "serverVersion": "0.4.0-catalog.ce0f6f5b2e5df.s811b25e3744b",
+  "contractRevision": "214cb5ddf906f322744e1b436f9c47f7c855100b283e7757f938d66423690414",
+  "serverVersion": "0.4.0-catalog.c214cb5ddf906.s811b25e3744b",
   "toolCount": 135,
   "toolSetRevision": "811b25e3744b41d7f968d9c7883a5a109e5eede784aac4730c01b31b9117e059"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.ce0f6f5b2e5df.s811b25e3744b"
+  "version": "0.4.0-catalog.c214cb5ddf906.s811b25e3744b"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

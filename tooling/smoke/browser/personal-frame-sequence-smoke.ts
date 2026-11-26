@@ -163,9 +163,17 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <button id="run">Mostrar resultado</button><button id="noop">Mostrar nada</button>
     <input id="entry" aria-label="Entry" value="abc def">
     <div id="rich" contenteditable="true" role="textbox" aria-label="Rich">abc def</div>
+    <input id="focus-trap" aria-label="Guarded input" value="old">
+    <input id="decoy" aria-label="Decoy" value="unchanged">
     <p id="result">pending</p><p id="clicks">0</p>
     <a id="help" href="/help">Help</a>
     <script>
+      const trap = document.getElementById("focus-trap");
+      let pointerFocused = false;
+      trap.addEventListener("pointerdown", () => { pointerFocused = true; });
+      trap.addEventListener("focus", () => {
+        if (!pointerFocused) document.getElementById("decoy").focus();
+      });
       document.getElementById("run").onclick = () => {
         document.getElementById("clicks").textContent = String(Number(document.getElementById("clicks").textContent) + 1);
         setTimeout(() => { document.getElementById("result").textContent = "finished"; }, 450);
@@ -174,7 +182,7 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("clicks").textContent = String(Number(document.getElementById("clicks").textContent) + 1);
       };
     </script>`,
-  "quality-site.test/help": () => "<!doctype html><title>Help</title><p>Help destination</p>",
+  "quality-site.test/help": () => "<!doctype html><title>Help</title><script src='/slow-help.js'></script><p>Help destination</p>",
   "plain-site.test/": (url) => {
     return `<!doctype html><title>Plain</title><body>
     <button onclick="document.getElementById('out').textContent='Mostrado'">Mostrar detalhes</button>
@@ -220,8 +228,16 @@ async function main(): Promise<void> {
     createLegacyLegacySiteFixtureRouter(options: { largeMenu: boolean }): LegacyFixtureRouter;
   };
   const legacyFixture = createLegacyLegacySiteFixtureRouter({ largeMenu: true });
+  let slowHelpResponses = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (url.hostname === "quality-site.test" && url.pathname === "/slow-help.js") {
+      setTimeout(() => {
+        slowHelpResponses += 1;
+        res.writeHead(200, { "content-type": "application/javascript" }).end("/* fixture */");
+      }, 6000);
+      return;
+    }
     if (url.hostname === "mistert-fixture.test" && legacyFixture.handle(req, res, url)) return;
     if (url.hostname === "consult-site.test" && req.method === "POST") consultationPosts.push(url.pathname);
     const page = pages[url.hostname + url.pathname];
@@ -298,6 +314,7 @@ async function main(): Promise<void> {
           const field = refs.find((item) => item.name === "Entry")!.ref;
           const rich = refs.find((item) => item.name === "Rich")!.ref;
           const help = refs.find((item) => item.name === "Help")!.ref;
+          const focusTrap = refs.find((item) => item.name === "Guarded input")!.ref;
           const unverified = await bridge.click({ tabId, ref: noop, expect: { text: "never reached", timeoutMs: 500 } });
           if (unverified.unverified !== true || await page.locator("#clicks").textContent() !== "2") {
             throw new Error("Missing postcondition must not redispatch or report a confirmed effect.");
@@ -322,6 +339,11 @@ async function main(): Promise<void> {
           if (richResult.unverified || await page.locator("#rich").innerText() !== "rich replacement") {
             throw new Error("Contenteditable replacement was not verified.");
           }
+          const focused = await bridge.fill({ tabId, ref: focusTrap, value: "native focus" });
+          if (focused.unverified || await page.locator("#focus-trap").inputValue() !== "native focus" ||
+              await page.locator("#decoy").inputValue() !== "unchanged") {
+            throw new Error("Trusted focus recovery did not preserve the other field.");
+          }
           await page.locator("#help").evaluate((node) => {
             const anchor = node as unknown as { cloneNode(deep: boolean): unknown; replaceWith(node: unknown): void };
             anchor.replaceWith(anchor.cloneNode(true));
@@ -329,9 +351,14 @@ async function main(): Promise<void> {
           const navigated = await bridge.click({ tabId, ref: help, expect: {
             url: `http://quality-site.test:${sitePort}/help`, timeoutMs: 4000,
           } });
-          await page.waitForURL(`http://quality-site.test:${sitePort}/help`, { timeout: 5000 });
-          if (navigated.unverified !== false) {
-            throw new Error("Safe recreated link did not recover and navigate.");
+          if (navigated.unverified !== false || slowHelpResponses !== 0) {
+            throw new Error("Committed URL was not verified independently of the blocked renderer.");
+          }
+          await page.waitForURL(`http://quality-site.test:${sitePort}/help`, { timeout: 10000 });
+          const destination = await bridge.snapshot({ tabId });
+          if (destination.url !== `http://quality-site.test:${sitePort}/help` ||
+              !destination.content.includes("Help destination")) {
+            throw new Error("Safe recreated link did not recover and leave the tab available for observation.");
           }
         }
         await bridge.finishTask({ taskId });

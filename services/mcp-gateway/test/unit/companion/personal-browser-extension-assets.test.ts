@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.15");
+    expect(manifest.version).toBe("1.17.16");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -1969,12 +1969,102 @@ describe("personal browser extension assets", () => {
     ]);
   });
 
+  it("verifies a committed URL across document replacement without renderer injection", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let reads = 0;
+    let injections = 0;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, setTimeout, clearTimeout,
+      delay: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      waitProbe: () => false,
+      chrome: {
+        tabs: { get: async () => ++reads === 1
+          ? { url: "https://example.test/old", pendingUrl: "https://example.test/new" }
+          : { url: "https://example.test/new" } },
+        scripting: { executeScript: async () => { injections++; throw new Error("document replaced"); } },
+      },
+    });
+    for (const name of ["readPersonalWaitState", "wait"]) {
+      if (serviceWorker.includes("function " + name + "(")) vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const wait = vm.runInContext("wait", context) as (input: unknown) => Promise<unknown>;
+    await expect(wait({ tabId: "personal:7", url: "https://example.test/new", timeoutMs: 500 }))
+      .resolves.toMatchObject({ completed: true });
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(injections).toBe(0);
+  });
+
+  it("bounds a stalled read-only postcondition observation outside the renderer", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, setTimeout, clearTimeout,
+      delay: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      waitProbe: () => false,
+      chrome: { scripting: { executeScript: () => new Promise(() => undefined) } },
+    });
+    for (const name of ["readPersonalWaitState", "wait"]) {
+      if (serviceWorker.includes("function " + name + "(")) vm.runInContext(extractFunction(serviceWorker, name), context);
+    }
+    const wait = vm.runInContext("wait", context) as (input: unknown) => Promise<unknown>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        wait({ tabId: "personal:7", text: "Saved", timeoutMs: 30 })
+          .then(() => "verified", (error: { code?: string }) => error.code),
+        new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); }),
+      ]);
+      expect(outcome).toBe("STATE_NOT_REACHED");
+    } finally { clearTimeout(timer); }
+  });
+
+  it("acquires a native editable focus when programmatic focus fails, without typing into another field", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const events: string[] = [];
+    let focused = false;
+    let moved = false;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined, delay: async () => undefined,
+      probeGuardedElement: () => ({ x: 40, y: 30 }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        scripting: { executeScript: async ({ func, args }: { func: { name: string }; args: unknown[] }) => [{
+          documentId: "doc-1", result: func.name === "observePersonalEditableMutation"
+            ? { ready: focused, matches: focused } : moved && events.at(-1) === "mouseMoved"
+              ? { error: "target_changed" } : { x: 40, y: 30 },
+        }] },
+        debugger: {
+          attach: async () => undefined, detach: async () => undefined,
+          sendCommand: async (_target: unknown, method: string, params: { type?: string }) => {
+            events.push(params.type ?? method);
+            if (params.type === "mouseReleased") focused = true;
+          },
+        },
+      },
+    });
+    for (const name of ["observePersonalEditableMutation", "fill"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const fill = vm.runInContext("fill", context) as (input: unknown) => Promise<unknown>;
+    const input = { tabId: "personal:7", ref: "target", value: "replacement",
+      guard: { ref: "target", url: "https://example.test/", role: "textbox", name: "Field" } };
+    await expect(fill(input)).resolves.toMatchObject({ completed: true });
+    expect(events.slice(0, 3)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+    expect(events.filter(event => event === "Input.insertText")).toHaveLength(1);
+    events.length = 0; focused = false; moved = true;
+    await expect(fill(input)).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+    expect(events).toEqual(["mouseMoved"]);
+  });
+
   it("confirms only an expected transition and never redispatches after verification fails", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: string[] = [];
     let alreadyReached = false;
     let failWait = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       probeGuardedElement: () => ({ x: 30, y: 40 }),
@@ -1994,6 +2084,7 @@ describe("personal browser extension assets", () => {
         },
       },
     });
+    vm.runInContext(extractFunction(serviceWorker, "readPersonalWaitState"), context);
     vm.runInContext(extractFunction(serviceWorker, "click"), context);
     const click = vm.runInContext("click", context) as (input: unknown) => Promise<unknown>;
     const input = { tabId: "personal:7", ref: "target", guard: { ref: "target", url: "https://example.com/" },
@@ -4342,7 +4433,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.15");
+    expect(parsedManifest.version).toBe("1.17.16");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");

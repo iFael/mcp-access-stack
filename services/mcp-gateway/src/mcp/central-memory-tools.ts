@@ -174,7 +174,7 @@ export function registerCentralMemoryTools(server:McpServer, options:MemoryToolO
 
   server.registerTool("memory_update",{
     title:"Update MCP V3 central memory",
-    description:"Create/revise/resolve a record with exact CAS; import all 12 legacy .codex sources losslessly; or activate the new authority only after verified off-host backup and curated decision. Import alone does not activate historical data. Records are not authorization for Git, deploy or infrastructure.",
+    description:"Create/revise/resolve a record with exact CAS. Create and revise require recordId, expectedRevision, kind, confidence, title, content and evidenceRefs (an empty array is allowed); revise supplies the full record, not a partial patch. Resolve requires recordId and expectedRevision without content fields. Import all 12 legacy .codex sources losslessly; or activate the new authority only after verified off-host backup and curated decision. Import alone does not activate historical data. Records are not authorization for Git, deploy or infrastructure.",
     inputSchema:updateInput,outputSchema:updateOutput,
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
     _meta:meta,

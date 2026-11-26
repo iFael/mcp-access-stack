@@ -2286,11 +2286,9 @@ async function click(input, signal) {
       type: "mouseMoved", x: point.x, y: point.y, modifiers,
     });
     if (input.expect) {
-      const [observed] = await chrome.scripting.executeScript({
-        target: { tabId: chromeTabId }, func: waitProbe,
-        args: [input.expect.text ?? null, null, input.expect.url ?? null, input.expect.absentText ?? null],
-      });
-      if (observed?.result !== false) {
+      const observed = await readPersonalWaitState(chromeTabId, input.expect, 0, 3000, signal);
+      throwIfAborted(signal, "click", false);
+      if (observed !== false) {
         throw coded("STATE_NOT_REACHED", "Expected state already present or unavailable. No click was dispatched.");
       }
     }
@@ -2759,7 +2757,7 @@ async function fill(input, signal) {
     attached = await attachGuardedDebugger(target);
     const ax = input.ref.startsWith("ax-");
     const observedRef = ax ? null : input.ref;
-    let point;
+    let point, editablePoint;
     if (!ax) {
       // Revalidate and focus after attaching the debugger: its infobar can
       // change the viewport or the currently focused editor.
@@ -2770,6 +2768,7 @@ async function fill(input, signal) {
       if (!revalidated?.result || revalidated.result.error) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "Editable target changed after Chrome debugger attachment.");
       }
+      editablePoint = revalidated.result;
     } else {
       point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
       const [tokens] = await chrome.scripting.executeScript({
@@ -2799,10 +2798,36 @@ async function fill(input, signal) {
       }
       point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
     }
-    const [before] = await chrome.scripting.executeScript({
+    let [before] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
       args: ["before", observedRef, input.value, "replace", point ?? null],
     });
+    // Some editors require a trusted pointer event to acquire focus. Do not
+    // dispatch replacement keys until the original guarded ref is focused.
+    if (!ax && before?.result?.ready !== true) {
+      throwIfAborted(signal, "fill", false);
+      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        type: "mouseMoved", x: editablePoint.x, y: editablePoint.y, button: "none",
+      });
+      const [hovered] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: probeGuardedElement,
+        args: [input.ref, input.guard, true, editablePoint.x, editablePoint.y, true],
+      });
+      if (!hovered?.result || hovered.result.error ||
+          hovered.result.x !== editablePoint.x || hovered.result.y !== editablePoint.y) {
+        throw coded("BROWSER_CONFIRMATION_INVALID", "The editable target changed after hover. No input was dispatched.");
+      }
+      throwIfAborted(signal, "fill", false);
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+          type, x: editablePoint.x, y: editablePoint.y, button: "left", clickCount: 1,
+        });
+      }
+      [before] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: observePersonalEditableMutation,
+        args: ["before", observedRef, input.value, "replace", null],
+      });
+    }
     if (before?.result?.ready !== true) throw coded("STATE_NOT_REACHED", "The requested field does not have verified editable focus.");
     if (before.result.protectedTokens === true) {
       throw coded("ACTION_BLOCKED_BY_POLICY",
@@ -3236,6 +3261,37 @@ async function press(input, signal) {
   }
 }
 
+// Only observe state here: abandoning a stalled read cannot redispatch input.
+async function readPersonalWaitState(chromeTabId, input, observeMs, timeoutMs, signal) {
+  if (timeoutMs <= 0 || signal?.aborted) return null;
+  let timer, onAbort;
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+    onAbort = () => resolve(null);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const observation = Promise.resolve().then(async () => {
+      if (input.url && !input.text && !input.ref && !input.absentText) {
+        // tabs.get reads the committed URL, independently of renderer
+        // destruction or loading. A pending navigation is not evidence.
+        const tab = await chrome.tabs.get(chromeTabId);
+        if (typeof tab?.url !== "string" || (tab.pendingUrl && tab.pendingUrl !== tab.url)) return null;
+        return tab.url === input.url;
+      }
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId: chromeTabId }, func: waitProbe,
+        args: [input.text ?? null, input.ref ?? null, input.url ?? null, input.absentText ?? null, observeMs],
+      });
+      return result?.result ?? null;
+    }).catch(() => null);
+    return await Promise.race([observation, expired]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 async function wait(input, signal) {
   if (typeof input.forUser === "string") return waitForUser(input, signal);
   const chromeTabId = chromeTabIdFrom(input.tabId);
@@ -3251,12 +3307,9 @@ async function wait(input, signal) {
     const slice = Math.min(250, deadline - Date.now());
     if (slice <= 0) break;
     const started = Date.now();
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId: chromeTabId },
-      func: waitProbe,
-      args: [input.text ?? null, input.ref ?? null, input.url ?? null, input.absentText ?? null, slice],
-    }).catch(() => []);
-    if (result?.result === true) return { tabId: input.tabId, completed: true };
+    const result = await readPersonalWaitState(chromeTabId, input, slice, deadline - Date.now(), signal);
+    throwIfAborted(signal, "wait", false);
+    if (result === true) return { tabId: input.tabId, completed: true };
     // Navigation can destroy the script context; avoid a busy loop.
     if (Date.now() - started < slice) await delay(Math.min(50, Math.max(0, deadline - Date.now())), signal);
   }
@@ -7287,6 +7340,13 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY, rechec
       const inner = top?.shadowRoot?.elementFromPoint?.(x, y);
       if (!inner || inner === top) break;
       top = inner;
+    }
+    // The native focus fallback must not activate a nested control, even
+    // inside an editable host. Ordinary programmatic focus does not click.
+    if (focus && recheckOnly) {
+      const action = top?.closest?.('a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="menuitem"],[contenteditable="false"]');
+      if (action && action !== element) return false;
+      if (element.disabled || element.readOnly || element.getAttribute("aria-readonly") === "true") return false;
     }
     // A native label is an authorized hit target for its own checkbox/radio.
     // A different overlay or nested interactive control remains forbidden.
