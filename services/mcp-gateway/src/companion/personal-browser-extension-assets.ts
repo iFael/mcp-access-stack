@@ -3342,21 +3342,26 @@ async function press(input, signal) {
   throwIfAborted(signal, "press", false);
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
   try {
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
     for (let n = 0; n < repeat; n += 1) {
       for (const key of keys) {
         throwIfAborted(signal, "press", true);
-        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+        const down = chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
           type: "keyDown", key: key.key, code: key.code,
           windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
           modifiers: key.modifiers, ...(key.text ? { text: key.text } : {}),
         });
-        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+        await waitPersonalInputAcknowledgement(down, signal, "press", value => { interrupted = value; });
+        const up = chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
           type: "keyUp", key: key.key, code: key.code,
           windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
           modifiers: key.modifiers,
         });
+        await waitPersonalInputAcknowledgement(up, signal, "press", value => { interrupted = value; });
       }
     }
     return { tabId: input.tabId, completed: true };
@@ -3364,7 +3369,8 @@ async function press(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted);
+    else await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 

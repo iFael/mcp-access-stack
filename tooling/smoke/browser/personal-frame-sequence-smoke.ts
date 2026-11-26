@@ -29,8 +29,12 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "recovery-site.test/": () => `<!doctype html><title>CDP recovery fixture</title>
     <body style="margin:0;height:300vh"><div style="position:fixed;top:20px;left:20px">
       <button id="increase">Increase</button><p id="clicks">Count 0</p><p id="wheels">0</p>
-      <a href="/runs">Run history</a>
+      <a href="/runs">Run history</a><input aria-label="Key entry" id="key-entry"><p id="key-count">0</p>
     </div><script>
+      let keyCount = 0;
+      document.getElementById("key-entry").addEventListener("keydown", () => {
+        document.getElementById("key-count").textContent = String(++keyCount);
+      });
       let clicks = 0, wheels = 0;
       document.getElementById("increase").addEventListener("click", () => {
         document.getElementById("clicks").textContent = "Count " + (++clicks);
@@ -289,7 +293,7 @@ async function main(): Promise<void> {
   if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
     // Lose only the acknowledgement after one real Chrome input command.
     // The fixture observes the actual effect; no production extension is patched.
-    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"], ["hover", "pending"]]) {
+    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"], ["hover", "pending"], ["press", "down"]]) {
       const needle = "await waitPersonalInputAcknowledgement(" + expression + ", signal, \"" + operation + "\"";
       if (smokeScript.split(needle).length !== 2) throw new Error("Lost-ack smoke hook missing: " + operation);
       const drop = "(globalThis.__mcpSmokeDropAck === \"" + operation +
@@ -374,8 +378,22 @@ async function main(): Promise<void> {
       if (capture !== "BROWSER_WORKER_TIMEOUT") throw new Error("Lost capture acknowledgement was not reported: " + capture);
       const recoveredShot = await bridge.screenshot({ tabId });
       if (!recoveredShot.sizeBytes) throw new Error("Capture did not recover after the timeout.");
-      report("CDP lost-ack recovery", { wheel, click, hover, capture, scrollY: await page.evaluate("window.scrollY"),
-        wheelEvents: 1, clickEvents: 2, screenshotBytes: shot.sizeBytes, recoveredScreenshotBytes: recoveredShot.sizeBytes, nextClickVerified: true });
+      const entry = (await bridge.snapshot({ tabId })).refs.find(ref => ref.name === "Key entry");
+      if (!entry) throw new Error("Missing keyboard recovery fixture.");
+      await bridge.click({ tabId, ref: entry.ref });
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'press'");
+      const press = await bridge.press({ tabId, key: "a b" })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (press !== "EXECUTION_OUTCOME_UNKNOWN" ||
+          await page.locator("#key-entry").inputValue() !== "a" ||
+          await page.locator("#key-count").textContent() !== "1") {
+        throw new Error("Interrupted keyboard sequence replayed or dispatched a subsequent key: " + press);
+      }
+      const finalShot = await bridge.screenshot({ tabId });
+      if (!finalShot.sizeBytes) throw new Error("Screenshot did not recover after keyboard interruption.");
+      report("CDP lost-ack recovery", { wheel, click, hover, capture, press, scrollY: await page.evaluate("window.scrollY"),
+        wheelEvents: 1, clickEvents: 2, keyEvents: 1, screenshotBytes: shot.sizeBytes,
+        recoveredScreenshotBytes: recoveredShot.sizeBytes, finalScreenshotBytes: finalShot.sizeBytes, nextClickVerified: true });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
       return;

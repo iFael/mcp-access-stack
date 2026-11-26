@@ -2132,6 +2132,49 @@ describe("personal browser extension assets", () => {
     );
   });
 
+  it.each(["keyDown", "keyUp"])("bounds lost %s acknowledgement without dispatching subsequent keys", async (lost) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: fences,
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        debugger: { sendCommand: async (_: unknown, _method: string, params: { type: string; key: string }) => {
+          events.push(params.type + ":" + params.key);
+          if (params.type === lost) { started.resolve(); return pending.promise; }
+          return {};
+        } },
+      },
+    });
+    for (const name of ["parseChromeKey", "press"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const press = vm.runInContext("press", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const result = press({ tabId: "personal:7", key: "a b", guard: { url: "https://example.com/" } },
+      controller.signal).catch((error: { code: string }) => error.code);
+    await started.promise;
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      expect(events).toEqual(lost === "keyDown" ? ["keyDown:a", "retire"] : ["keyDown:a", "keyUp:a", "retire"]);
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("dispatches guarded click, fill and keyboard through Chrome CDP rather than synthetic DOM events", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -6115,7 +6158,7 @@ function extractFunction(source: string, name: string): string {
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
             .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
-        if (["click", "scroll", "hover", "screenshot"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
+        if (["click", "scroll", "hover", "screenshot", "press"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
           return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
             .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
