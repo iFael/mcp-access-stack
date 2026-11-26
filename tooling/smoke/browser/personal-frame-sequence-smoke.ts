@@ -9,6 +9,7 @@
 // PERSONAL_SMOKE_FRAME_RECOVERY_ONLY=1 focuses on direct and nested frame input recovery.
 // PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
 // PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
+// PERSONAL_SMOKE_RICH_FRAME_ONLY=1 checks editable and protected rich text in scriptable frames.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -24,6 +25,16 @@ interface LegacyFixtureRouter {
 }
 const fixtureModulePath = "../../benchmarks/browser/legacy-private-site-fixture.mjs";
 
+function richEditorFixture(): string {
+  return `<!doctype html><title>Rich text fixture</title>
+    <style>[contenteditable="true"]{display:block;width:400px;height:50px;border:1px solid;margin:8px}</style>
+    <div id="plain" contenteditable="true" role="textbox" aria-label="Plain rich editor">original</div>
+    <div id="protected" contenteditable="true" role="textbox" aria-label="Token editor">prefix <span contenteditable="false" id="token">TOKEN</span> suffix</div>
+    <div id="readonly" contenteditable="true" role="textbox" aria-readonly="true" aria-label="Read only editor">locked</div>
+    <div id="late-token" contenteditable="true" role="textbox" aria-label="Token on focus" onfocus="if(!this.firstElementChild){const token=document.createElement('span');token.contentEditable='false';token.textContent='TOKEN';this.append(token)}">prefix </div>
+    <div id="late-readonly" contenteditable="true" role="textbox" aria-label="Read only on focus" onfocus="this.setAttribute('aria-readonly','true')">locked</div>
+    <input id="decoy" value="unchanged">`;
+}
 const submissions: string[] = [];
 const listHits: string[] = [];
 const consultationPosts: string[] = [];
@@ -60,6 +71,13 @@ const pages: Record<string, (url: URL, port: number) => string> = {
       style="width:640px;height:480px;border:0"></iframe>`,
   "frame-recovery-mid.test/": (_url, port) => `<!doctype html><title>Nested frame recovery</title>
     <iframe name="leaf" src="http://recovery-site.test:${port}/" style="width:500px;height:400px;border:0"></iframe>`,
+  "rich-editor-site.test/": (url, port) => `<!doctype html><title>Rich editor host</title>
+    <iframe name="editor" src="http://${url.searchParams.has("nested") ? "rich-editor-mid.test" : url.searchParams.has("same") ? "rich-editor-site.test" : "rich-editor-frame.test"}:${port}/${url.searchParams.has("nested") ? "" : "rich"}"
+      style="width:640px;height:480px;border:0"></iframe>`,
+  "rich-editor-mid.test/": (_url, port) => `<!doctype html><title>Rich editor container</title>
+    <iframe name="leaf" src="http://rich-editor-frame.test:${port}/rich" style="width:500px;height:400px;border:0"></iframe>`,
+  "rich-editor-site.test/rich": () => richEditorFixture(),
+  "rich-editor-frame.test/rich": () => richEditorFixture(),
   "editor-site.test/": () => `<!doctype html><title>Editor geometry fixture</title>
     <body style="margin:0;width:300vw;height:100vh">
       <div class="monaco-editor" style="position:fixed;left:75vw;top:80px;width:160vw;height:80px;background:#ddd;overflow:hidden">
@@ -618,7 +636,55 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (process.env.PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY === "1") {
+    const verifyRichFrames = async () => {
+      const taskId = "personal-rich-frame-compatibility";
+      const failures: string[] = [];
+      for (const variant of ["same", "cross", "nested"]) {
+        const url = `http://rich-editor-site.test:${sitePort}/?${variant}=1`;
+        const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+        const host = await waitForFixturePage(context, url);
+        const editor = host.frameLocator('iframe[name="editor"]');
+        const leaf = variant === "nested" ? editor.frameLocator('iframe[name="leaf"]') : editor;
+        await leaf.locator("#plain").waitFor();
+        await bridge.snapshot({ tabId });
+        const fill = (id: string, value: string) => variant === "nested"
+          ? bridge.frameSequence({ tabId, steps: [{ action: "fill", framePath: ["editor", "leaf"], locator: { id }, value }] })
+          : bridge.frameFill({ tabId, frame: "editor", selector: "#" + id, value });
+        const attempt = async (id: string, value: string) => fill(id, value)
+          .then(() => "completed", (error: { code?: string; message?: string }) => error.code ?? error.message ?? "unknown");
+        const plain = await attempt("plain", "replacement");
+        const actual = await leaf.locator("#plain").innerText();
+        const protectedResult = await attempt("protected", "replacement");
+        const protectedText = await leaf.locator("#protected").innerText();
+        const token = await leaf.locator("#token").count();
+        const readOnly = await attempt("readonly", "replacement");
+        const readOnlyText = await leaf.locator("#readonly").innerText();
+        const lateToken = await attempt("late-token", "replacement");
+        const lateTokenText = await leaf.locator("#late-token").innerText();
+        const lateReadOnly = await attempt("late-readonly", "replacement");
+        const lateReadOnlyText = await leaf.locator("#late-readonly").innerText();
+        const decoy = await leaf.locator("#decoy").inputValue();
+        const observation = { variant, plain, actual, protectedResult, protectedText, token, readOnly, readOnlyText,
+          lateToken, lateTokenText, lateReadOnly, lateReadOnlyText, decoy };
+        report("rich frame compatibility", observation);
+        if (plain !== "completed" || actual !== "replacement" ||
+            protectedResult !== "ACTION_BLOCKED_BY_POLICY" || token !== 1 || protectedText !== "prefix TOKEN suffix" ||
+            readOnly !== "LOCATOR_NOT_FOUND" || readOnlyText !== "locked" ||
+            lateToken !== "ACTION_BLOCKED_BY_POLICY" || lateTokenText !== "prefix TOKEN" ||
+            lateReadOnly !== "LOCATOR_NOT_FOUND" || lateReadOnlyText !== "locked" || decoy !== "unchanged") {
+          failures.push(JSON.stringify(observation));
+        }
+      }
+      await bridge.finishTask({ taskId });
+      if (failures.length) throw new Error("Rich frame compatibility failed: " + failures.join("; "));
+      console.log("\nPERSONAL BROWSER RICH FRAME COMPATIBILITY PASS");
+    };
+    if (process.env.PERSONAL_SMOKE_RICH_FRAME_ONLY === "1") {
+      await verifyRichFrames();
+      return;
+    }
+
+    const verifyBackgroundCapture = async () => {
       const url = `http://capture-site.test:${sitePort}/`;
       const taskId = "personal-background-capture";
       const target = (await bridge.open({ url, taskId })).tab.tabId;
@@ -690,6 +756,9 @@ async function main(): Promise<void> {
       }
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER BACKGROUND CAPTURE PASS");
+    };
+    if (process.env.PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY === "1") {
+      await verifyBackgroundCapture();
       return;
     }
 
@@ -893,6 +962,10 @@ async function main(): Promise<void> {
       console.log("\nPERSONAL BROWSER ROBUSTNESS SMOKE PASS");
       return;
     }
+
+    // Include both regressions in the existing full headless/headful CI smoke.
+    await verifyRichFrames();
+    await verifyBackgroundCapture();
 
     // Every extension notification uses the embedded data: icon, which Chrome
     // only loads when the extension's CSP allows it.

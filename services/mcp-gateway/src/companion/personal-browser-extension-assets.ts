@@ -3927,7 +3927,10 @@ function probeDirectFrameControl(expectedUrl, selector, text, match, index, fill
   if (filling && !(tag === "textarea" || (tag === "input" &&
        !["file", "hidden", "submit", "button", "radio", "checkbox", "reset"].includes(type)) ||
        element.isContentEditable)) return { notEditable: true };
-  if (filling && element.readOnly) return { notEditable: true };
+  if (filling && (element.readOnly || element.getAttribute("aria-readonly") === "true")) return { notEditable: true };
+  if (filling && element.isContentEditable && element.querySelector?.('[contenteditable="false"]')) {
+    return { protectedTokens: true };
+  }
   element.scrollIntoView({ block: "center", inline: "center" });
   const rect = element.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
@@ -3942,8 +3945,12 @@ function probeDirectFrameControl(expectedUrl, selector, text, match, index, fill
 function confirmDirectFrameFocus(expectedUrl, selector) {
   if (location.href !== expectedUrl) return false;
   const element = document.querySelector(selector);
-  return Boolean(element && (document.activeElement === element ||
-    (element.isContentEditable && element.contains(document.activeElement))));
+  if (!element || !(document.activeElement === element ||
+      (element.isContentEditable && element.contains(document.activeElement)))) return false;
+  if (element.disabled || element.readOnly || element.getAttribute("aria-readonly") === "true" ||
+      element.getAttribute("aria-disabled") === "true") return "notEditable";
+  if (element.isContentEditable && element.querySelector?.('[contenteditable="false"]')) return "protectedTokens";
+  return true;
 }
 
 async function directFrameAction(input, signal, filling) {
@@ -3991,6 +3998,9 @@ async function directFrameAction(input, signal, filling) {
       (frame.documentId && candidate.documentId !== frame.documentId) ||
       candidate.result?.stale) throw coded("FRAME_NOT_READY", "Frame changed while resolving the control.");
   const point = candidate.result;
+  if (point?.protectedTokens) {
+    throw coded("ACTION_BLOCKED_BY_POLICY", "This rich editor contains protected tokens. Replacement could delete the tokens.");
+  }
   if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
     throw coded(point?.ambiguous ? "LOCATOR_AMBIGUOUS" : "LOCATOR_NOT_FOUND",
       "Frame target is missing, obscured, disabled or not editable.");
@@ -4048,6 +4058,10 @@ async function directFrameAction(input, signal, filling) {
       if (!focused || focused.frameId !== frame.frameId ||
           (frame.documentId && focused.documentId !== frame.documentId) ||
           !focused.result) throw coded("FRAME_NOT_READY", "The intended field did not receive native focus.");
+      if (focused.result === "protectedTokens") {
+        throw coded("ACTION_BLOCKED_BY_POLICY", "This rich editor contains protected tokens. Replacement could delete the tokens.");
+      }
+      if (focused.result !== true) throw coded("LOCATOR_NOT_FOUND", "The intended field is no longer editable.");
       await sendInput("Input.dispatchKeyEvent", {
         type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
       });
@@ -4587,7 +4601,11 @@ function probePersonalLegacyReadStep(expectedUrl, step, selector) {
     if (!enabled) return { disabled: true };
     const editable = tag === "textarea" || element.isContentEditable || (tag === "input" &&
       !["file", "hidden", "submit", "button", "radio", "checkbox", "reset", "image", "range", "color"].includes(type));
-    if (step.action === "fill" && (!editable || element.readOnly)) return { notEditable: true };
+    if (step.action === "fill" && (!editable || element.readOnly ||
+        element.getAttribute("aria-readonly") === "true")) return { notEditable: true };
+    if (step.action === "fill" && element.isContentEditable && element.querySelector?.('[contenteditable="false"]')) {
+      return { protectedTokens: true };
+    }
     let option;
     if (step.action === "select") {
       if (tag !== "select" || element.multiple) return { notEditable: true };
@@ -4826,8 +4844,14 @@ function verifyPersonalLegacyActionTarget(expectedUrl, mode, value) {
   if (!element?.isConnected) return false;
   if (mode === "value") return element.value === value;
   if (mode === "scriptFocus") element.focus({ preventScroll: true });
-  return document.activeElement === element ||
+  const focused = document.activeElement === element ||
     (element.isContentEditable && element.contains(document.activeElement));
+  if (mode === "fillFocus" && focused) {
+    if (element.disabled || element.readOnly || element.getAttribute("aria-readonly") === "true" ||
+        element.getAttribute("aria-disabled") === "true") return "notEditable";
+    if (element.isContentEditable && element.querySelector?.('[contenteditable="false"]')) return "protectedTokens";
+  }
+  return focused;
 }
 
 // Observe frame navigations caused by one action. Settling waits for every
@@ -4921,6 +4945,9 @@ async function probePersonalLegacyTarget(input, chromeTabId, step, describeOnly,
     if (observed?.invalidSelector) throw coded("INVALID_ARGUMENT", "Legacy locator selector is not valid.");
     if (observed?.ambiguous) throw coded("LOCATOR_AMBIGUOUS", "Legacy locator or option matched several candidates. " + JSON.stringify(observed.choices || []));
     if (observed?.missingOption) throw coded("INVALID_ARGUMENT", "Requested select option does not exist.");
+    if (observed?.protectedTokens) {
+      throw coded("ACTION_BLOCKED_BY_POLICY", "This rich editor contains protected tokens. Replacement could delete the tokens.");
+    }
     if (!observed?.found) {
       const reason = observed?.obscured ? "obscured" : observed?.invisible ? "outside viewport or hidden" :
         observed?.disabled ? "disabled" : observed?.notEditable ? "not editable" : "missing or stale";
@@ -5050,6 +5077,12 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
         });
         if (!check || check.frameId !== resolved.frame.frameId ||
             (resolved.frame.documentId && check.documentId !== resolved.frame.documentId)) return false;
+        if (mode === "fillFocus" && check.result === "protectedTokens") {
+          throw coded("ACTION_BLOCKED_BY_POLICY", "This rich editor contains protected tokens. Replacement could delete the tokens.");
+        }
+        if (mode === "fillFocus" && check.result === "notEditable") {
+          throw coded("LOCATOR_NOT_FOUND", "The intended field is no longer editable.");
+        }
         if (check.result === true) return true;
         if (attempt >= 10 || mode === "scriptFocus") return false;
         await delay(50, signal);
@@ -5086,7 +5119,7 @@ async function runPersonalLegacyMutation(input, chromeTabId, index, step, expect
         await clickPoint();
       } else if (step.action === "fill") {
         await clickPoint();
-        if (!(await verify("focus"))) throw coded("FRAME_NOT_READY", "The legacy field did not receive native focus.");
+        if (!(await verify("fillFocus"))) throw coded("FRAME_NOT_READY", "The legacy field did not receive native focus.");
         await dispatchKey({ key: "a", code: "KeyA", keyCode: 65, modifiers: 2 });
         await dispatchKey({ key: "Backspace", code: "Backspace", keyCode: 8, modifiers: 0 });
         if (observed?.keyEvents) await insertPersonalTextWithKeys(debuggee, step.value, signal, sendInput);

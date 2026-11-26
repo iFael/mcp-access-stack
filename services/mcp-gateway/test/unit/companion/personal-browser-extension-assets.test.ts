@@ -1716,6 +1716,55 @@ describe("personal browser extension assets", () => {
       .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
   });
 
+  it("preserves rich frame tokens and read-only fields before and after native focus", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://editor.example/";
+    let protectedTokens = false;
+    let readOnly = false;
+    const element = {
+      id: "rich", tagName: "DIV", isConnected: true, isContentEditable: true,
+      innerText: "original", disabled: false, readOnly: false,
+      getAttribute: (name: string) => name === "role" ? "textbox" :
+        name === "aria-readonly" && readOnly ? "true" : null,
+      querySelector: (selector: string) => selector === '[contenteditable="false"]' && protectedTokens ? {} : null,
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+      scrollIntoView: () => undefined,
+    };
+    const ctx = vm.createContext({
+      document: { querySelectorAll: () => [element], querySelector: () => element,
+        activeElement: element, elementFromPoint: () => element },
+      location: { href: url }, innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+    });
+    for (const name of ["probeDirectFrameControl", "confirmDirectFrameFocus",
+      "probePersonalLegacyReadStep", "verifyPersonalLegacyActionTarget"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const direct = vm.runInContext("probeDirectFrameControl", ctx) as (...args: unknown[]) => unknown;
+    const focus = vm.runInContext("confirmDirectFrameFocus", ctx) as (...args: unknown[]) => unknown;
+    const legacy = vm.runInContext("probePersonalLegacyReadStep", ctx) as (...args: unknown[]) => unknown;
+    const verify = vm.runInContext("verifyPersonalLegacyActionTarget", ctx) as (...args: unknown[]) => unknown;
+    const step = { action: "fill", locator: { id: "rich" }, value: "replacement" };
+    expect(direct(url, "#rich", null, "exact", null, true)).toMatchObject({ x: 60, y: 30 });
+    expect(legacy(url, step)).toMatchObject({ found: true });
+    expect(focus(url, "#rich")).toBe(true);
+    expect(verify(url, "fillFocus")).toBe(true);
+    protectedTokens = true;
+    expect(direct(url, "#rich", null, "exact", null, true)).toEqual({ protectedTokens: true });
+    expect(legacy(url, step)).toEqual({ protectedTokens: true });
+    expect(focus(url, "#rich")).toBe("protectedTokens");
+    expect(verify(url, "fillFocus")).toBe("protectedTokens");
+    // Clicking the insertion point is still permitted; only replacement is refused.
+    expect(direct(url, "#rich", null, "exact", null, false)).toMatchObject({ x: 60, y: 30 });
+    expect(legacy(url, { ...step, action: "click" })).toMatchObject({ found: true });
+    protectedTokens = false;
+    readOnly = true;
+    expect(direct(url, "#rich", null, "exact", null, true)).toEqual({ notEditable: true });
+    expect(legacy(url, step)).toEqual({ notEditable: true });
+    expect(focus(url, "#rich")).toBe("notEditable");
+    expect(verify(url, "fillFocus")).toBe("notEditable");
+  });
+
   it("refuses obscured direct frames and transformed or ambiguous iframe geometry", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const iframe = { src: "https://child.example/", offsetWidth: 220, offsetHeight: 150,
