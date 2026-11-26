@@ -2614,7 +2614,7 @@ async function waitPersonalInputAcknowledgement(pending, signal, operation, onIn
 // A native input whose reply never arrives may still have affected the page. Fence
 // that tab until the old command settles or its exact debugger is detached.
 // Shared sessions are not torn down just to recover a task-owned input.
-async function recoverInterruptedPersonalInput(target, attached, held, pending) {
+async function recoverInterruptedPersonalInput(target, attached, held, pending, cleanup) {
   const key = String(target.tabId);
   const fences = globalThis.__mcpV3PersonalPendingInput;
   const fence = {};
@@ -2638,7 +2638,11 @@ async function recoverInterruptedPersonalInput(target, attached, held, pending) 
         if (await releasePersonalTaskDebugger(target.tabId)) settled = true;
       }
     } catch { /* An unconfirmed detach does not lift the fence. */ }
-    finally { cleaned = true; clear(); }
+    finally {
+      try { if (cleanup) await cleanup(); }
+      catch { /* Cleanup failure must not hide the original interruption. */ }
+      finally { cleaned = true; clear(); }
+    }
   })();
   // Keep the serialized queue bounded even if Chrome also stalls on detach.
   // The fence remains until safe recovery, not merely until this timer fires.
@@ -2860,8 +2864,17 @@ async function fill(input, signal) {
   throwIfAborted(signal, "fill", false);
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
+  const sendInput = (method, params) => {
+    if (signal?.aborted) throwIfAborted(signal, "fill", true);
+    return waitPersonalInputAcknowledgement(
+      chrome.debugger.sendCommand(target, method, params), signal, "fill",
+      value => { interrupted = value; });
+  };
   try {
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
     const ax = input.ref.startsWith("ax-");
     const observedRef = ax ? null : input.ref;
     let point, editablePoint;
@@ -2891,7 +2904,7 @@ async function fill(input, signal) {
         throw coded("ACTION_BLOCKED_BY_POLICY",
           "This rich editor contains protected tokens. Click the insertion point and use browser_type.");
       }
-      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      await sendInput("Input.dispatchMouseEvent", {
         type: "mouseMoved", x: point.x, y: point.y, button: "none",
       });
       const hovered = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, true);
@@ -2899,7 +2912,7 @@ async function fill(input, signal) {
         throw coded("BROWSER_CONFIRMATION_INVALID", "The editable accessibility target moved after hover. No input was dispatched.");
       }
       for (const type of ["mousePressed", "mouseReleased"]) {
-        await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        await sendInput("Input.dispatchMouseEvent", {
           type, x: point.x, y: point.y, button: "left", clickCount: 1,
         });
       }
@@ -2913,7 +2926,7 @@ async function fill(input, signal) {
     // dispatch replacement keys until the original guarded ref is focused.
     if (!ax && before?.result?.ready !== true) {
       throwIfAborted(signal, "fill", false);
-      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      await sendInput("Input.dispatchMouseEvent", {
         type: "mouseMoved", x: editablePoint.x, y: editablePoint.y, button: "none",
       });
       const [hovered] = await chrome.scripting.executeScript({
@@ -2926,7 +2939,7 @@ async function fill(input, signal) {
       }
       throwIfAborted(signal, "fill", false);
       for (const type of ["mousePressed", "mouseReleased"]) {
-        await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+        await sendInput("Input.dispatchMouseEvent", {
           type, x: editablePoint.x, y: editablePoint.y, button: "left", clickCount: 1,
         });
       }
@@ -2948,9 +2961,9 @@ async function fill(input, signal) {
       { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 },
       { type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
       { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
-    ]) await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", event);
-    if (keyEvents) await insertPersonalTextWithKeys(target, input.value, signal);
-    else await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.value });
+    ]) await sendInput("Input.dispatchKeyEvent", event);
+    if (keyEvents) await insertPersonalTextWithKeys(target, input.value, signal, sendInput);
+    else await sendInput("Input.insertText", { text: input.value });
     let verified = false;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const [after] = await chrome.scripting.executeScript({
@@ -2967,9 +2980,13 @@ async function fill(input, signal) {
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    await chrome.scripting.executeScript({ target: { tabId: chromeTabId },
+    const cleanup = () => chrome.scripting.executeScript({ target: { tabId: chromeTabId },
       func: observePersonalEditableMutation, args: ["cleanup", null, null] }).catch(() => undefined);
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted, cleanup);
+    else {
+      await cleanup();
+      await detachGuardedDebugger(target, attached).catch(() => undefined);
+    }
   }
 }
 
@@ -3182,7 +3199,7 @@ function imeComposedCharacter(character) {
 }
 
 // Use native keyboard events for legacy controls whose filters depend on keyup.
-async function insertPersonalTextWithKeys(target, text, signal) {
+async function insertPersonalTextWithKeys(target, text, signal, sendInput = (method, params) => chrome.debugger.sendCommand(target, method, params)) {
   if (Array.from(text).length > 2000 || /[\\r\\n]/u.test(text)) {
     throw coded("LIMIT_EXCEEDED", "Legacy key-event input must be at most 2,000 characters without Enter.");
   }
@@ -3190,16 +3207,16 @@ async function insertPersonalTextWithKeys(target, text, signal) {
     throwIfAborted(signal, "fill", true);
     const key = physicalTypingKey(character);
     if (!key) {
-      await chrome.debugger.sendCommand(target, "Input.insertText", { text: character });
+      await sendInput("Input.insertText", { text: character });
       continue;
     }
     const args = { key: key.key, code: key.code,
       windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode,
       modifiers: key.modifiers };
-    await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+    await sendInput("Input.dispatchKeyEvent", {
       ...args, type: "keyDown", text: character, unmodifiedText: character,
     });
-    await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { ...args, type: "keyUp" });
+    await sendInput("Input.dispatchKeyEvent", { ...args, type: "keyUp" });
   }
 }
 
@@ -3224,10 +3241,19 @@ async function typeText(input, signal) {
   throwIfAborted(signal, "type", false);
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
+  const sendInput = (method, params) => {
+    if (signal?.aborted) throwIfAborted(signal, "type", true);
+    return waitPersonalInputAcknowledgement(
+      chrome.debugger.sendCommand(target, method, params), signal, "type",
+      value => { interrupted = value; });
+  };
   let composing;
   let focused;
   try {
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
     const verifyTypedChange = input.text.length > 0 && !input.submit && !/[\\r\\n\\t]/u.test(input.text);
     if (verifyTypedChange) {
       focused = (await chrome.scripting.executeScript({
@@ -3249,18 +3275,18 @@ async function typeText(input, signal) {
           while (index < chars.length && imeComposedCharacter(chars[index])) {
             throwIfAborted(signal, "type", true);
             composing += chars[index];
-            await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { ...processKey, type: "rawKeyDown" });
-            await chrome.debugger.sendCommand(target, "Input.imeSetComposition", {
+            await sendInput("Input.dispatchKeyEvent", { ...processKey, type: "rawKeyDown" });
+            await sendInput("Input.imeSetComposition", {
               text: composing, selectionStart: composing.length, selectionEnd: composing.length,
             });
-            await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", { ...processKey, type: "keyUp" });
+            await sendInput("Input.dispatchKeyEvent", { ...processKey, type: "keyUp" });
             await new Promise((resolve) => setTimeout(resolve, 15));
             index += 1;
           }
           index -= 1;
           const committed = composing;
           composing = undefined;
-          await chrome.debugger.sendCommand(target, "Input.insertText", { text: committed });
+          await sendInput("Input.insertText", { text: committed });
           continue;
         }
         const physical = physicalTypingKey(char);
@@ -3268,19 +3294,19 @@ async function typeText(input, signal) {
           const args = { key: physical.key, code: physical.code,
             windowsVirtualKeyCode: physical.keyCode, nativeVirtualKeyCode: physical.keyCode,
             modifiers: physical.modifiers };
-          await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+          await sendInput("Input.dispatchKeyEvent", {
             ...args, type: "keyDown", text: char, unmodifiedText: char,
           });
-          await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+          await sendInput("Input.dispatchKeyEvent", {
             ...args, type: "keyUp",
           });
         } else {
-          await chrome.debugger.sendCommand(target, "Input.insertText", { text: char });
+          await sendInput("Input.insertText", { text: char });
         }
         await new Promise((resolve) => setTimeout(resolve, 15));
       }
     } else {
-      await chrome.debugger.sendCommand(target, "Input.insertText", { text: input.text });
+      await sendInput("Input.insertText", { text: input.text });
     }
     // Multiline, submission, or other paths without an exact read-back are
     // dispatched, not verified.
@@ -3301,30 +3327,40 @@ async function typeText(input, signal) {
     }
     if (input.submit) {
       for (const kind of ["keyDown", "keyUp"]) {
-        await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+        await sendInput("Input.dispatchKeyEvent", {
           type: kind, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13,
         });
       }
     }
     return { tabId: input.tabId, completed: true, ...(unverified ? { unverified: true } : {}) };
   } catch (error) {
-    if (composing !== undefined) {
-      // Never leave a half-typed composition behind in the user's page.
-      await chrome.debugger.sendCommand(target, "Input.imeSetComposition", {
+    if (composing !== undefined && !interrupted) {
+      // Cancel an acknowledged composition, but never send compensating input
+      // while a previous native command has an unresolved outcome.
+      const reset = chrome.debugger.sendCommand(target, "Input.imeSetComposition", {
         text: "", selectionStart: 0, selectionEnd: 0,
-      }).catch(() => undefined);
+      });
+      await waitPersonalInputAcknowledgement(reset, undefined, "type",
+        value => { interrupted = value; }).catch(() => undefined);
     }
+    if (interrupted) throw coded("EXECUTION_OUTCOME_UNKNOWN", "CDP type acknowledgement unavailable; inspect before another mutation.");
     if (signal?.aborted) throw cancellationError("type", signal, true);
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable or occupied by DevTools.");
   } finally {
-    for (const entry of focused ?? []) {
-      await chrome.scripting.executeScript({
-        target: { tabId: chromeTabId, frameIds: [entry.frameId] },
-        func: observePersonalEditableMutation, args: ["cleanup", null, null],
-      }).catch(() => undefined);
+    const cleanup = async () => {
+      for (const entry of focused ?? []) {
+        await chrome.scripting.executeScript({
+          target: { tabId: chromeTabId, frameIds: [entry.frameId] },
+          func: observePersonalEditableMutation, args: ["cleanup", null, null],
+        }).catch(() => undefined);
+      }
+    };
+    if (interrupted) await recoverInterruptedPersonalInput(target, attached, held, interrupted, cleanup);
+    else {
+      await cleanup();
+      await detachGuardedDebugger(target, attached).catch(() => undefined);
     }
-    await detachGuardedDebugger(target, attached).catch(() => undefined);
   }
 }
 

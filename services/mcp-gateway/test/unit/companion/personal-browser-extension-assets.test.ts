@@ -2025,6 +2025,39 @@ describe("personal browser extension assets", () => {
     expect(events).toEqual(["perform", "perform"]);
   });
 
+  it("keeps the recovery fence until an interrupted editor observation is cleaned up", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const cleanup = deferred<void>();
+    const cleanupStarted = deferred<void>();
+    const held = { arm: () => undefined };
+    const fences = new Map();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const context = vm.createContext({
+      setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalTaskDebuggers: new Map([["7", held]]),
+      releasePersonalTaskDebugger: async () => true,
+    });
+    vm.runInContext(extractFunction(serviceWorker, "recoverInterruptedPersonalInput"), context);
+    const recover = vm.runInContext("recoverInterruptedPersonalInput", context) as
+      (target: unknown, attached: boolean, held: unknown, pending: Promise<unknown>, cleanup: () => Promise<void>) => Promise<void>;
+    const recovering = recover({ tabId: 7 }, false, held, pending.promise, async () => {
+      cleanupStarted.resolve(); await cleanup.promise;
+    });
+    await cleanupStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    await recovering;
+    expect(fences.has("7")).toBe(true);
+    cleanup.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fences.has("7")).toBe(false);
+    pending.resolve({});
+    expect(timers.size).toBe(0);
+  });
+
   it("does not release the recovery fence until a stalled detach is acknowledged", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const wheel = deferred<unknown>();
@@ -2316,6 +2349,7 @@ describe("personal browser extension assets", () => {
     let focused = false;
     let moved = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
       probeGuardedElement: () => ({ x: 40, y: 30 }),
@@ -3000,7 +3034,8 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: unknown }> = [];
     const context = vm.createContext({
-      setTimeout: (callback: () => void) => { callback(); return 0; },
+      setTimeout: (callback: () => void, ms: number) => ms === 15 ? (callback(), 0) : setTimeout(callback, ms),
+      clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3136,6 +3171,72 @@ describe("personal browser extension assets", () => {
       .toMatchObject({ ready: true, protectedTokens: true });
   });
 
+  it.each([
+    ["fill", "Input.insertText", false, false],
+    ["fill", "rawKeyDown", false, false],
+    ["typeText", "Input.insertText", false, false],
+    ["typeText", "Input.insertText", true, false],
+    ["typeText", "Input.imeSetComposition", false, true],
+  ] as const)("bounds interrupted %s %s (submit=%s, IME=%s)", async (operation, lost, submit, slowly) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined,
+      cancellationError: () => Object.assign(new Error("cancelled"), { code: "EXECUTION_OUTCOME_UNKNOWN" }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: fences,
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async ({ func, args }: { func: { name: string }; args: unknown[] }) => {
+          if (func.name === "observePersonalEditableMutation") {
+            events.push(String(args[0]));
+            return [{ frameId: 0, documentId: "doc", result: { ready: true, matches: true } }];
+          }
+          return [{ result: { x: 20, y: 25 } }];
+        } },
+        debugger: { sendCommand: async (_: unknown, method: string, params: { type?: string }) => {
+          events.push(params.type ?? method);
+          if ((params.type ?? method) === lost) { started.resolve(); return pending.promise; }
+          return {};
+        } },
+      },
+    });
+    for (const name of ["observePersonalEditableMutation", "physicalTypingKey", "imeComposedCharacter", operation]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const execute = vm.runInContext(operation, context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const guard = { ref: "target", url: "https://example.com/" };
+    const input = operation === "fill" ? { tabId: "personal:7", ref: "target", value: "replacement", guard }
+      : { tabId: "personal:7", text: slowly ? "東京" : "replacement", submit, slowly, guard };
+    const result = execute(input, controller.signal).catch((error: { code: string }) => error.code);
+    await started.promise;
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      const nativeEvents = events.filter(event => !["before", "after", "cleanup", "retire"].includes(event));
+      expect(nativeEvents).toEqual(operation === "fill"
+        ? lost === "rawKeyDown" ? ["rawKeyDown"] : ["rawKeyDown", "keyUp", "rawKeyDown", "keyUp", "Input.insertText"]
+        : slowly ? ["rawKeyDown", "Input.imeSetComposition"] : ["Input.insertText"]);
+      expect(events.filter(event => event === "cleanup")).toHaveLength(submit ? 0 : 1);
+      expect(events).not.toContain("after");
+      expect(events).toContain("retire");
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("refuses to report success when typing has no focused editor or visible text change", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const sent: string[] = [];
@@ -3143,7 +3244,8 @@ describe("personal browser extension assets", () => {
     let changed = false;
     let matches = false;
     const context = vm.createContext({
-      setTimeout: (callback: () => void) => { callback(); return 0; },
+      setTimeout: (callback: () => void, ms: number) => ms === 15 ? (callback(), 0) : setTimeout(callback, ms),
+      clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3182,7 +3284,8 @@ describe("personal browser extension assets", () => {
     let checks = 0;
     let abortAfter = Number.POSITIVE_INFINITY;
     const context = vm.createContext({
-      setTimeout: (callback: () => void) => { callback(); return 0; },
+      setTimeout: (callback: () => void, ms: number) => ms === 15 ? (callback(), 0) : setTimeout(callback, ms),
+      clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => {
@@ -3443,6 +3546,7 @@ describe("personal browser extension assets", () => {
     let focused = false;
     let matches = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
       resolveGuardedAxPoint: async () => ({ x: 40, y: 30 }),
@@ -6158,7 +6262,7 @@ function extractFunction(source: string, name: string): string {
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
             .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
-        if (["click", "scroll", "hover", "screenshot", "press"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
+        if (["click", "scroll", "hover", "screenshot", "press", "fill", "typeText"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
           return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
             .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }

@@ -29,8 +29,12 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "recovery-site.test/": () => `<!doctype html><title>CDP recovery fixture</title>
     <body style="margin:0;height:300vh"><div style="position:fixed;top:20px;left:20px">
       <button id="increase">Increase</button><p id="clicks">Count 0</p><p id="wheels">0</p>
-      <a href="/runs">Run history</a><input aria-label="Key entry" id="key-entry"><p id="key-count">0</p>
+      <a href="/runs">Run history</a><input aria-label="Key entry" id="key-entry"><p id="key-count">0</p><p id="insert-count">0</p>
     </div><script>
+      let insertCount = 0;
+      document.getElementById("key-entry").addEventListener("input", event => {
+        if (event.inputType === "insertText") document.getElementById("insert-count").textContent = String(++insertCount);
+      });
       let keyCount = 0;
       document.getElementById("key-entry").addEventListener("keydown", () => {
         document.getElementById("key-count").textContent = String(++keyCount);
@@ -302,6 +306,14 @@ async function main(): Promise<void> {
       smokeScript = smokeScript.replace(needle,
         "await waitPersonalInputAcknowledgement(" + drop + ", signal, \"" + operation + "\"");
     }
+    for (const operation of ["fill", "type"]) {
+      const needle = 'chrome.debugger.sendCommand(target, method, params), signal, "' + operation + '"';
+      if (smokeScript.split(needle).length !== 2) throw new Error("Text lost-ack hook missing: " + operation);
+      const drop = 'chrome.debugger.sendCommand(target, method, params).then(value => ' +
+        'method === "Input.insertText" && globalThis.__mcpSmokeDropAck === "' + operation + '" ' +
+        '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value)';
+      smokeScript = smokeScript.replace(needle, drop + ', signal, "' + operation + '"');
+    }
     const captureNeedle = 'const pending = chrome.debugger.sendCommand(target, method, params);';
     if (smokeScript.split(captureNeedle).length !== 2) throw new Error("Screenshot lost-ack hook missing.");
     smokeScript = smokeScript.replace(captureNeedle,
@@ -391,9 +403,31 @@ async function main(): Promise<void> {
       }
       const finalShot = await bridge.screenshot({ tabId });
       if (!finalShot.sizeBytes) throw new Error("Screenshot did not recover after keyboard interruption.");
-      report("CDP lost-ack recovery", { wheel, click, hover, capture, press, scrollY: await page.evaluate("window.scrollY"),
-        wheelEvents: 1, clickEvents: 2, keyEvents: 1, screenshotBytes: shot.sizeBytes,
-        recoveredScreenshotBytes: recoveredShot.sizeBytes, finalScreenshotBytes: finalShot.sizeBytes, nextClickVerified: true });
+      const fillRef = (await bridge.snapshot({ tabId })).refs.find(ref => ref.name === "Key entry");
+      if (!fillRef) throw new Error("Missing field after keyboard recovery.");
+      const beforeInsertions = Number(await page.locator("#insert-count").textContent());
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'fill'");
+      const fill = await bridge.fill({ tabId, ref: fillRef.ref, value: "replacement" })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (fill !== "EXECUTION_OUTCOME_UNKNOWN" ||
+          await page.locator("#key-entry").inputValue() !== "replacement" ||
+          Number(await page.locator("#insert-count").textContent()) !== beforeInsertions + 1) {
+        throw new Error("Fill acknowledgement or actual insertion was not verified: " + fill);
+      }
+      await bridge.snapshot({ tabId });
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'type'");
+      const type = await bridge.type({ tabId, text: "!" })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (type !== "EXECUTION_OUTCOME_UNKNOWN" ||
+          await page.locator("#key-entry").inputValue() !== "replacement!" ||
+          Number(await page.locator("#insert-count").textContent()) !== beforeInsertions + 2) {
+        throw new Error("Type acknowledgement or actual insertion was not verified: " + type);
+      }
+      const finalTextShot = await bridge.screenshot({ tabId });
+      if (!finalTextShot.sizeBytes) throw new Error("Screenshot did not recover after text interruption.");
+      report("CDP lost-ack recovery", { wheel, click, hover, capture, press, fill, type, scrollY: await page.evaluate("window.scrollY"),
+        wheelEvents: 1, clickEvents: 2, keyEvents: 1, textInsertions: 2, screenshotBytes: shot.sizeBytes,
+        recoveredScreenshotBytes: recoveredShot.sizeBytes, finalScreenshotBytes: finalTextShot.sizeBytes, nextClickVerified: true });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
       return;
