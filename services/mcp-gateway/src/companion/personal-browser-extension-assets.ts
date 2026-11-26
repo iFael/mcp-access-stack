@@ -2646,10 +2646,18 @@ async function scroll(input, signal, reportPhase) {
   reportPhase?.("scroll-preflight");
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
-  const tab = await chrome.tabs.get(chromeTabId);
-  if (!input.guard || tab.url !== input.guard.url || (input.ref && input.guard.ref !== input.ref)) {
-    throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll requires a guard from the current page.");
-  }
+  // Native wheel acknowledgements can stall for inactive tabs. Never steal
+  // focus: selection remains an explicit operation on an authorized tab.
+  const requireScrollReady = (tab) => {
+    if (!input.guard || tab.url !== input.guard.url ||
+        (tab.pendingUrl && tab.pendingUrl !== tab.url) || (input.ref && input.guard.ref !== input.ref)) {
+      throw coded("BROWSER_CONFIRMATION_INVALID", "Scroll requires a guard from the current page.");
+    }
+    if (tab.active !== true) {
+      throw coded("STATE_NOT_REACHED", "Select the tab with browser_select_tab before scrolling. No wheel was dispatched.");
+    }
+  };
+  requireScrollReady(await chrome.tabs.get(chromeTabId));
   let point;
   if (input.ref && !input.ref.startsWith("ax-")) {
     const [injection] = await chrome.scripting.executeScript({
@@ -2705,6 +2713,10 @@ async function scroll(input, signal, reportPhase) {
       reportPhase?.("scroll-ax");
       point = await resolveGuardedAxPoint(chromeTabId, input.ref, input.guard, target, false);
     }
+    // The user may have switched tabs or navigated while geometry/debugger
+    // preparation was in progress. Recheck immediately before native input.
+    await requireOwnedMetadata(chromeTabId);
+    requireScrollReady(await chrome.tabs.get(chromeTabId));
     throwIfAborted(signal, "scroll", false);
     reportPhase?.("cdp-wheel");
     held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));

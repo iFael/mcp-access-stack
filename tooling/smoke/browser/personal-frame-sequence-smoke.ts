@@ -6,6 +6,7 @@
 // PERSONAL_SMOKE_CHROMIUM overrides the Chromium executable when needed.
 // PERSONAL_SMOKE_ROBUSTNESS_ONLY=1 runs the focused editor/scroll regression.
 // PERSONAL_SMOKE_CDP_RECOVERY_ONLY=1 injects lost acknowledgements in an isolated profile.
+// PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
@@ -28,6 +29,7 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "recovery-site.test/": () => `<!doctype html><title>CDP recovery fixture</title>
     <body style="margin:0;height:300vh"><div style="position:fixed;top:20px;left:20px">
       <button id="increase">Increase</button><p id="clicks">Count 0</p><p id="wheels">0</p>
+      <a href="/runs">Run history</a>
     </div><script>
       let clicks = 0, wheels = 0;
       document.getElementById("increase").addEventListener("click", () => {
@@ -37,6 +39,7 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("wheels").textContent = String(++wheels);
       }, {passive:true});
     </script>`,
+  "recovery-site.test/runs": () => "<!doctype html><title>Run history</title><p>Run history destination</p>",
   "editor-site.test/": () => `<!doctype html><title>Editor geometry fixture</title>
     <body style="margin:0;width:300vw;height:100vh">
       <div class="monaco-editor" style="position:fixed;left:75vw;top:80px;width:160vw;height:80px;background:#ddd;overflow:hidden">
@@ -242,8 +245,14 @@ async function main(): Promise<void> {
   };
   const legacyFixture = createLegacyLegacySiteFixtureRouter({ largeMenu: true });
   let slowHelpResponses = 0;
+  let redirectHits = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (url.hostname === "recovery-site.test" && url.pathname === "/runs" && !url.search) {
+      redirectHits++;
+      res.writeHead(302, { location: "/runs?v3=false", "cache-control": "no-store" }).end();
+      return;
+    }
     if (url.hostname === "quality-site.test" && url.pathname === "/slow-help.js") {
       setTimeout(() => {
         slowHelpResponses += 1;
@@ -349,6 +358,70 @@ async function main(): Promise<void> {
         wheelEvents: 1, clickEvents: 2, screenshotBytes: shot.sizeBytes, nextClickVerified: true });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
+      return;
+    }
+
+    if (process.env.PERSONAL_SMOKE_FOREGROUND_ONLY === "1") {
+      const url = `http://recovery-site.test:${sitePort}/`;
+      const taskId = "personal-foreground";
+      const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+      const page = await waitForFixturePage(context, url);
+      await bridge.snapshot({ tabId });
+      const otherTab = (await bridge.open({ url: url + "?other=1", taskId })).tab.tabId;
+      await bridge.selectTab({ tabId: otherTab });
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://"));
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      const chromeTab = Number(tabId.split(":")[1]);
+      const otherChromeTab = Number(otherTab.split(":")[1]);
+      const readSelection = () => worker.evaluate(
+        `Promise.all([chrome.tabs.get(${chromeTab}), chrome.tabs.get(${otherChromeTab})]).then(tabs => tabs.map(tab => tab.active))`
+      ) as Promise<boolean[]>;
+      const beforeSelection = await readSelection();
+      const started = Date.now();
+      const inactive = await bridge.scroll({ tabId, direction: "down", amount: 600 })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      const inactiveMs = Date.now() - started;
+      // Headless Chromium can report a visible document even in an inactive
+      // tab. Chrome's actual selection is the contract, not renderer visibility.
+      const afterSelection = await readSelection();
+      const backgroundEvidence = { beforeSelection, afterSelection,
+        wheelEvents: await page.locator("#wheels").textContent(), scrollY: await page.evaluate("window.scrollY"),
+        visibility: await page.evaluate("document.visibilityState") };
+      report("inactive scroll observation", { inactive, inactiveMs, ...backgroundEvidence });
+      if (inactive !== "STATE_NOT_REACHED" ||
+          beforeSelection.join(",") !== "false,true" || afterSelection.join(",") !== "false,true" ||
+          backgroundEvidence.wheelEvents !== "0" || backgroundEvidence.scrollY !== 0) {
+        throw new Error("Inactive scroll was not refused without changing selection: " + JSON.stringify(backgroundEvidence));
+      }
+      await bridge.selectTab({ tabId });
+      await bridge.snapshot({ tabId });
+      const scrolled = await bridge.scroll({ tabId, direction: "down", amount: 600 });
+      await page.waitForFunction("window.scrollY > 0");
+      if (!scrolled.completed || await page.locator("#wheels").textContent() !== "1") {
+        throw new Error("Foreground wheel was not dispatched exactly once.");
+      }
+      const shot = await bridge.screenshot({ tabId });
+      if (!shot.sizeBytes) throw new Error("Foreground capture unavailable.");
+      const clickDestination = async (expected: string) => {
+        const state = await bridge.snapshot({ tabId });
+        const link = state.refs.find(ref => ref.name === "Run history");
+        if (!link) throw new Error("Missing redirect fixture link.");
+        return bridge.click({ tabId, ref: link.ref, expect: { url: expected, timeoutMs: 2500 } });
+      };
+      const incomplete = await clickDestination(url + "runs");
+      await page.waitForURL(url + "runs?v3=false");
+      if (incomplete.unverified !== true) throw new Error("Missing query was incorrectly verified.");
+      await bridge.navigate({ tabId, url });
+      const exact = await clickDestination(url + "runs?v3=false");
+      const destination = await bridge.snapshot({ tabId });
+      if (exact.unverified !== false || destination.url !== url + "runs?v3=false" ||
+          !destination.content.includes("Run history destination") || redirectHits !== 2) {
+        throw new Error("Exact redirected URL did not verify or navigation was replayed.");
+      }
+      report("foreground and exact URL", { inactive, inactiveMs, wheelEvents: 1,
+        screenshotBytes: shot.sizeBytes, incompleteVerified: false, exactVerified: true, redirectHits });
+      await bridge.finishTask({ taskId });
+      console.log("\nPERSONAL BROWSER FOREGROUND AND URL PASS");
       return;
     }
 

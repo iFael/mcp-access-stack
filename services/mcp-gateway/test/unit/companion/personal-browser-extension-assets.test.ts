@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.17");
+    expect(manifest.version).toBe("1.17.18");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -1725,6 +1725,67 @@ describe("personal browser extension assets", () => {
     expect(timing.snapshotMs).toBe(7);
   });
 
+  it.each(["inactive", "switched", "navigated"])("refuses scroll before native dispatch when tab is %s", async (scenario) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://example.test/";
+    const events: string[] = [];
+    let active = scenario !== "inactive";
+    let currentUrl = url;
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: {
+          get: async () => ({ url: currentUrl, active }),
+          update: async () => { events.push("activate"); },
+        },
+        scripting: { executeScript: async () => {
+          events.push("geometry"); return [{ result: { x: 20, y: 25 } }];
+        } },
+        debugger: {
+          attach: async () => {
+            events.push("attach");
+            if (scenario === "switched") active = false;
+            if (scenario === "navigated") currentUrl = "https://example.test/other";
+          },
+          detach: async () => { events.push("detach"); },
+          sendCommand: async () => { events.push("wheel"); },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "scroll"), context);
+    const scroll = vm.runInContext("scroll", context) as (input: unknown) => Promise<unknown>;
+    await expect(scroll({ tabId: "personal:7", guard: { url }, direction: "down", amount: 300 }))
+      .rejects.toMatchObject({ code: scenario === "navigated" ? "BROWSER_CONFIRMATION_INVALID" : "STATE_NOT_REACHED" });
+    expect(events).toEqual(scenario === "inactive" ? [] : ["geometry", "attach", "detach"]);
+  });
+
+  it.each([
+    ["https://example.test/runs?v3=false", undefined, true],
+    ["https://example.test/runs", undefined, false],
+    ["https://example.test/runs?v3=true", undefined, false],
+    ["https://example.test/runs?v3=false&record=other", undefined, false],
+    ["https://other.test/runs?v3=false", undefined, false],
+    ["https://example.test/other?v3=false", undefined, false],
+    ["https://example.test/runs?v3=false#other", undefined, false],
+    ["https://example.test/runs?v3=false", "https://example.test/other", null],
+  ] as const)("checks exact committed URL %s (pending %s)", async (url, pendingUrl, expected) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chrome: {
+        tabs: { get: async () => ({ url, pendingUrl }) },
+        scripting: { executeScript: async () => { throw new Error("URL-only must not inject"); } },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "readPersonalWaitState"), context);
+    const read = vm.runInContext("readPersonalWaitState", context) as
+      (tabId: number, input: unknown, observeMs: number, timeoutMs: number) => Promise<unknown>;
+    await expect(read(7, { url: "https://example.test/runs?v3=false" }, 20, 100)).resolves.toBe(expected);
+  });
+
   it("serializes optional scroll coordinates and preserves explicit zero coordinates", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<Record<string, unknown>> = [];
@@ -1735,7 +1796,7 @@ describe("personal browser extension assets", () => {
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
-        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        tabs: { get: async () => ({ active: true, url: "https://example.com/" }) },
         scripting: { executeScript: async ({ func, args }: {
           func: (...args: unknown[]) => unknown; args: unknown[];
         }) => {
@@ -1780,7 +1841,7 @@ describe("personal browser extension assets", () => {
       throwIfAborted: () => undefined, delay: async () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
-        tabs: { get: async () => ({ url }) },
+        tabs: { get: async () => ({ active: true, url }) },
         scripting: { executeScript: async ({ func, args }: {
           func: (...args: unknown[]) => unknown; args: unknown[];
         }) => {
@@ -1883,7 +1944,7 @@ describe("personal browser extension assets", () => {
       __mcpV3PersonalPendingInput: new Map(),
       releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
       chrome: {
-        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        tabs: { get: async () => ({ active: true, url: "https://example.com/" }) },
         scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
         debugger: {
           sendCommand: async (_target: unknown, _method: string, params: { type: string }) => {
@@ -2007,7 +2068,7 @@ describe("personal browser extension assets", () => {
       throwIfAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw Object.assign(new Error("deadline"), { code: "OPERATION_CANCELLED" }); },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
-        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        tabs: { get: async () => ({ active: true, url: "https://example.com/" }) },
         scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
         debugger: {
           attach: async () => { controller.abort(); },
@@ -3147,7 +3208,7 @@ describe("personal browser extension assets", () => {
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
-        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        tabs: { get: async () => ({ active: true, url: "https://example.com/" }) },
         scripting: { executeScript: async (payload: { args?: unknown[] }) => {
           origins.push(payload.args);
           const x = payload.args?.[0], y = payload.args?.[1];
@@ -3183,7 +3244,7 @@ describe("personal browser extension assets", () => {
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       chrome: {
-        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        tabs: { get: async () => ({ active: true, url: "https://example.com/" }) },
         scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
         debugger: {
           attach: async () => undefined,
@@ -4619,7 +4680,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.17");
+    expect(parsedManifest.version).toBe("1.17.18");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
