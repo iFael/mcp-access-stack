@@ -819,7 +819,7 @@ async function main(): Promise<void> {
           const geometryMatches = name === "region" ? background.size.width === 120 && background.size.height === 80
             : name === "fullPage" ? background.size.height >= 1800 : background.size.width === foreground.size.width;
           if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1") {
-            await targetPage.waitForFunction(() => document.visibilityState === "hidden", undefined, { timeout: 2000 });
+            await targetPage.waitForFunction('document.visibilityState === "hidden"', undefined, { timeout: 2000 });
           }
           report("background screenshot", { name, sample, foregroundMs: foreground.elapsedMs,
             backgroundMs: background.elapsedMs, foregroundSize: foreground.size, size: background.size,
