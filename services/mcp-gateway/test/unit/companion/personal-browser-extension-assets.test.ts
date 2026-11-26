@@ -1521,13 +1521,13 @@ describe("personal browser extension assets", () => {
   });
 
   it.each([
-    ["direct", "click", "mousePressed"], ["direct", "click", "mouseReleased"],
-    ["direct", "fill", "insertText"], ["direct", "fill", "textKeyDown"],
-    ["legacy", "click", "mouseReleased"], ["legacy", "fill", "insertText"],
-    ["legacy", "fill", "textKeyDown"], ["legacy", "select", "ArrowDown"],
-    ["legacy", "press", "Enter"],
+    ["direct", "click", "mousePressed", false], ["direct", "click", "mouseReleased", false],
+    ["direct", "fill", "insertText", false], ["direct", "fill", "textKeyDown", false],
+    ["legacy", "click", "mouseReleased", false], ["legacy", "fill", "insertText", false],
+    ["legacy", "fill", "textKeyDown", false], ["legacy", "select", "ArrowDown", false],
+    ["legacy", "press", "Enter", false],
     ["direct", "click", "mouseReleased", true], ["legacy", "fill", "insertText", true],
-  ] as const)("recovers interrupted %s frame %s at %s without replay or later steps", async (mode, action, lost, shared = false) => {
+  ] as const)("recovers interrupted %s frame %s at %s without replay or later steps", async (mode, action, lost, shared) => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const pending = deferred<unknown>();
     const dispatched = deferred<void>();
