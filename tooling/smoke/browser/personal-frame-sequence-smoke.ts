@@ -454,7 +454,7 @@ async function main(): Promise<void> {
       for (const [source, fault, counter, status, expected] of [
         ["Cartão A", "drop", "#drop-count", "#status", "movido:card"],
         ["Alça", "release", "#release-count", "#pointer", "solto na coluna"],
-      ]) {
+      ] as const) {
         const refs = (await bridge.snapshot({ tabId: boardTab })).refs;
         const from = refs.find(ref => ref.name === source);
         const to = refs.find(ref => ref.name === "Coluna Concluído");
