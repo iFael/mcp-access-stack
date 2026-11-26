@@ -2808,10 +2808,87 @@ describe("personal browser extension assets", () => {
       .toMatchObject({ x: 21, y: 40 });
   });
 
+  it.each([
+    ["intercept", false], ["mousePressed", false], ["drop", false],
+    ["mouseReleased", false], ["disable", false], ["drop", true],
+  ] as const)("bounds a lost drag %s acknowledgement (shared=%s) without replay or a compensating drop", async (lost, shared) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const viewport = { borrowers: 0 };
+    const listeners = new Set<(source: { tabId: number }, method: string, params: unknown) => void>();
+    const data = { items: [{ mimeType: "text/plain", data: "card" }], dragOperationsMask: -1 };
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined, delay: async () => undefined,
+      settlePersonalViewport: async () => undefined, takeFreshPersonalDebugger: () => false,
+      cancellationError: () => Object.assign(new Error("cancelled"), { code: "EXECUTION_OUTCOME_UNKNOWN" }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalViewportSessions: new Map(shared ? [["7", viewport]] : []),
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        scripting: { executeScript: async ({ args }: { args: unknown[] }) => [{
+          result: { x: args[0] === "source" ? 20 : 80, y: 40 },
+        }] },
+        debugger: {
+          onEvent: { addListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.add(fn),
+            removeListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.delete(fn) },
+          sendCommand: async (_: unknown, method: string, params: { type?: string; enabled?: boolean; buttons?: number }) => {
+            const event = method === "Input.setInterceptDrags" ? params.enabled ? "intercept" : "disable" : params.type ?? method;
+            events.push(event);
+            if (event === lost) { started.resolve(); return pending.promise; }
+            if (params.type === "mouseMoved" && params.buttons === 1) {
+              for (const listener of listeners) listener({ tabId: 7 }, "Input.dragIntercepted", { data });
+            }
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "drag"), context);
+    const drag = vm.runInContext("drag", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const input = { tabId: "personal:7", from: { ref: "source" }, to: { ref: "destination" }, steps: 3,
+      fromGuard: { ref: "source", url: "https://example.com/" },
+      toGuard: { ref: "destination", url: "https://example.com/" } };
+    const result = drag(input, controller.signal).catch((error: { code: string }) => error.code);
+    await expect(Promise.race([started.promise.then(() => "dispatched"), result])).resolves.toBe("dispatched");
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      const expected = ["intercept", "mouseMoved", "mousePressed", "mouseMoved", "dragEnter", "dragOver", "drop", "mouseReleased", "disable"];
+      expect(events).toEqual([...expected.slice(0, expected.indexOf(lost) + 1), ...(shared ? [] : ["retire"])]);
+      expect(listeners.size).toBe(0);
+      if (shared) {
+        expect(viewport.borrowers).toBe(0);
+        expect(fences.has("7")).toBe(true);
+        pending.resolve({});
+        await pending.promise;
+        // A late acknowledgement alone cannot clear a partial drag.
+        expect(fences.has("7")).toBe(true);
+        fences.get("7").detached();
+      }
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("drags across canvas pixels with native CDP and refuses unmatched screenshot guards", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
       settlePersonalViewport: async () => false,
@@ -2846,11 +2923,12 @@ describe("personal browser extension assets", () => {
     expect(commands).toHaveLength(0);
   });
 
-  it("drags with trusted CDP events and always releases the mouse on abort", async () => {
+  it("drags with trusted CDP events and refuses an unbound source", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     let aborted = false;
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -2896,6 +2974,7 @@ describe("personal browser extension assets", () => {
     let metricsReads = 0;
     const data = { items: [{ mimeType: "text/plain", data: "card" }], dragOperationsMask: -1 };
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -6262,7 +6341,7 @@ function extractFunction(source: string, name: string): string {
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
             .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
-        if (["click", "scroll", "hover", "screenshot", "press", "fill", "typeText"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
+        if (["click", "scroll", "hover", "screenshot", "press", "fill", "typeText", "drag"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
           return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
             .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }

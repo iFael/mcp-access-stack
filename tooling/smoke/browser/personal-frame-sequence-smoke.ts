@@ -130,15 +130,16 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "dnd-site.test/": () => `<!doctype html><title>Quadro</title><body>
     <div draggable="true" id="card" role="button" aria-label="Cartão A" style="width:120px;height:40px;background:#ddd">Cartão A</div>
     <div id="done" role="button" aria-label="Coluna Concluído" style="margin-top:120px;width:240px;height:120px;border:1px solid">Concluído</div>
-    <p id="status">pendente</p>
+    <p id="status">pendente</p><p id="drop-count">0</p>
     <div id="knob" role="slider" aria-label="Alça" aria-valuenow="0" style="position:absolute;left:300px;top:20px;width:30px;height:30px;background:#88f"></div>
-    <p id="pointer">parado</p>
+    <p id="pointer">parado</p><p id="release-count">0</p>
     <script>
-      let dragging = false;
+      let dragging = false, drops = 0, releases = 0;
       document.getElementById("knob").addEventListener("mousedown", () => { dragging = true; });
       document.addEventListener("mouseup", (event) => {
         if (!dragging) return;
         dragging = false;
+        document.getElementById("release-count").textContent = String(++releases);
         const zone = document.getElementById("done").getBoundingClientRect();
         const inside = event.clientX >= zone.left && event.clientX <= zone.right && event.clientY >= zone.top && event.clientY <= zone.bottom;
         document.getElementById("pointer").textContent = inside ? "solto na coluna" : "fora";
@@ -148,6 +149,7 @@ const pages: Record<string, (url: URL, port: number) => string> = {
       done.addEventListener("dragover", (event) => event.preventDefault());
       done.addEventListener("drop", (event) => {
         event.preventDefault();
+        document.getElementById("drop-count").textContent = String(++drops);
         document.getElementById("status").textContent = "movido:" + event.dataTransfer.getData("text/plain");
       });
     </script>`,
@@ -314,6 +316,13 @@ async function main(): Promise<void> {
         '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value)';
       smokeScript = smokeScript.replace(needle, drop + ', signal, "' + operation + '"');
     }
+    const dragNeedle = 'chrome.debugger.sendCommand(target, method, params), signal, "drag"';
+    if (smokeScript.split(dragNeedle).length !== 2) throw new Error("Drag lost-ack hook missing.");
+    smokeScript = smokeScript.replace(dragNeedle,
+      'chrome.debugger.sendCommand(target, method, params).then(value => ' +
+      '(method === "Input.dispatchDragEvent" && params.type === "drop" && globalThis.__mcpSmokeDropAck === "drop" || ' +
+      'method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" && globalThis.__mcpSmokeDropAck === "release") ' +
+      '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value), signal, "drag"');
     const captureNeedle = 'const pending = chrome.debugger.sendCommand(target, method, params);';
     if (smokeScript.split(captureNeedle).length !== 2) throw new Error("Screenshot lost-ack hook missing.");
     smokeScript = smokeScript.replace(captureNeedle,
@@ -428,6 +437,34 @@ async function main(): Promise<void> {
       report("CDP lost-ack recovery", { wheel, click, hover, capture, press, fill, type, scrollY: await page.evaluate("window.scrollY"),
         wheelEvents: 1, clickEvents: 2, keyEvents: 1, textInsertions: 2, screenshotBytes: shot.sizeBytes,
         recoveredScreenshotBytes: recoveredShot.sizeBytes, finalScreenshotBytes: finalTextShot.sizeBytes, nextClickVerified: true });
+      const boardUrl = `http://dnd-site.test:${sitePort}/`;
+      const boardTab = (await bridge.open({ url: boardUrl, taskId })).tab.tabId;
+      const boardPage = await waitForFixturePage(context, boardUrl);
+      for (const [source, fault, counter, status, expected] of [
+        ["Cartão A", "drop", "#drop-count", "#status", "movido:card"],
+        ["Alça", "release", "#release-count", "#pointer", "solto na coluna"],
+      ]) {
+        const refs = (await bridge.snapshot({ tabId: boardTab })).refs;
+        const from = refs.find(ref => ref.name === source);
+        const to = refs.find(ref => ref.name === "Coluna Concluído");
+        if (!from || !to) throw new Error("Missing drag recovery refs.");
+        const input = { tabId: boardTab, from: { ref: from.ref }, to: { ref: to.ref } };
+        await worker.evaluate(`globalThis.__mcpSmokeDropAck = ${JSON.stringify(fault)}`);
+        const result = await bridge.drag(input).then(() => "completed", async (error: { code?: string }) => {
+          if (error.code !== "ACTION_REQUIRES_CONFIRMATION") return error.code;
+          return bridge.drag({ ...input, confirmationId: confirmationIdOf(error) })
+            .then(() => "completed", (next: { code?: string }) => next.code);
+        });
+        if (result !== "EXECUTION_OUTCOME_UNKNOWN" ||
+            await boardPage.locator(counter).textContent() !== "1" ||
+            await boardPage.locator(status).textContent() !== expected) {
+          throw new Error("Interrupted drag replayed or did not reach its intended target: " + fault + " " + result);
+        }
+        const recovered = await bridge.screenshot({ tabId: boardTab });
+        if (!recovered.sizeBytes) throw new Error("Drag recovery screenshot missing.");
+        report("drag acknowledgement recovery", { fault, result, events: 1, screenshotBytes: recovered.sizeBytes });
+        if (fault === "drop") await bridge.navigate({ tabId: boardTab, url: boardUrl + "?pointer=1" });
+      }
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
       return;

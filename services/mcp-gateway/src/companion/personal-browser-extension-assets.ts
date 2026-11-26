@@ -2493,6 +2493,14 @@ async function drag(input, signal) {
   throwIfAborted(signal, "drag", false);
   const target = { tabId: chromeTabId };
   let attached = false;
+  let held;
+  let interrupted;
+  const sendInput = (method, params) => {
+    throwIfAborted(signal, "drag", pressed);
+    return waitPersonalInputAcknowledgement(
+      chrome.debugger.sendCommand(target, method, params), signal, "drag",
+      value => { interrupted = value; });
+  };
   let pressed = false;
   let intercepting = false;
   let dragData;
@@ -2503,6 +2511,7 @@ async function drag(input, signal) {
   };
   try {
     attached = await attachGuardedDebugger(target);
+    held = globalThis.__mcpV3PersonalTaskDebuggers?.get(String(chromeTabId));
     if (input.from.ref?.startsWith("ax-")) from = await resolveGuardedAxPoint(
       chromeTabId, input.from.ref, input.fromGuard, target, false,
     );
@@ -2518,19 +2527,19 @@ async function drag(input, signal) {
       if (!input.to.ref?.startsWith("ax-")) to = await resolve(input.to, input.toGuard);
     }
     chrome.debugger.onEvent?.addListener?.(onDragIntercepted);
-    await chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: true });
+    await sendInput("Input.setInterceptDrags", { enabled: true });
     intercepting = true;
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    await sendInput("Input.dispatchMouseEvent", {
       type: "mouseMoved", x: from.x, y: from.y, button: "none",
     });
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    await sendInput("Input.dispatchMouseEvent", {
       type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1,
     });
     pressed = true;
     for (let i = 1; i <= steps; i += 1) {
       throwIfAborted(signal, "drag", true);
       const progress = i / steps;
-      await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      await sendInput("Input.dispatchMouseEvent", {
         type: "mouseMoved",
         x: from.x + (to.x - from.x) * progress,
         y: from.y + (to.y - from.y) * progress,
@@ -2541,31 +2550,39 @@ async function drag(input, signal) {
     for (let wait = 0; !dragData && wait < 6; wait += 1) await delay(50, signal);
     if (dragData) {
       for (const type of ["dragEnter", "dragOver", "drop"]) {
-        await chrome.debugger.sendCommand(target, "Input.dispatchDragEvent", {
+        await sendInput("Input.dispatchDragEvent", {
           type, x: to.x, y: to.y, data: dragData,
         });
       }
     }
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+    await sendInput("Input.dispatchMouseEvent", {
       type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1,
     });
     pressed = false;
     return { tabId: input.tabId, completed: true };
   } catch (error) {
-    if (signal?.aborted) throw cancellationError("drag", signal, pressed);
+    // A partial drag may still be active even if the last command was
+    // acknowledged. Do not finish it at the destination as cleanup.
+    if (pressed && !interrupted) interrupted = Promise.resolve();
+    if (interrupted) throw coded("EXECUTION_OUTCOME_UNKNOWN", "CDP drag interrupted; inspect the page before another mutation.");
+    if (signal?.aborted) throw cancellationError("drag", signal, false);
     if (error?.code) throw error;
     throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome debugger is unavailable for drag-and-drop.");
   } finally {
     chrome.debugger.onEvent?.removeListener?.(onDragIntercepted);
-    if (intercepting) {
-      await chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: false }).catch(() => undefined);
-    }
-    if (attached || globalThis.__mcpV3PersonalNetworkCaptures?.has(String(target.tabId)) ||
-        globalThis.__mcpV3PersonalTaskDebuggers?.has(String(target.tabId))) {
-      if (pressed) await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
-        type: "mouseReleased", x: to?.x ?? from?.x ?? 0, y: to?.y ?? from?.y ?? 0,
-        button: "left", buttons: 0,
-      }).catch(() => undefined);
+    if (interrupted) {
+      await recoverInterruptedPersonalInput(target, attached, held, interrupted, undefined, true);
+    } else {
+      try {
+        if (intercepting) {
+          await waitPersonalInputAcknowledgement(
+            chrome.debugger.sendCommand(target, "Input.setInterceptDrags", { enabled: false }),
+            signal, "drag", value => { interrupted = value; });
+        }
+      } catch {
+        await recoverInterruptedPersonalInput(target, attached, held, interrupted ?? Promise.resolve(), undefined, true);
+        throw coded("EXECUTION_OUTCOME_UNKNOWN", "CDP drag cleanup not confirmed; inspect the page before another mutation.");
+      }
       await detachGuardedDebugger(target, attached).catch(() => undefined);
     }
   }
@@ -2614,7 +2631,7 @@ async function waitPersonalInputAcknowledgement(pending, signal, operation, onIn
 // A native input whose reply never arrives may still have affected the page. Fence
 // that tab until the old command settles or its exact debugger is detached.
 // Shared sessions are not torn down just to recover a task-owned input.
-async function recoverInterruptedPersonalInput(target, attached, held, pending, cleanup) {
+async function recoverInterruptedPersonalInput(target, attached, held, pending, cleanup, requireDetach = false) {
   const key = String(target.tabId);
   const fences = globalThis.__mcpV3PersonalPendingInput;
   const fence = {};
@@ -2624,7 +2641,8 @@ async function recoverInterruptedPersonalInput(target, attached, held, pending, 
   const clear = () => {
     if (settled && cleaned && fences.get(key) === fence) fences.delete(key);
   };
-  const finished = () => { settled = true; clear(); };
+  const finished = () => { if (!requireDetach) settled = true; clear(); };
+  if (requireDetach) fence.detached = () => { settled = true; clear(); };
   void pending.then(finished, finished);
   const recovery = (async () => {
     try {
@@ -7817,6 +7835,7 @@ chrome.notifications?.onClicked?.addListener((id) => {
 });
 chrome.debugger?.onDetach?.addListener((source) => {
   const key = String(source?.tabId);
+  globalThis.__mcpV3PersonalPendingInput?.get(key)?.detached?.();
   const held = personalTaskDebuggers.get(key);
   if (held) {
     clearTimeout(held.timer);
