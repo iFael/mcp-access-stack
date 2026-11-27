@@ -24,6 +24,17 @@ function requestOf(fetchImpl: ReturnType<typeof jest.fn>, index = 0): {
 }
 
 describe("GitHubHttpClient fixed transport", () => {
+  it("POSTs only the native failed-job endpoint and requires HTTP 201", async () => {
+    const fetchImpl = jest.fn(async () => new Response(null, {status: 201}));
+    const client = new GitHubHttpClient({credentialProvider, fetchImpl: fetchImpl as typeof fetch});
+    await client.rerunFailedJobs("iFael", "mcp-access-stack", 123);
+    expect(requestOf(fetchImpl).url).toBe("https://api.github.com/repos/iFael/mcp-access-stack/actions/runs/123/rerun-failed-jobs");
+    expect(requestOf(fetchImpl).init.method).toBe("POST");
+    expect(requestOf(fetchImpl).init.body).toBeUndefined();
+    fetchImpl.mockResolvedValueOnce(new Response(null, {status: 204}));
+    await expect(client.rerunFailedJobs("iFael", "mcp-access-stack", 123)).rejects.toMatchObject({code: "AGENT_UNAVAILABLE"});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
   it("looks up one immutable lightweight tag through the fixed GitHub tag-ref endpoint",async()=>{
     const fetchImpl=jest.fn(async()=>jsonResponse({
       ref:"refs/tags/v1.1.0-beta.90",object:{sha:"a".repeat(40),type:"commit"},

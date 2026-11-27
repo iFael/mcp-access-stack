@@ -4327,6 +4327,427 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "wait_background_task with the returned task ID; verify the lock SHA from the result before starting install. Never repeat an uncertain operation with a new ID.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Linux trusted-workspace only; requires an exact dependencyInstallRoots policy opt-in, private isolated manifest with exact versions, and SHA-256 CAS. Resolve creates only a new lock; install requires the exact lock and absent node_modules. Uses fixed public npm registry, disables scripts and non-registry dependencies, never overwrites existing dependencies. Starts one persisted task with the caller's operationId; reconcile the same ID with wait_background_task. No arbitrary commands or package arguments. Next: wait_background_task with the returned task ID; verify the lock SHA from the result before starting install. Never repeat an uncertain operation with a new ID.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "resolve",
+            "install"
+          ],
+          "type": "string"
+        },
+        "expectedLockSha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedManifestSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "operationId": {
+          "allOf": [
+            {
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            {
+              "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+              "type": "string"
+            }
+          ],
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "root",
+        "operationId",
+        "action",
+        "expectedManifestSha256",
+        "expectedLockSha256"
+      ],
+      "type": "object"
+    },
+    "name": "workspace_install_dependencies",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "shell": {
+          "enum": [
+            "powershell",
+            "pwsh",
+            "cmd",
+            "sh",
+            "bash",
+            "wsl",
+            "git-bash"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "background_task_started",
+            "confirmation_required"
+          ],
+          "type": "string"
+        },
+        "task": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "maxLength": 32000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "commandHash": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "completedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "cwd": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "id": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "interactive": {
+              "const": true,
+              "type": "boolean"
+            },
+            "lifecycle": {
+              "additionalProperties": false,
+              "properties": {
+                "deadlineAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "diagnostic": {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "effectiveTimeoutMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "elapsedMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "enum": [
+                    "timeout",
+                    "cancelled",
+                    "client_disconnected",
+                    "upstream_timeout",
+                    "process_failed"
+                  ],
+                  "type": "string"
+                },
+                "requestedTimeoutMs": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 86400000,
+                  "type": "integer"
+                },
+                "terminatedBy": {
+                  "enum": [
+                    "chatgpt_tool",
+                    "mcp_server",
+                    "gateway",
+                    "relay",
+                    "workspace_agent",
+                    "executor",
+                    "child_process",
+                    "http_client",
+                    "http_server",
+                    "websocket",
+                    "proxy",
+                    "background_task_manager",
+                    "external"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestedTimeoutMs",
+                "effectiveTimeoutMs",
+                "deadlineAt",
+                "elapsedMs"
+              ],
+              "type": "object"
+            },
+            "operation": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "exitCode": {
+                  "anyOf": [
+                    {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lifecycle": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deadlineAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "diagnostic": {
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "effectiveTimeoutMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "elapsedMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "enum": [
+                        "timeout",
+                        "cancelled",
+                        "client_disconnected",
+                        "upstream_timeout",
+                        "process_failed"
+                      ],
+                      "type": "string"
+                    },
+                    "requestedTimeoutMs": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 86400000,
+                      "type": "integer"
+                    },
+                    "terminatedBy": {
+                      "enum": [
+                        "chatgpt_tool",
+                        "mcp_server",
+                        "gateway",
+                        "relay",
+                        "workspace_agent",
+                        "executor",
+                        "child_process",
+                        "http_client",
+                        "http_server",
+                        "websocket",
+                        "proxy",
+                        "background_task_manager",
+                        "external"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "requestedTimeoutMs",
+                    "effectiveTimeoutMs",
+                    "deadlineAt",
+                    "elapsedMs"
+                  ],
+                  "type": "object"
+                },
+                "shell": {
+                  "enum": [
+                    "powershell",
+                    "pwsh",
+                    "cmd",
+                    "sh",
+                    "bash",
+                    "wsl",
+                    "git-bash"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "executed",
+                  "type": "string"
+                },
+                "stderr": {
+                  "type": "string"
+                },
+                "stdout": {
+                  "type": "string"
+                },
+                "timedOut": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "status",
+                "shell",
+                "cwd",
+                "exitCode",
+                "stdout",
+                "stderr",
+                "timedOut"
+              ],
+              "type": "object"
+            },
+            "shell": {
+              "enum": [
+                "powershell",
+                "pwsh",
+                "cmd",
+                "sh",
+                "bash",
+                "wsl",
+                "git-bash"
+              ],
+              "type": "string"
+            },
+            "startedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "starting",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "timeoutMs": {
+              "maximum": 86400000,
+              "minimum": 30000,
+              "type": "integer"
+            },
+            "version": {
+              "const": 1,
+              "type": "number"
+            },
+            "workspaceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "workspaceId",
+            "operation",
+            "commandHash",
+            "command",
+            "shell",
+            "cwd",
+            "state",
+            "createdAt",
+            "timeoutMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Resolve or install isolated workspace npm dependencies"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "Plan first; apply only with explicit authorization, plan digest and operationId. Read status with the same ID until terminal. Missing helper: authorized host admin. Never elevate run_command or retry uncertain apply.",
       "securitySchemes": [
         {
@@ -12858,7 +13279,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Removes a registered worktree with exact source/target SHA checks. Opt-in pruneGeneratedArtifacts removes only known ignored build caches before non-forced removal; preserves other ignored files, local changes and branches. Next: inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
+    "description": "Removes a registered worktree with exact source/target SHA checks and no force. Opt-in pruneGeneratedArtifacts removes known build caches; pruneIgnoredFiles requires exact SHA-256 approval for every remaining ignored regular file and protects runtime and nested worktrees. pruneMissingRegistration removes only an explicitly absent, unlocked, prunable checkout registration. Preserves local changes and branches. Stop external writers before use. Next: inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12879,6 +13300,33 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "type": "string"
         },
         "pruneGeneratedArtifacts": {
+          "type": "boolean"
+        },
+        "pruneIgnoredFiles": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expectedSha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "path": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "expectedSha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "pruneMissingRegistration": {
           "type": "boolean"
         },
         "root": {
@@ -12912,6 +13360,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "const": true,
           "type": "boolean"
         },
+        "removedMissingRegistration": {
+          "const": true,
+          "type": "boolean"
+        },
         "removedWorktreeHeadSha": {
           "pattern": "^[a-fA-F0-9]{40}$",
           "type": "string"
@@ -12936,6 +13388,286 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "Remove clean Git worktree"
+  },
+  {
+    "_meta": {
+      "io.github.ifael/next-step": "inspect_workspace_git with the source and target roots; git_sync_branch on the primary checkout when clean.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Detaches a registered worktree from its exact expected branch and HEAD without deleting directories or changing branch refs. Requires clean tracked and untracked state; ignored files are preserved. Never creates a worktree. Next: inspect_workspace_git with the source and target roots; git_sync_branch on the primary checkout when clean.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "pattern": "^\\.worktrees\\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "type": "string"
+        },
+        "expectedBranch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedSourceHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "expectedWorktreeHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "destination",
+        "expectedSourceHeadSha",
+        "expectedWorktreeHeadSha",
+        "expectedBranch"
+      ],
+      "type": "object"
+    },
+    "name": "git_detach_worktree",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "pattern": "^\\.worktrees\\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "type": "string"
+        },
+        "detached": {
+          "const": true,
+          "type": "boolean"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "previousBranch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sourceHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "destination",
+        "sourceHeadSha",
+        "headSha",
+        "previousBranch",
+        "detached"
+      ],
+      "type": "object"
+    },
+    "title": "Release a branch from an existing Git worktree"
+  },
+  {
+    "_meta": {
+      "io.github.ifael/next-step": "record the returned stash SHA; inspect_workspace_git to confirm cleanliness. Never automatically pop or drop a stash.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Creates one native Git stash for the exact complete inventory of regular changed files, including explicit untracked files. Requires expected HEAD, branch, index tree, previous stash SHA (null if absent), status and SHA-256 of each file (null only for deleted files). Respects workspace write policy; never includes ignored files, pops, drops, pushes or creates worktrees. Stop concurrent writers before use. Next: record the returned stash SHA; inspect_workspace_git to confirm cleanliness. Never automatically pop or drop a stash.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedBranch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "expectedIndexTreeSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "expectedStashSha": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expectedSha256": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "path": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  " M",
+                  "M ",
+                  "MM",
+                  "A ",
+                  "AM",
+                  "??",
+                  " D",
+                  "D ",
+                  "MD",
+                  "AD"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "expectedSha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "expectedHeadSha",
+        "expectedBranch",
+        "expectedIndexTreeSha",
+        "expectedStashSha",
+        "files"
+      ],
+      "type": "object"
+    },
+    "name": "git_stash_paths",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "previousStashSha": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "stashSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "branch",
+        "headSha",
+        "previousStashSha",
+        "stashSha",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "title": "Preserve explicit Git changes in a local stash"
   },
   {
     "_meta": {
@@ -14336,6 +15068,154 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "type": "object"
     },
     "title": "Run or reconcile guarded release workflow"
+  },
+  {
+    "_meta": {
+      "io.github.ifael/next-step": "mode=reconcile with the same runId, expectedHeadSha, expectedAttempt and operationId until attempt 2 completes. Never POST again; inspect failed jobs if attempt 2 fails.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "One bounded retry of a completed failed first attempt of iFael/mcp-access-stack PR CI (.github/workflows/ci.yml). Requires runId, exact head SHA, expectedAttempt=1 and stable operationId. Uses GitHub rerun-failed-jobs (failed jobs and dependents only). Never dispatches deploy/release or retries an uncertain POST. Do not rerun concurrently from another client. Reconcile with the same identifiers until attempt 2 is observed and completed; an accepted POST is not success. Next: mode=reconcile with the same runId, expectedHeadSha, expectedAttempt and operationId until attempt 2 completes. Never POST again; inspect failed jobs if attempt 2 fails.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedAttempt": {
+          "const": 1,
+          "type": "number"
+        },
+        "expectedHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "rerun",
+            "reconcile"
+          ],
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "runId",
+        "expectedHeadSha",
+        "expectedAttempt",
+        "operationId",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "name": "github_rerun_failed_jobs",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedAttempt": {
+          "const": 1,
+          "type": "number"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "observedAttempt": {
+          "const": 2,
+          "type": "number"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "submitted",
+            "outcome_unknown",
+            "observed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operationId",
+        "runId",
+        "headSha",
+        "expectedAttempt"
+      ],
+      "type": "object"
+    },
+    "title": "Rerun only failed GitHub PR CI jobs"
   },
   {
     "_meta": {
@@ -30668,6 +31548,76 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "inspect first; grant once with the observed policy SHA-256 and operationId, then inspect again to confirm effective permission for tooling/smoke/browser/editor-fixtures before workspace_install_dependencies.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Oracle owner-only fixed opt-in for tooling/smoke/browser/editor-fixtures in mcp-access-stack. Inspect first, then grant with policy SHA-256 CAS and operationId. Preserves existing permissions; backup, audit and in-process reload. Cannot choose a path or grant arbitrary shell execution. Next: inspect first; grant once with the observed policy SHA-256 and operationId, then inspect again to confirm effective permission for tooling/smoke/browser/editor-fixtures before workspace_install_dependencies.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "oracle_grant_dependency_install_permission",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "backupCreated": {
+          "type": "boolean"
+        },
+        "capability": {
+          "const": "dependency.install.editor-fixtures",
+          "type": "string"
+        },
+        "effective": {
+          "type": "boolean"
+        },
+        "policySha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "not_granted",
+            "granted",
+            "already_granted"
+          ],
+          "type": "string"
+        },
+        "workspaceId": {
+          "const": "mcp-access-stack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "workspaceId",
+        "capability",
+        "policySha256",
+        "effective",
+        "backupCreated"
+      ],
+      "type": "object"
+    },
+    "title": "Inspect or grant Oracle editor fixture dependency permission"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "read subsequent pages to collect the verified off-host archive; never confuse disaster recovery evidence with live Oracle memory.",
       "securitySchemes": [
         {
@@ -31614,15 +32564,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "214cb5ddf906f322744e1b436f9c47f7c855100b283e7757f938d66423690414",
-  "serverVersion": "0.4.0-catalog.c214cb5ddf906.s811b25e3744b",
-  "toolCount": 135,
-  "toolSetRevision": "811b25e3744b41d7f968d9c7883a5a109e5eede784aac4730c01b31b9117e059"
+  "contractRevision": "a8d9f503ec66a73b543a9e82a2f269e7c32a1996ec95825e808ef0a918b37054",
+  "serverVersion": "0.4.0-catalog.ca8d9f503ec66.s5653413c1fc2",
+  "toolCount": 140,
+  "toolSetRevision": "5653413c1fc2854283293cf7e8c2ed94bc6b2a5381d5b1aa430cc52238b7a465"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c214cb5ddf906.s811b25e3744b"
+  "version": "0.4.0-catalog.ca8d9f503ec66.s5653413c1fc2"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

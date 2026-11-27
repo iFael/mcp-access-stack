@@ -25,6 +25,7 @@ import type { ResolvedWorkspace } from "../internal-types.js";
 import { collectAuthorizedFiles, listAuthorizedWorkspaceRoots } from "./discovery.js";
 import { searchAuthorizedFiles } from "./search.js";
 import { PathSecurity } from "../path-security.js";
+import { deleteWindowsFile } from "./windows-delete.js";
 import {
   atomicWriteBuffer,
   countOccurrences,
@@ -178,9 +179,9 @@ export class FileService {
     const authorized = await security.authorizeExisting(input.path, "file");
     security.authorizeWriteLogical(authorized.canonicalRelativePath);
 
-    // Linux can anchor a staging rename to an opened parent directory via procfs.
-    // Other platforms remain fail-closed until they have an equivalent primitive.
-    if (input.dryRun !== true && (process.platform !== "linux" ||
+    // Linux pins staging via procfs; Windows uses native handle disposition.
+    // All other platforms remain fail-closed.
+    if (input.dryRun !== true && process.platform !== "win32" && (process.platform !== "linux" ||
       constants.O_DIRECTORY === undefined || constants.O_NOFOLLOW === undefined)) {
       throw new AppError("PERMISSION_DENIED", "Safe file deletion is unavailable on this platform.");
     }
@@ -198,8 +199,18 @@ export class FileService {
     if (!initial.isFile() || initial.isSymbolicLink()) {
       throw new AppError("NOT_A_FILE", "Deletion requires an existing regular file.");
     }
-    if (initial.size > workspace.limits.maxFileBytes) {
-      throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace file-size limit.");
+    const maxDeleteFileBytes = workspace.limits.maxDeleteFileBytes ?? workspace.limits.maxFileBytes;
+    if (initial.size > maxDeleteFileBytes) {
+      throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace deletion-size limit.");
+    }
+    if (input.dryRun !== true && process.platform === "win32") {
+      // Open the original path, not a resolved alias. The native helper pins
+      // every ancestor and checks each handle against the authorized canonical
+      // chain (including expansion of ordinary Windows short names).
+      const currentHash = input.expectedSha256.toLowerCase();
+      await deleteWindowsFile(authorized.absolutePath, authorized.canonicalPath, currentHash,
+        Math.min(maxDeleteFileBytes, 64 * 1024 * 1024));
+      return { path: logicalPath, sha256Before: currentHash, deleted: true, dryRun: false };
     }
     // Read through the opened descriptor, not by reopening the pathname.
     // This does not authorize destructive deletion; it only narrows the
@@ -211,7 +222,7 @@ export class FileService {
         other.isFile() && !other.isSymbolicLink() &&
         other.dev === opened.dev && other.ino === opened.ino &&
         other.size === opened.size && other.mtimeMs === opened.mtimeMs;
-      if (!sameIdentity(initial) || opened.size > workspace.limits.maxFileBytes) {
+      if (!sameIdentity(initial) || opened.size > maxDeleteFileBytes) {
         throw new AppError("INVALID_ARGUMENT", "Opened file identity changed during deletion dry-run.");
       }
       const openedPath = await realpath(authorized.absolutePath);
@@ -221,7 +232,7 @@ export class FileService {
       if (!stillAuthorized || !sameIdentity(await lstat(authorized.absolutePath))) {
         throw new AppError("INVALID_ARGUMENT", "Deletion dry-run target was redirected.");
       }
-      const currentHash = hashBuffer(await handle.readFile());
+      const currentHash = await hashDeletionTarget(handle, opened.size);
       const latest = await handle.stat();
       if (!sameIdentity(latest) || !sameIdentity(await lstat(authorized.absolutePath))) {
         throw new AppError("INVALID_ARGUMENT", "File identity changed during deletion dry-run.");
@@ -278,7 +289,9 @@ export class FileService {
           moved = true;
           if (!sameIdentity(await lstat(staged)) ||
               !sameIdentity(await handle.stat()) ||
-              hashBuffer(await readFile(staged)) !== currentHash ||
+              await hashDeletionTarget(handle, opened.size) !== currentHash ||
+              !sameIdentity(await handle.stat()) ||
+              !sameIdentity(await lstat(staged)) ||
               await realpath(pinnedParent) !== parentPath) {
             throw new AppError("INVALID_ARGUMENT", "Staged inode is not the authorized file.");
           }
@@ -369,4 +382,24 @@ export class FileService {
       dryRun,
     };
   }
+}
+
+// Positional reads allow the same validated descriptor to be hashed again after
+// the pinned rename. Read at most the observed size plus one EOF probe.
+async function hashDeletionTarget(handle: FileHandle, size: number): Promise<string> {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (position < size) {
+    const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, size - position), position);
+    if (bytesRead === 0) {
+      throw new AppError("INVALID_ARGUMENT", "File size changed during deletion validation.");
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  if ((await handle.read(buffer, 0, 1, position)).bytesRead !== 0) {
+    throw new AppError("INVALID_ARGUMENT", "File size changed during deletion validation.");
+  }
+  return hash.digest("hex");
 }

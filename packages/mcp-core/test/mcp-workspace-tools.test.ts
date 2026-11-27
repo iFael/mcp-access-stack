@@ -398,6 +398,11 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async workspaceInstallDependencies(input: import("@vs-code-gpt/shared").WorkspaceDependencyInstallInput): Promise<StartBackgroundTaskResult> {
+    this.calls.push("workspaceInstallDependencies");
+    return { status: "background_task_started", task: { ...backgroundTask, id: input.operationId, workspaceId: input.workspaceId, cwd: input.root } };
+  }
+
   async startBackgroundTask(
     input: StartBackgroundTaskInput,
     context: OperationContext = {},
@@ -686,6 +691,18 @@ describe("registerWorkspaceTools", () => {
       status: "bootstrap_required", bootstrapPresent: false,
     });
     expect(executor.calls).toEqual(["oracleDiskAuditProvision"]);
+  });
+
+  it("routes only strict dependency capability inputs to the typed executor", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerWorkspaceTools(server, executor, { includeTools: ["workspace_install_dependencies"], securitySchemes: [{ type: "noauth" }] });
+    const tool = registeredTools(server).workspace_install_dependencies!;
+    const input = { workspaceId: "ws", root: "fixtures/editors", operationId: backgroundTask.id, action: "resolve", expectedManifestSha256: "a".repeat(64), expectedLockSha256: null };
+    const extra = { signal: new AbortController().signal };
+    expect((await tool.handler(input, extra)).structuredContent).toMatchObject({ status: "background_task_started", task: { id: input.operationId, cwd: input.root } });
+    expect((await tool.handler({ ...input, command: "arbitrary" }, extra)).isError).toBe(true);
+    expect(executor.calls).toEqual(["workspaceInstallDependencies"]);
   });
 
   it("exposes APT maintenance as a typed, explicit privileged operation", async () => {
@@ -1885,6 +1902,16 @@ class MockSourceControlExecutor {
     return { root: input.root ?? ".", destination: input.destination, sourceHeadSha: input.expectedSourceHeadSha,
       removedWorktreeHeadSha: input.expectedWorktreeHeadSha, removed: true as const };
   }
+  async detachWorktree(input: any, context?: unknown) {
+    this.record("detachWorktree", input, context);
+    return { root: input.root ?? ".", destination: input.destination, sourceHeadSha: input.expectedSourceHeadSha,
+      headSha: input.expectedWorktreeHeadSha, previousBranch: input.expectedBranch, detached: true as const };
+  }
+  async stashPaths(input: any, context?: unknown) {
+    this.record("stashPaths", input, context);
+    return { root: input.root ?? ".", branch: input.expectedBranch, headSha: input.expectedHeadSha,
+      previousStashSha: input.expectedStashSha, stashSha: sourceControlShaB, paths: input.files.map((file: { path: string }) => file.path) };
+  }
   async stagePaths(input: any, context?: unknown) {
     this.record("stagePaths", input, context);
     if (this.stageError) throw this.stageError;
@@ -2037,6 +2064,8 @@ const sourceControlCases = [
   ["git_create_branch", "createBranch", { workspaceId: "ws", branch: "feature/task7", expectedHeadSha: sourceControlShaA }],
   ["git_create_worktree", "createWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedHeadSha: sourceControlShaA, expectedRemoteSha: sourceControlShaB }],
   ["git_remove_worktree", "removeWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedSourceHeadSha: sourceControlShaA, expectedWorktreeHeadSha: sourceControlShaB }],
+  ["git_detach_worktree", "detachWorktree", { workspaceId: "ws", destination: ".worktrees/clean-main", expectedSourceHeadSha: sourceControlShaA, expectedWorktreeHeadSha: sourceControlShaB, expectedBranch: "main" }],
+  ["git_stash_paths", "stashPaths", { workspaceId: "ws", expectedHeadSha: sourceControlShaA, expectedBranch: "main", expectedIndexTreeSha: sourceControlShaB, expectedStashSha: null, files: [{ path: "a.txt", status: " M", expectedSha256: "a".repeat(64) }] }],
   ["git_stage_paths", "stagePaths", { workspaceId: "ws", paths: ["a.txt"] }],
   ["git_unstage_paths", "unstagePaths", { workspaceId: "ws", paths: ["a.txt"], expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
   ["git_commit", "commit", { workspaceId: "ws", message: "typed", expectedHeadSha: sourceControlShaA, expectedIndexTreeSha: sourceControlShaB }],
@@ -2068,6 +2097,8 @@ const expectedSourceControlAnnotations = {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_remove_worktree: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  git_detach_worktree: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  git_stash_paths: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2079,6 +2110,7 @@ const expectedSourceControlAnnotations = {
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_workflow_operation: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_rerun_failed_jobs: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -2094,11 +2126,13 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-six source-control tools in the workspace surface", () => {
+  it("publishes twenty-nine source-control tools in the workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_create_worktree",
       "git_remove_worktree",
+      "git_detach_worktree",
+      "git_stash_paths",
       "git_stage_paths",
       "git_unstage_paths",
       "git_commit",
@@ -2110,6 +2144,7 @@ describe("registerSourceControlTools", () => {
       "github_get_repository",
       "github_get_commit_checks",
       "github_workflow_operation",
+      "github_rerun_failed_jobs",
       "github_materialize_actions_artifact",
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
@@ -2123,10 +2158,12 @@ describe("registerSourceControlTools", () => {
       "github_read",
       "github_issue_write",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(26);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(70);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(70);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(29);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(75);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(75);
     expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
+    expect(WORKSPACE_TOOL_NAMES).toContain("workspace_install_dependencies");
+    expect(WORKSPACE_TOOL_NAMES).toContain("oracle_grant_dependency_install_permission");
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{
@@ -2149,6 +2186,23 @@ describe("registerSourceControlTools", () => {
     await tool.handler(input as never,{} as never);
     expect(operation).toHaveBeenCalledTimes(1);
     expect(operation.mock.calls[0]?.[0]).toEqual(input);
+  });
+
+  it("routes selective CI rerun through the typed executor and rejects a second retry", async () => {
+    const input = { workspaceId: "ws", owner: "iFael", repository: "mcp-access-stack",
+      runId: 123, expectedHeadSha: sourceControlShaA, expectedAttempt: 1, mode: "rerun",
+      operationId: "11111111-2222-4333-8444-555555555555" };
+    const operation = jest.fn(async (_input: unknown) => ({
+      status: "submitted" as const, runId: 123, headSha: sourceControlShaA,
+      expectedAttempt: 1 as const, operationId: input.operationId,
+    }));
+    const executor = Object.assign(new MockSourceControlExecutor(), { githubRerunFailedJobs: operation });
+    const server = new McpServer({name: "test", version: "0.0.0"}, {capabilities: {tools: {}}});
+    registerSourceControlTools(server, executor, {includeTools: ["github_rerun_failed_jobs"], securitySchemes: [{type: "noauth"}]});
+    const tool = (server as unknown as {_registeredTools: Record<string, RegisteredTool>})._registeredTools.github_rerun_failed_jobs!;
+    expect((await tool.handler(input as never, {} as never)).structuredContent).toMatchObject({status: "submitted", runId: 123});
+    expect((await tool.handler({...input, expectedAttempt: 2} as never, {} as never)).isError).toBe(true);
+    expect(operation).toHaveBeenCalledTimes(1);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

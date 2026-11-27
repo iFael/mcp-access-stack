@@ -10,8 +10,8 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(135);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(135);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(140);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(140);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).not.toContain("browser_plan");
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
@@ -24,18 +24,23 @@ describe("MCP tool catalog identity", () => {
         "oracle_disk_audit",
         "oracle_disk_audit_provision",
         "oracle_apt_maintenance",
+        "workspace_install_dependencies",
         "service_get_status",
         "service_start",
         "prune_releases",
         "git_publish_tag",
         "git_remove_worktree",
+        "git_detach_worktree",
+        "git_stash_paths",
         "github_materialize_actions_artifact",
+        "github_rerun_failed_jobs",
         "delete_file",
         "get_operation_guide",
         "github_read",
         "github_issue_write",
         "oracle_grant_github_ready_permission",
         "oracle_grant_worktree_permission",
+        "oracle_grant_dependency_install_permission",
         "http_get",
       ]),
     );

@@ -2,7 +2,7 @@ import { chmod, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { applyPolicyFile, validatePolicyFile, ReadyReviewPolicyGrant, WorktreePolicyGrant } from "../../../src/policy-deployment.js";
+import { applyPolicyFile, validatePolicyFile, ReadyReviewPolicyGrant, WorktreePolicyGrant, DependencyInstallPolicyGrant } from "../../../src/policy-deployment.js";
 import { createFixture, makeWorkspacePolicy, writePolicy } from "../../support/helpers.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -232,6 +232,79 @@ describe("narrow Oracle Git worktree policy administration", () => {
     await expect(admin.inspect()).resolves.toMatchObject({ status: "granted", effective: false });
     recover = true;
     await expect(admin.grant(op)).resolves.toMatchObject({ status: "already_granted", effective: true });
+  });
+});
+
+describe("fixed Oracle editor dependency grant", () => {
+  const root = "tooling/smoke/browser/editor-fixtures";
+  async function setup(overrides: Record<string, unknown> = {}) {
+    const fixture = await createFixture();
+    cleanups.push(() => fixture.cleanup());
+    const policy = {
+      ...makeWorkspacePolicy(fixture.workspacePath, { profile: "full-repo-write", confirmationMode: "trusted-workspace" }),
+      id: "mcp-access-stack", allowWrites: ["."], allowShell: ["."],
+      sourceControl: { capabilities: ["git.branch.write"], accountOwners: [], additionalRepositories: [] },
+      dependencyInstallRoots: ["other/previously-approved"], ...overrides,
+    };
+    await writeFile(fixture.policyPath, JSON.stringify({version: 1, workspaces: [policy]}, null, 2), "utf8");
+    await chmod(fixture.policyPath, 0o600);
+    const prior = await readFile(fixture.policyPath);
+    const audit = path.join(fixture.basePath, "dependency-grant.jsonl");
+    return { fixture, prior, audit, op: {expectedPolicySha256: createHash("sha256").update(prior).digest("hex"),
+      operationId: randomUUID(), actor: "edge-owner"} };
+  }
+
+  it("adds only the fixed directory, preserving prior roots, policy fields and backup; replays without rewriting", async () => {
+    const {fixture, prior, audit, op} = await setup();
+    let effective = false;
+    let reloads = 0;
+    const admin = new DependencyInstallPolicyGrant(fixture.policyPath, audit, () => effective, async () => {
+      effective = true; reloads++;
+    });
+    expect(await admin.inspect()).toMatchObject({status: "not_granted", effective: false});
+    expect(await admin.grant(op)).toMatchObject({status: "granted", effective: true, backupCreated: true,
+      capability: "dependency.install.editor-fixtures"});
+    const expected = JSON.parse(prior.toString("utf8"));
+    expected.workspaces[0].dependencyInstallRoots.push(root);
+    expect(JSON.parse(await readFile(fixture.policyPath, "utf8"))).toEqual(expected);
+    expect(await readFile(fixture.policyPath + ".backup-dependency-install-" + op.operationId + ".json")).toEqual(prior);
+    expect(await admin.grant(op)).toMatchObject({status: "already_granted", effective: true, backupCreated: false});
+    expect(reloads).toBe(1);
+    const events = (await readFile(audit, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(events.map(event => event.event)).toEqual(["oracle_dependency-install_grant_requested", "oracle_dependency-install_grant_applied"]);
+    expect(JSON.stringify(events)).not.toContain("edge-owner");
+  });
+
+  it.each([
+    {permissionProfile: "full-repo-readonly"},
+    {confirmationMode: "standard"},
+    {allowWrites: ["unrelated"]},
+    {allowShell: ["unrelated"]},
+    {sourceControl: {capabilities: [], accountOwners: [], additionalRepositories: []}},
+  ])("refuses insufficient existing policy %j without changing it", async (overrides) => {
+    const {fixture, prior, audit, op} = await setup(overrides);
+    const admin = new DependencyInstallPolicyGrant(fixture.policyPath, audit, () => false, async () => undefined);
+    await expect(admin.grant(op)).rejects.toThrow();
+    expect(await readFile(fixture.policyPath)).toEqual(prior);
+    await expect(stat(audit)).rejects.toMatchObject({code: "ENOENT"});
+  });
+
+  it("refuses stale CAS and reconciles a failed reload without another policy mutation", async () => {
+    const {fixture, prior, audit, op} = await setup();
+    let effective = false;
+    let recover = false;
+    const admin = new DependencyInstallPolicyGrant(fixture.policyPath, audit, () => effective, async () => {
+      if (!recover) throw new Error("reload failed");
+      effective = true;
+    });
+    await expect(admin.grant({...op, expectedPolicySha256: "f".repeat(64)})).rejects.toMatchObject({code: "GIT_HEAD_MISMATCH"});
+    expect(await readFile(fixture.policyPath)).toEqual(prior);
+    await expect(admin.grant(op)).rejects.toThrow("reload failed");
+    const applied = await readFile(fixture.policyPath);
+    expect(await admin.inspect()).toMatchObject({status: "granted", effective: false});
+    recover = true;
+    expect(await admin.grant(op)).toMatchObject({status: "already_granted", effective: true});
+    expect(await readFile(fixture.policyPath)).toEqual(applied);
   });
 });
 

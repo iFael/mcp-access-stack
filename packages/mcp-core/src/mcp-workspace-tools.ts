@@ -91,6 +91,7 @@ import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-p
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
 import { oracleAptMaintenanceInputSchema, oracleAptMaintenanceResultSchema } from "./oracle-apt-contracts.js";
+import { workspaceDependencyInstallInputSchema } from "./dependency-install-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema, mcpFluxoInputSchema, mcpFluxoResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
@@ -111,6 +112,10 @@ import {
   gitCreateWorktreeResultSchema,
   gitRemoveWorktreeInputSchema,
   gitRemoveWorktreeResultSchema,
+  gitDetachWorktreeInputSchema,
+  gitDetachWorktreeResultSchema,
+  gitStashPathsInputSchema,
+  gitStashPathsResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -137,6 +142,8 @@ import {
   GITHUB_OPERATION_WORKFLOWS,
   githubWorkflowOperationInputSchema,
   githubWorkflowOperationResultSchema,
+  githubRerunFailedJobsInputSchema,
+  githubRerunFailedJobsResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -224,6 +231,8 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "git_create_branch",
   "git_create_worktree",
   "git_remove_worktree",
+  "git_detach_worktree",
+  "git_stash_paths",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -235,6 +244,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "github_get_repository",
   "github_get_commit_checks",
   "github_workflow_operation",
+  "github_rerun_failed_jobs",
   "github_materialize_actions_artifact",
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
@@ -273,6 +283,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "oracle_disk_audit",
   "oracle_disk_audit_provision",
   "oracle_apt_maintenance",
+  "workspace_install_dependencies",
   "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
@@ -294,6 +305,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "http_get",
   "oracle_grant_github_ready_permission",
   "oracle_grant_worktree_permission",
+  "oracle_grant_dependency_install_permission",
 ] as const;
 
 type BaseWorkspaceToolName = (typeof BASE_WORKSPACE_TOOL_NAMES)[number];
@@ -1658,6 +1670,27 @@ export function registerWorkspaceTools(
     );
   }
 
+  if (shouldInclude("workspace_install_dependencies", include)) {
+    server.registerTool("workspace_install_dependencies", {
+      title: "Resolve or install isolated workspace npm dependencies",
+      description: "Linux trusted-workspace only; requires an exact dependencyInstallRoots policy opt-in, private isolated manifest with exact versions, and SHA-256 CAS. Resolve creates only a new lock; install requires the exact lock and absent node_modules. Uses fixed public npm registry, disables scripts and non-registry dependencies, never overwrites existing dependencies. Starts one persisted task with the caller's operationId; reconcile the same ID with wait_background_task. No arbitrary commands or package arguments.",
+      inputSchema: workspaceDependencyInstallInputSchema,
+      outputSchema: startBackgroundTaskMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        if (!executor.workspaceInstallDependencies) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Typed dependency installation is unavailable.");
+        const structuredContent = startBackgroundTaskResultSchema.parse(
+          await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
+            (context) => executor.workspaceInstallDependencies!(workspaceDependencyInstallInputSchema.parse(input), context)));
+        return { content: [{ type: "text", text: "Bounded dependency task accepted; reconcile its task ID." }], structuredContent };
+      } catch (error) { return toolError(error); }
+    });
+  }
+
   if (shouldInclude("oracle_apt_maintenance", include)) {
     server.registerTool(
       "oracle_apt_maintenance",
@@ -2925,6 +2958,8 @@ const sourceControlMcpSchemas = {
       expectedSourceHeadSha: mcpSourceControlSha,
       expectedWorktreeHeadSha: mcpSourceControlSha,
       pruneGeneratedArtifacts: z.boolean().optional(),
+      pruneMissingRegistration: z.boolean().optional(),
+      pruneIgnoredFiles: z.array(z.object({ path: mcpSourceControlPath, expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict()).min(1).max(200).optional(),
     }).strict(),
     output: z.object({
       root: mcpSourceControlRoot,
@@ -2932,6 +2967,48 @@ const sourceControlMcpSchemas = {
       sourceHeadSha: mcpSourceControlSha,
       removedWorktreeHeadSha: mcpSourceControlSha,
       removed: z.literal(true),
+      removedMissingRegistration: z.literal(true).optional(),
+    }).strict(),
+  },
+  git_detach_worktree: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      destination: gitDetachWorktreeInputSchema.shape.destination,
+      expectedSourceHeadSha: mcpSourceControlSha,
+      expectedWorktreeHeadSha: mcpSourceControlSha,
+      expectedBranch: mcpSourceControlBranch,
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      destination: gitDetachWorktreeInputSchema.shape.destination,
+      sourceHeadSha: mcpSourceControlSha,
+      headSha: mcpSourceControlSha,
+      previousBranch: mcpSourceControlBranch,
+      detached: z.literal(true),
+    }).strict(),
+  },
+  git_stash_paths: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId,
+      root: mcpSourceControlRoot.optional(),
+      expectedHeadSha: mcpSourceControlSha,
+      expectedBranch: mcpSourceControlBranch,
+      expectedIndexTreeSha: mcpSourceControlSha,
+      expectedStashSha: mcpSourceControlSha.nullable(),
+      files: z.array(z.object({
+        path: mcpSourceControlPath,
+        status: z.enum([" M", "M ", "MM", "A ", "AM", "??", " D", "D ", "MD", "AD"]),
+        expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
+      }).strict()).min(1).max(200),
+    }).strict(),
+    output: z.object({
+      root: mcpSourceControlRoot,
+      branch: mcpSourceControlBranch,
+      headSha: mcpSourceControlSha,
+      previousStashSha: mcpSourceControlSha.nullable(),
+      stashSha: mcpSourceControlSha,
+      paths: mcpSourceControlPaths,
     }).strict(),
   },
   git_stage_paths: {
@@ -3058,6 +3135,21 @@ const sourceControlMcpSchemas = {
       commitSha: mcpSourceControlSha,
     }).strict(),
     output: mcpGitHubCommitChecksResult,
+  },
+  github_rerun_failed_jobs: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName,
+      runId: z.number().int().positive(), expectedHeadSha: mcpSourceControlSha,
+      expectedAttempt: z.literal(1), operationId: z.uuid(), mode: z.enum(["rerun", "reconcile"]),
+    }).strict(),
+    output: z.object({
+      status: z.enum(["submitted", "outcome_unknown", "observed"]), operationId: z.uuid(),
+      runId: z.number().int().positive(), headSha: mcpSourceControlSha,
+      expectedAttempt: z.literal(1), observedAttempt: z.literal(2).optional(),
+      state: z.enum(["queued", "in_progress", "completed"]).optional(),
+      conclusion: z.string().nullable().optional(),
+    }).strict().refine(value => githubRerunFailedJobsResultSchema.safeParse(value).success),
   },
   github_workflow_operation: {
     input: z.object({
@@ -3285,6 +3377,8 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   git_create_branch: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
   git_create_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   git_remove_worktree: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+  git_detach_worktree: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+  git_stash_paths: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
   git_stage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_unstage_paths: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
   git_commit: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
@@ -3296,6 +3390,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_rerun_failed_jobs: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_workflow_operation: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
@@ -3373,7 +3468,7 @@ export function registerSourceControlTools(
       "git_remove_worktree",
       {
         title: "Remove clean Git worktree",
-        description: "Removes a registered worktree with exact source/target SHA checks. Opt-in pruneGeneratedArtifacts removes only known ignored build caches before non-forced removal; preserves other ignored files, local changes and branches.",
+        description: "Removes a registered worktree with exact source/target SHA checks and no force. Opt-in pruneGeneratedArtifacts removes known build caches; pruneIgnoredFiles requires exact SHA-256 approval for every remaining ignored regular file and protects runtime and nested worktrees. pruneMissingRegistration removes only an explicitly absent, unlocked, prunable checkout registration. Preserves local changes and branches. Stop external writers before use.",
         inputSchema: sourceControlMcpSchemas.git_remove_worktree.input,
         outputSchema: sourceControlMcpSchemas.git_remove_worktree.output,
         annotations: sourceControlAnnotations.git_remove_worktree,
@@ -3388,6 +3483,56 @@ export function registerSourceControlTools(
             await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.removeWorktree(parsed, context)),
           );
           return sourceControlSuccess("Clean Git worktree removed.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_detach_worktree", include)) {
+    server.registerTool(
+      "git_detach_worktree",
+      {
+        title: "Release a branch from an existing Git worktree",
+        description: "Detaches a registered worktree from its exact expected branch and HEAD without deleting directories or changing branch refs. Requires clean tracked and untracked state; ignored files are preserved. Never creates a worktree.",
+        inputSchema: sourceControlMcpSchemas.git_detach_worktree.input,
+        outputSchema: sourceControlMcpSchemas.git_detach_worktree.output,
+        annotations: sourceControlAnnotations.git_detach_worktree,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitDetachWorktreeInputSchema.parse(input);
+          const structuredContent = gitDetachWorktreeResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.detachWorktree(parsed, context)),
+          );
+          return sourceControlSuccess("Worktree branch released without removing the checkout.", structuredContent);
+        } catch (error) { return toolError(error); }
+      },
+    );
+  }
+
+  if (shouldInclude("git_stash_paths", include)) {
+    server.registerTool(
+      "git_stash_paths",
+      {
+        title: "Preserve explicit Git changes in a local stash",
+        description: "Creates one native Git stash for the exact complete inventory of regular changed files, including explicit untracked files. Requires expected HEAD, branch, index tree, previous stash SHA (null if absent), status and SHA-256 of each file (null only for deleted files). Respects workspace write policy; never includes ignored files, pops, drops, pushes or creates worktrees. Stop concurrent writers before use.",
+        inputSchema: sourceControlMcpSchemas.git_stash_paths.input,
+        outputSchema: sourceControlMcpSchemas.git_stash_paths.output,
+        annotations: sourceControlAnnotations.git_stash_paths,
+        _meta: meta,
+      },
+      async (input, extra) => {
+        const authError = validateAuthentication(options, extra.authInfo);
+        if (authError) return authError;
+        try {
+          const parsed = gitStashPathsInputSchema.parse(input);
+          const structuredContent = gitStashPathsResultSchema.parse(
+            await withToolOperationContext(options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS, (context) => executor.stashPaths(parsed, context)),
+          );
+          return sourceControlSuccess("Explicit Git changes preserved in a local stash.", structuredContent);
         } catch (error) { return toolError(error); }
       },
     );
@@ -3777,6 +3922,28 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_rerun_failed_jobs", include)) {
+    server.registerTool("github_rerun_failed_jobs", {
+      title: "Rerun only failed GitHub PR CI jobs",
+      description: "One bounded retry of a completed failed first attempt of iFael/mcp-access-stack PR CI (.github/workflows/ci.yml). Requires runId, exact head SHA, expectedAttempt=1 and stable operationId. Uses GitHub rerun-failed-jobs (failed jobs and dependents only). Never dispatches deploy/release or retries an uncertain POST. Do not rerun concurrently from another client. Reconcile with the same identifiers until attempt 2 is observed and completed; an accepted POST is not success.",
+      inputSchema: sourceControlMcpSchemas.github_rerun_failed_jobs.input,
+      outputSchema: sourceControlMcpSchemas.github_rerun_failed_jobs.output,
+      annotations: sourceControlAnnotations.github_rerun_failed_jobs,
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        if (!executor.githubRerunFailedJobs) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Typed CI rerun unavailable.");
+        const parsed = githubRerunFailedJobsInputSchema.parse(input);
+        const result = githubRerunFailedJobsResultSchema.parse(await withToolOperationContext(
+          options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+          context => executor.githubRerunFailedJobs!(parsed, context)));
+        return sourceControlSuccess("Selective CI rerun status.", result);
+      } catch (error) { return toolError(error); }
+    });
+  }
+
   if (shouldInclude("github_materialize_actions_artifact", include)) {
     server.registerTool("github_materialize_actions_artifact", {
       title: "Materialize pinned GitHub Actions artifact",
@@ -4133,6 +4300,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   oracleDiskAudit: "oracle_disk_audit",
   oracleDiskAuditProvision: "oracle_disk_audit_provision",
   oracleAptMaintenance: "oracle_apt_maintenance",
+  workspaceInstallDependencies: "workspace_install_dependencies",
   oracleReleaseAdvance:"release_orchestrator",
   mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",
@@ -4154,6 +4322,8 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   gitCreateBranch: "git_create_branch",
   gitCreateWorktree: "git_create_worktree",
   gitRemoveWorktree: "git_remove_worktree",
+  gitDetachWorktree: "git_detach_worktree",
+  gitStashPaths: "git_stash_paths",
   gitStagePaths: "git_stage_paths",
   gitUnstagePaths: "git_unstage_paths",
   gitCommit: "git_commit",
@@ -4164,6 +4334,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   githubGetRepository: "github_get_repository",
   githubGetCommitChecks: "github_get_commit_checks",
   githubWorkflowOperation: "github_workflow_operation",
+  githubRerunFailedJobs: "github_rerun_failed_jobs",
   githubMaterializeActionsArtifact: "github_materialize_actions_artifact",
   githubStartCommitChecksWatch: "github_start_commit_checks_watch",
   githubGetCommitChecksWatches: "github_get_commit_checks_watches",

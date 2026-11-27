@@ -1,12 +1,17 @@
-import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, realpath, rm, rmdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import path from "node:path";
 import {
   AppError,
   assertTypedGitBranchMutationAllowed,
+  gitPathSchema,
   gitCommitInputSchema,
   gitCreateBranchInputSchema,
   gitCreateWorktreeInputSchema,
   gitRemoveWorktreeInputSchema,
+  gitDetachWorktreeInputSchema,
+  gitStashPathsInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -21,6 +26,10 @@ import {
   type GitCreateWorktreeResult,
   type GitRemoveWorktreeInput,
   type GitRemoveWorktreeResult,
+  type GitDetachWorktreeInput,
+  type GitDetachWorktreeResult,
+  type GitStashPathsInput,
+  type GitStashPathsResult,
   type GitMergeBranchInput,
   type GitMergeBranchResult,
   type GitSyncBranchInput,
@@ -37,6 +46,7 @@ import {
   type OperationContext,
 } from "@vs-code-gpt/shared";
 import { authorizeGitMutationPath, authorizeGitOperationalRoot } from "../git/operational-root.js";
+import { FileService } from "../filesystem/service.js";
 import { isContained, PathSecurity } from "../path-security.js";
 import type { ResolvedWorkspace } from "../internal-types.js";
 import { WorkspaceRegistry } from "../workspace-registry.js";
@@ -169,44 +179,24 @@ export class GitRepositoryService implements GitRepositoryExecutor {
     assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha, sourceHead,
       "Source HEAD changed before worktree removal.");
 
-    const parentLogical = repository.logicalRoot === "." ? ".worktrees" : repository.logicalRoot + "/.worktrees";
-    const parent = await repository.security.authorizeExisting(parentLogical, "directory", true);
-    if (!samePath(parent.canonicalPath, path.join(repository.repositoryRoot, ".worktrees")) ||
-        !isContained(repository.repositoryRoot, parent.canonicalPath)) {
-      throw new AppError("PATH_OUTSIDE_WORKSPACE", "Worktree parent must be within the selected repository.");
+    const missing = parsed.pruneMissingRegistration === true;
+    const destination = missing
+      ? await this.resolveMissingWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, context?.signal)
+      : await this.resolveRegisteredWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, context?.signal);
+    const registered = await this.runner.listWorktrees(repository.repositoryRoot, context?.signal);
+    if (registered.some((entry) => !samePath(entry.path, destination) && isContained(destination, entry.path))) {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Cannot remove a checkout containing another registered worktree.");
     }
-    const destination = path.join(parent.canonicalPath, parsed.destination.slice(".worktrees/".length));
-    let targetStat: Awaited<ReturnType<typeof lstat>>;
-    let markerStat: Awaited<ReturnType<typeof lstat>>;
-    try {
-      targetStat = await lstat(destination);
-      markerStat = await lstat(path.join(destination, ".git"));
-    } catch {
-      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree or its Git registration marker is missing.");
-    }
-    if (!targetStat.isDirectory() || targetStat.isSymbolicLink() ||
-        !markerStat.isFile() || markerStat.isSymbolicLink() ||
-        !samePath(await realpath(destination), destination)) {
-      throw new AppError("INVALID_PATH", "Worktree must be a real directory with an intact Git marker.");
-    }
-
-    const registrations = (await this.runner.listWorktrees(repository.repositoryRoot, context?.signal))
-      .filter((entry) => samePath(entry.path, destination));
-    if (registrations.length !== 1 || registrations[0]!.prunable) {
-      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree is missing or prunable; repair it separately before removal.");
-    }
-    assertSha("GIT_HEAD_MISMATCH", parsed.expectedWorktreeHeadSha, registrations[0]!.headSha,
-      "Registered worktree HEAD differs from the expected SHA.");
-    if (!samePath(await this.runner.showTopLevel(destination, context?.signal), destination) ||
-        await this.runner.headSha(destination, context?.signal) !== parsed.expectedWorktreeHeadSha) {
-      throw new AppError("GIT_HEAD_MISMATCH", "Worktree HEAD or Git root changed.");
-    }
-    if (parsed.pruneGeneratedArtifacts &&
-        !(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
-      await this.pruneGeneratedArtifacts(repository.repositoryRoot, destination, parsed.expectedWorktreeHeadSha, context?.signal);
-    }
-    if (!(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
-      throw new AppError("GIT_INDEX_CHANGED", "Worktree contains modified, untracked or ignored files; removal denied.");
+    if (!missing) {
+      if (parsed.pruneIgnoredFiles || (parsed.pruneGeneratedArtifacts &&
+          !(await this.runner.worktreeIsCompletelyClean(destination, context?.signal)))) {
+        await this.pruneWorktreeArtifacts(repository, destination, parsed, context?.signal);
+      }
+      if (!(await this.runner.worktreeIsCompletelyClean(destination, context?.signal))) {
+        throw new AppError("GIT_INDEX_CHANGED", "Worktree contains modified, untracked or ignored files; removal denied.");
+      }
+    } else {
+      await this.resolveMissingWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, context?.signal);
     }
     assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha,
       await this.runner.headSha(repository.repositoryRoot, context?.signal),
@@ -237,25 +227,200 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       sourceHeadSha: sourceHead,
       removedWorktreeHeadSha: parsed.expectedWorktreeHeadSha,
       removed: true,
+      ...(missing ? { removedMissingRegistration: true as const } : {}),
     };
   }
 
-  private async pruneGeneratedArtifacts(source: string, destination: string, expectedHead: string, signal?: AbortSignal): Promise<void> {
-    // Preflight the ENTIRE worktree before deleting any ignored artifact.
+  async detachWorktree(
+    input: GitDetachWorktreeInput,
+    context?: OperationContext,
+  ): Promise<GitDetachWorktreeResult> {
+    const parsed = gitDetachWorktreeInputSchema.parse(input);
+    const signal = context?.signal;
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", signal);
+    const sourceHead = await this.runner.headSha(repository.repositoryRoot, signal);
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha, sourceHead,
+      "Source HEAD changed before worktree detach.");
+    const destination = await this.resolveRegisteredWorktree(
+      repository, parsed.destination, parsed.expectedWorktreeHeadSha, signal);
+    const logicalDestination = repository.logicalRoot === "." ? parsed.destination : repository.logicalRoot + "/" + parsed.destination;
+    await repository.security.authorizeExisting(logicalDestination, "directory", true);
+    const validateTarget = async () => {
+      if (await this.runner.currentBranch(destination, signal) !== parsed.expectedBranch ||
+          await this.runner.branchSha(repository.repositoryRoot, parsed.expectedBranch, signal) !== parsed.expectedWorktreeHeadSha) {
+        throw new AppError("GIT_BRANCH_CONFLICT", "Worktree branch differs from the expected branch.");
+      }
+      if (!(await this.runner.repositoryIsClean(destination, signal))) {
+        throw new AppError("GIT_INDEX_CHANGED", "Worktree contains modified or untracked files; preserve them before detach.");
+      }
+    };
+    await validateTarget();
+    await this.resolveRegisteredWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, signal);
+    assertSha("GIT_HEAD_MISMATCH", sourceHead, await this.runner.headSha(repository.repositoryRoot, signal),
+      "Source HEAD changed during detach preflight.");
+    await validateTarget();
+    try {
+      await this.runner.detachHead(destination, parsed.expectedWorktreeHeadSha, signal);
+      await this.resolveRegisteredWorktree(repository, parsed.destination, parsed.expectedWorktreeHeadSha, signal);
+      if (await this.runner.currentBranch(destination, signal) !== "HEAD" ||
+          await this.runner.branchSha(repository.repositoryRoot, parsed.expectedBranch, signal) !== parsed.expectedWorktreeHeadSha ||
+          await this.runner.headSha(repository.repositoryRoot, signal) !== sourceHead ||
+          !(await this.runner.repositoryIsClean(destination, signal))) {
+        throw new Error("Worktree detach could not be reconciled.");
+      }
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Worktree detach outcome is uncertain; inspect Git metadata before attempting another mutation.");
+    }
+    return { root: repository.logicalRoot, destination: parsed.destination, sourceHeadSha: sourceHead,
+      headSha: parsed.expectedWorktreeHeadSha, previousBranch: parsed.expectedBranch, detached: true };
+  }
+
+  private async resolveRegisteredWorktree(
+    repository: MutationRepositoryContext,
+    relativeDestination: string,
+    expectedWorktreeHeadSha: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const destination = await this.resolveWorktreeDestination(repository, relativeDestination);
+    let targetStat: Awaited<ReturnType<typeof lstat>>;
+    let markerStat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      targetStat = await lstat(destination);
+      markerStat = await lstat(path.join(destination, ".git"));
+    } catch {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree or its Git registration marker is missing.");
+    }
+    if (!targetStat.isDirectory() || targetStat.isSymbolicLink() ||
+        !markerStat.isFile() || markerStat.isSymbolicLink() ||
+        !samePath(await realpath(destination), destination)) {
+      throw new AppError("INVALID_PATH", "Worktree must be a real directory with an intact Git marker.");
+    }
+
+    const registrations = (await this.runner.listWorktrees(repository.repositoryRoot, signal))
+      .filter((entry) => samePath(entry.path, destination));
+    if (registrations.length !== 1 || registrations[0]!.prunable || registrations[0]!.locked) {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Worktree is missing or prunable; repair it separately before mutation.");
+    }
+    assertSha("GIT_HEAD_MISMATCH", expectedWorktreeHeadSha, registrations[0]!.headSha,
+      "Registered worktree HEAD differs from the expected SHA.");
+    if (!samePath(await this.runner.showTopLevel(destination, signal), destination) ||
+        await this.runner.headSha(destination, signal) !== expectedWorktreeHeadSha) {
+      throw new AppError("GIT_HEAD_MISMATCH", "Worktree HEAD or Git root changed.");
+    }
+    return destination;
+  }
+
+  private async resolveWorktreeDestination(repository: MutationRepositoryContext, relativeDestination: string): Promise<string> {
+    const parentLogical = repository.logicalRoot === "." ? ".worktrees" : repository.logicalRoot + "/.worktrees";
+    const parent = await repository.security.authorizeExisting(parentLogical, "directory", true);
+    if (!samePath(parent.canonicalPath, path.join(repository.repositoryRoot, ".worktrees")) ||
+        !isContained(repository.repositoryRoot, parent.canonicalPath)) {
+      throw new AppError("PATH_OUTSIDE_WORKSPACE", "Worktree parent must be within the selected repository.");
+    }
+    const destination = path.join(parent.canonicalPath, relativeDestination.slice(".worktrees/".length));
+    return destination;
+  }
+
+  private async resolveMissingWorktree(repository: MutationRepositoryContext, relativeDestination: string,
+    expectedWorktreeHeadSha: string, signal?: AbortSignal): Promise<string> {
+    const destination = await this.resolveWorktreeDestination(repository, relativeDestination);
+    try {
+      await lstat(destination);
+      throw new AppError("GIT_BRANCH_CONFLICT", "Missing-registration cleanup requires an absent checkout.");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const matches = (await this.runner.listWorktrees(repository.repositoryRoot, signal))
+      .filter((entry) => samePath(entry.path, destination));
+    if (matches.length !== 1 || !matches[0]!.prunable || matches[0]!.locked) {
+      throw new AppError("GIT_BRANCH_CONFLICT", "Expected one unlocked prunable registration.");
+    }
+    assertSha("GIT_HEAD_MISMATCH", expectedWorktreeHeadSha, matches[0]!.headSha,
+      "Missing worktree registration HEAD differs from expected SHA.");
+    return destination;
+  }
+
+  private async pruneWorktreeArtifacts(
+    repository: MutationRepositoryContext, destination: string, parsed: GitRemoveWorktreeInput, signal?: AbortSignal,
+  ): Promise<void> {
+    const source = repository.repositoryRoot;
+    const expectedHead = parsed.expectedWorktreeHeadSha;
     if (!(await this.runner.repositoryIsClean(destination, signal))) {
       throw new AppError("GIT_INDEX_CHANGED", "Modified or untracked worktree content cannot be pruned.");
     }
-    const ignored = await this.runner.listIgnoredPaths(destination, signal);
+    const ignored = (await this.runner.listIgnoredPaths(destination, signal)).sort();
     const roots = new Set<string>();
+    const explicitRoots: string[] = [];
     for (const entry of ignored) {
-      const root = generatedArtifactRoot(entry);
-      if (root === undefined) {
-        throw new AppError("GIT_INDEX_CHANGED", "Ignored worktree content is not an allowlisted generated artifact.");
-      }
-      roots.add(root);
+      const root = parsed.pruneGeneratedArtifacts ? generatedArtifactRoot(entry) : undefined;
+      if (root !== undefined) roots.add(root);
+      else explicitRoots.push(entry.replace(/\/$/u, ""));
     }
-    if (roots.size === 0) {
-      throw new AppError("GIT_INDEX_CHANGED", "Worktree cannot be safely classified for generated-artifact pruning.");
+    const explicit = parsed.pruneIgnoredFiles ?? [];
+    if (explicitRoots.length > 0 && explicit.length === 0) {
+      throw new AppError("GIT_INDEX_CHANGED", "Ignored worktree content is not an allowlisted generated artifact.");
+    }
+    const inspectExplicit = async () => {
+      const files: string[] = [];
+      const directories: string[] = [];
+      const visit = async (relative: string): Promise<void> => {
+        if (signal?.aborted) throw signal.reason;
+        if (relative.split("/").some((part) => ["runtime", ".runtime-private", ".worktrees", "releases", ".wrangler", ".git"].includes(part.toLowerCase()))) {
+          throw new AppError("BLOCKED_PATH", "Runtime and nested worktree data are not eligible for ignored-file pruning.");
+        }
+        const absolute = path.join(destination, relative);
+        const checked = gitPathSchema.safeParse(relative);
+        if (!checked.success || checked.data !== relative || !isContained(destination, absolute)) {
+          throw new AppError("INVALID_PATH", "Ignored artifact inventory requires literal contained paths.");
+        }
+        const info = await lstat(absolute);
+        if (info.isSymbolicLink() || !samePath(await realpath(absolute), absolute)) {
+          throw new AppError("INVALID_PATH", "Ignored artifact inventory must not traverse links.");
+        }
+        if (info.isDirectory()) {
+          directories.push(relative);
+          if (directories.length > 1000) throw new AppError("GIT_INDEX_CHANGED", "Ignored directory inventory exceeds its bound.");
+          for await (const entry of await opendir(absolute)) await visit(relative + "/" + entry.name);
+        } else if (info.isFile() && info.nlink === 1) {
+          files.push(relative);
+          if (files.length > 200) throw new AppError("GIT_INDEX_CHANGED", "Ignored file inventory exceeds its bound.");
+        } else {
+          throw new AppError("INVALID_PATH", "Ignored artifact inventory requires regular, unlinked files.");
+        }
+      };
+      for (const root of explicitRoots) {
+        const before = files.length;
+        await visit(root);
+        if (files.length === before) throw new AppError("GIT_INDEX_CHANGED", "An ignored root has no explicitly approved file.");
+      }
+      return { files: files.sort(), directories: directories.sort((a, b) => b.length - a.length || a.localeCompare(b)) };
+    };
+    const explicitInventory = await inspectExplicit();
+    const actualFiles = explicitInventory.files;
+    const expectedFiles = explicit.map((file) => file.path).sort();
+    if (actualFiles.length !== expectedFiles.length || actualFiles.some((file, i) => file !== expectedFiles[i])) {
+      throw new AppError("GIT_INDEX_CHANGED", "Explicit ignored-file approval must match the entire remaining inventory.");
+    }
+    if (roots.size === 0 && explicit.length === 0) {
+      throw new AppError("GIT_INDEX_CHANGED", "Worktree cannot be safely classified for pruning.");
+    }
+    const fileService = new FileService();
+    const deletes = [];
+    for (const file of explicit) {
+      if (file.path.split("/").some((part) => ["runtime", ".runtime-private", ".worktrees", "releases", ".wrangler"].includes(part.toLowerCase()))) {
+        throw new AppError("BLOCKED_PATH", "Runtime and nested worktree data are not eligible for ignored-file pruning.");
+      }
+      const absolute = path.join(destination, file.path);
+      if (!isContained(destination, absolute) || !samePath(await realpath(absolute), absolute) ||
+          !(await lstat(absolute)).isFile() || await this.runner.hasTrackedPaths(destination, file.path, signal)) {
+        throw new AppError("INVALID_PATH", "Explicit ignored-file cleanup requires an untracked regular file without links.");
+      }
+      const logical = repository.logicalRoot === "." ? parsed.destination + "/" + file.path :
+        repository.logicalRoot + "/" + parsed.destination + "/" + file.path;
+      const input = { workspaceId: parsed.workspaceId, path: logical, expectedSha256: file.expectedSha256 };
+      await fileService.deleteFile(repository.workspace, { ...input, dryRun: true });
+      deletes.push(input);
     }
     const registered = await this.runner.listWorktrees(source, signal);
     const targets: string[] = [];
@@ -266,7 +431,6 @@ export class GitRepositoryService implements GitRepositoryExecutor {
             (samePath(entry.path, target) || isContained(target, entry.path)))) {
         throw new AppError("PATH_OUTSIDE_WORKSPACE", "Generated artifacts overlap another registered worktree.");
       }
-      // Neither the generated root nor its parents may redirect outside the worktree.
       let current = destination;
       for (const segment of root.split("/")) {
         current = path.join(current, segment);
@@ -281,20 +445,144 @@ export class GitRepositoryService implements GitRepositoryExecutor {
       targets.push(target);
     }
     assertSha("GIT_HEAD_MISMATCH", expectedHead, await this.runner.headSha(destination, signal),
-      "Worktree HEAD changed before generated-artifact pruning.");
-    if (!(await this.runner.repositoryIsClean(destination, signal))) {
+      "Worktree HEAD changed before artifact pruning.");
+    assertSha("GIT_HEAD_MISMATCH", parsed.expectedSourceHeadSha, await this.runner.headSha(source, signal),
+      "Source HEAD changed before artifact pruning.");
+    const rechecked = (await this.runner.listIgnoredPaths(destination, signal)).sort();
+    if (!(await this.runner.repositoryIsClean(destination, signal)) ||
+        rechecked.length !== ignored.length || rechecked.some((entry, i) => entry !== ignored[i])) {
       throw new AppError("GIT_INDEX_CHANGED", "Worktree content changed during pruning preflight.");
     }
-    // Removing generated caches is opt-in; a partial failure requires reconciliation, not force.
+    const recheckedExplicit = await inspectExplicit();
+    if (JSON.stringify(recheckedExplicit) !== JSON.stringify(explicitInventory)) {
+      throw new AppError("GIT_INDEX_CHANGED", "Ignored file inventory changed during pruning preflight.");
+    }
     try {
-      for (const target of targets) await rm(target, { recursive: true });
+      for (const input of deletes) {
+        if (signal?.aborted) throw signal.reason;
+        await fileService.deleteFile(repository.workspace, { ...input, dryRun: false });
+      }
+      for (const relative of explicitInventory.directories) {
+        if (signal?.aborted) throw signal.reason;
+        const directory = path.join(destination, relative);
+        if (!samePath(await realpath(directory), directory)) throw new Error("Ignored directory redirected.");
+        await rmdir(directory);
+      }
+      for (const target of targets) {
+        if (signal?.aborted) throw signal.reason;
+        await rm(target, { recursive: true });
+      }
     } catch {
       throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
-        "Generated artifact pruning may be partial; inspect the worktree before retrying.");
+        "Worktree artifact pruning may be partial; inspect before retrying.");
     }
     if (!(await this.runner.worktreeIsCompletelyClean(destination, signal))) {
       throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
-        "Worktree is not completely clean after generated-artifact pruning.");
+        "Worktree is not completely clean after artifact pruning.");
+    }
+  }
+
+  async stashPaths(input: GitStashPathsInput, context?: OperationContext): Promise<GitStashPathsResult> {
+    const parsed = gitStashPathsInputSchema.parse(input);
+    const signal = context?.signal;
+    const repository = await this.resolveRepository(parsed.workspaceId, parsed.root ?? ".", signal);
+    const cwd = repository.repositoryRoot;
+    const paths = parsed.files.map((file) => file.path);
+    const expected = parsed.files.map((file) => file.status + " " + file.path).sort();
+    const validateInventory = async () => {
+      assertSha("GIT_HEAD_MISMATCH", parsed.expectedHeadSha, await this.runner.headSha(cwd, signal),
+        "Git HEAD changed before stash.");
+      if (await this.runner.currentBranch(cwd, signal) !== parsed.expectedBranch) {
+        throw new AppError("GIT_BRANCH_CONFLICT", "Git branch changed before stash.");
+      }
+      assertSha("GIT_INDEX_CHANGED", parsed.expectedIndexTreeSha, await this.runner.writeTree(cwd, signal),
+        "Git index changed before stash.");
+      if (await this.runner.stashSha(cwd, signal) !== parsed.expectedStashSha) {
+        throw new AppError("GIT_INDEX_CHANGED", "Git stash reference changed before checkpoint.");
+      }
+      const actual = (await this.runner.stashStatus(cwd, signal)).sort();
+      if (actual.length !== expected.length || actual.some((entry, index) => entry !== expected[index])) {
+        throw new AppError("GIT_INDEX_CHANGED", "Stash requires the exact complete inventory of changed files.");
+      }
+    };
+    const validateFiles = async () => {
+      let remaining = 64 * 1024 * 1024;
+      const limit = repository.workspace.limits.maxDeleteFileBytes ?? repository.workspace.limits.maxFileBytes;
+      for (const file of parsed.files) {
+        const logical = repository.logicalRoot === "." ? file.path : repository.logicalRoot + "/" + file.path;
+        repository.security.authorizeWriteLogical(logical);
+        await authorizeGitMutationPath(repository.security, repository.logicalRoot, file.path);
+        const absolute = path.join(cwd, file.path);
+        if (!samePath(await realpath(path.dirname(absolute)), path.dirname(absolute))) {
+          throw new AppError("INVALID_PATH", "Stash paths must not traverse links.");
+        }
+        if (file.expectedSha256 === null) {
+          try {
+            await lstat(absolute);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw error;
+          }
+          throw new AppError("GIT_INDEX_CHANGED", "A deleted stash path is present.");
+        }
+        const observed = await lstat(absolute);
+        if (!observed.isFile() || observed.isSymbolicLink() || observed.nlink !== 1 ||
+            !samePath(await realpath(absolute), absolute)) {
+          throw new AppError("INVALID_PATH", "Stash paths must be regular, unlinked files.");
+        }
+        if (observed.size > limit || observed.size > remaining) {
+          throw new AppError("FILE_TOO_LARGE", "Stash file exceeds the bounded checkpoint size.");
+        }
+        const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+          const sameFile = (stat: typeof observed) => stat.isFile() && stat.dev === observed.dev &&
+            stat.ino === observed.ino && stat.size === observed.size && stat.mode === observed.mode &&
+            stat.mtimeMs === observed.mtimeMs && stat.ctimeMs === observed.ctimeMs && stat.nlink === 1;
+          if (!sameFile(await handle.stat())) throw new AppError("GIT_INDEX_CHANGED", "Stash file changed before hashing.");
+          const hash = createHash("sha256");
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          let offset = 0;
+          while (offset < observed.size) {
+            if (signal?.aborted) throw signal.reason;
+            const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, observed.size - offset), offset);
+            if (!bytesRead) throw new AppError("GIT_INDEX_CHANGED", "Stash file shrank during hashing.");
+            hash.update(buffer.subarray(0, bytesRead));
+            offset += bytesRead;
+          }
+          if ((await handle.read(buffer, 0, 1, offset)).bytesRead !== 0 ||
+              hash.digest("hex") !== file.expectedSha256 || !sameFile(await handle.stat()) ||
+              !sameFile(await lstat(absolute))) {
+            throw new AppError("GIT_INDEX_CHANGED", "Stash file changed or its expected hash differs.");
+          }
+          remaining -= observed.size;
+        } finally {
+          await handle.close();
+        }
+      }
+      await this.runner.assertStashRegularPaths(cwd, paths, signal);
+    };
+    await validateInventory();
+    await validateFiles();
+    await validateInventory();
+    await validateFiles();
+    try {
+      await this.runner.stashPaths(cwd, paths, signal);
+      const stashSha = await this.runner.stashSha(cwd, signal);
+      if (!stashSha || stashSha === parsed.expectedStashSha ||
+          await this.runner.headSha(cwd, signal) !== parsed.expectedHeadSha ||
+          await this.runner.currentBranch(cwd, signal) !== parsed.expectedBranch ||
+          (await this.runner.stashStatus(cwd, signal)).length !== 0) {
+        throw new Error("Git stash could not be reconciled.");
+      }
+      const parents = await this.runner.stashParents(cwd, stashSha, signal);
+      if (parents.headSha !== parsed.expectedHeadSha || parents.indexTreeSha !== parsed.expectedIndexTreeSha) {
+        throw new Error("Git stash parents do not match the expected checkpoint.");
+      }
+      return { root: repository.logicalRoot, branch: parsed.expectedBranch, headSha: parsed.expectedHeadSha,
+        previousStashSha: parsed.expectedStashSha, stashSha, paths };
+    } catch {
+      throw new AppError("SOURCE_CONTROL_RECONCILIATION_REQUIRED",
+        "Stash outcome is uncertain; inspect the stash reference and checkout before another mutation. Do not pop automatically.");
     }
   }
 

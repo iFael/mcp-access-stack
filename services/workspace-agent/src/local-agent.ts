@@ -10,6 +10,8 @@ import {
   readBackgroundTaskLogsInputSchema,
   readBackgroundTaskOutputInputSchema,
   startBackgroundTaskInputSchema,
+  workspaceDependencyInstallInputSchema,
+  type WorkspaceDependencyInstallInput,
   writeBackgroundTaskStdinInputSchema,
   inspectGitInputSchema,
   getWorkspaceContextInputSchema,
@@ -110,6 +112,10 @@ import {
   gitCreateWorktreeResultSchema,
   gitRemoveWorktreeInputSchema,
   gitRemoveWorktreeResultSchema,
+  gitDetachWorktreeInputSchema,
+  gitDetachWorktreeResultSchema,
+  gitStashPathsInputSchema,
+  gitStashPathsResultSchema,
   gitMergeBranchInputSchema,
   gitMergeBranchResultSchema,
   gitSyncBranchInputSchema,
@@ -132,6 +138,8 @@ import {
   githubGetCommitChecksInputSchema,
   githubWorkflowOperationInputSchema,
   githubWorkflowOperationResultSchema,
+  githubRerunFailedJobsInputSchema,
+  githubRerunFailedJobsResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -162,6 +170,10 @@ import {
   type GitCreateWorktreeResult,
   type GitRemoveWorktreeInput,
   type GitRemoveWorktreeResult,
+  type GitDetachWorktreeInput,
+  type GitDetachWorktreeResult,
+  type GitStashPathsInput,
+  type GitStashPathsResult,
   type GitHubCreatePullRequestInput,
   type GitHubCreatePullRequestResult,
   type GitHubClosePullRequestInput,
@@ -180,6 +192,8 @@ import {
   type GitHubGetCommitChecksInput,
   type GitHubWorkflowOperationInput,
   type GitHubWorkflowOperationResult,
+  type GitHubRerunFailedJobsInput,
+  type GitHubRerunFailedJobsResult,
   type GitHubMaterializeActionsArtifactInput,
   type GitHubMaterializeActionsArtifactResult,
   type GitHubGetCommitChecksWatchesInput,
@@ -226,6 +240,7 @@ import { OracleInstanceInventoryService } from "./oracle/oracle-instance-invento
 import { OracleDiskAuditService } from "./oracle/oracle-disk-audit.js";
 import { OracleDiskAuditProvisionService } from "./oracle/oracle-disk-audit-provision.js";
 import { OracleAptMaintenanceService } from "./oracle/oracle-apt-maintenance.js";
+import { authorizeDependencyRoot, createDependencyInstallRunner } from "./tasks/dependency-install.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import {
   BackgroundTaskManager,
@@ -256,6 +271,7 @@ import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
 import { GitHubHttpClient, type GitHubWorkflowApiClient } from "./source-control/github-http-client.js";
 import { GitHubReleaseWorkflowOperation } from "./source-control/github-release-workflow-operation.js";
+import { GitHubCiRerun } from "./source-control/github-ci-rerun.js";
 import {inspectGitHubPublicReleaseAssets,
   type GitHubPublicDistributionInspection} from "./release/github-public-distribution-inspection.js";
 import { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchFinishedEvent } from "./source-control/github-checks-watch-manager.js";
@@ -889,6 +905,45 @@ export class LocalAgent {
     );
   }
 
+  async workspaceInstallDependencies(input: WorkspaceDependencyInstallInput,
+    context: OperationContext = {}): Promise<StartBackgroundTaskResult> {
+    return this.runValidatedAudited("workspaceInstallDependencies", "shell", workspaceDependencyInstallInputSchema,
+      input, context, (parsed) => ({ path: parsed.root, query: parsed.action, targetResource: parsed.operationId }),
+      async (workspace, parsed, activeContext) => {
+        await authorizeDependencyRoot(workspace, parsed);
+        const taskInput: StartBackgroundTaskInput = {
+          workspaceId: workspace.id,
+          operation: "workspace_install_dependencies:" + parsed.action,
+          command: "typed npm " + parsed.action + " " + parsed.expectedManifestSha256 + " " + (parsed.expectedLockSha256 ?? "absent"),
+          cwd: parsed.root, shell: "bash", timeoutMs: 300_000,
+        };
+        const access = backgroundTaskAccess(activeContext);
+        const store = this.mutationReceiptStoreFor(workspace);
+        const identity = {
+          workspaceId: workspace.id, operation: "workspace_install_dependencies" as const,
+          targetResource: parsed.root,
+          canonicalArgumentsDigest: canonicalSourceControlArgumentsDigest(parsed),
+          idempotencyKey: createHash("sha256").update("workspace_install_dependencies:" + parsed.operationId).digest("hex"),
+        };
+        const reservation = await store.reserve(identity);
+        if (reservation.disposition !== "execute") {
+          const task = await this.backgroundTaskManager.getTypedTask(taskInput, parsed.operationId, access);
+          if (!task) throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Dependency operation receipt exists without a retained task; inspect before retrying.");
+          return { status: "background_task_started" as const, task };
+        }
+        await store.markExecuting(identity);
+        try {
+          const task = await this.backgroundTaskManager.startTypedTask(taskInput, parsed.operationId,
+            createDependencyInstallRunner(workspace, parsed), access);
+          await store.markCompleted(identity, { taskId: task.id });
+          return { status: "background_task_started" as const, task };
+        } catch (error) {
+          await store.markReconciliationRequired(identity);
+          throw error;
+        }
+      });
+  }
+
   async startBackgroundTask(
     input: StartBackgroundTaskInput,
     context: OperationContext = {},
@@ -1262,8 +1317,77 @@ export class LocalAgent {
           context: activeContext,
           metadata,
           resultSchema: gitRemoveWorktreeResultSchema,
-          backend: async () => (await this.getGitRepositoryExecutor()).removeWorktree(parsed, activeContext),
+          backend: async () => {
+            if (await this.backgroundTaskManager.hasActiveTasksForWorkspace(workspace.id)) {
+              throw new AppError("GIT_INDEX_CHANGED", "Worktree removal requires no active workspace background tasks.");
+            }
+            return (await this.getGitRepositoryExecutor()).removeWorktree(parsed, activeContext);
+          },
           resultSha: (result) => result.removedWorktreeHeadSha,
+        });
+      },
+    );
+  }
+
+  async gitDetachWorktree(
+    input: GitDetachWorktreeInput,
+    context: OperationContext = {},
+  ): Promise<GitDetachWorktreeResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitDetachWorktree",
+      gitDetachWorktreeInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const root = parsed.root ?? ".";
+        const targetResource = localGitRepositoryTarget(workspace.id, root) + ":" + parsed.destination;
+        metadata.sourceControlCapability = "git.worktree.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedWorktreeHeadSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_detach_worktree",
+          capability: "git.worktree.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          resultSchema: gitDetachWorktreeResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).detachWorktree(parsed, activeContext),
+          resultSha: (result) => result.headSha,
+        });
+      },
+    );
+  }
+
+  async gitStashPaths(
+    input: GitStashPathsInput,
+    context: OperationContext = {},
+  ): Promise<GitStashPathsResult> {
+    return this.runSourceControlValidatedAudited(
+      "gitStashPaths",
+      gitStashPathsInputSchema,
+      input,
+      context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const targetResource = localGitRepositoryTarget(workspace.id, parsed.root ?? ".");
+        metadata.sourceControlCapability = "git.worktree.write";
+        metadata.targetResource = targetResource;
+        metadata.expectedSha = parsed.expectedHeadSha;
+        return this.executeSourceControlMutation({
+          workspace,
+          operation: "git_stash_paths",
+          capability: "git.worktree.write",
+          targetResource,
+          input: parsed,
+          context: activeContext,
+          metadata,
+          beforeReceipt: () => assertSourceControlCapability({
+            policy: workspace, capability: "git.index.write", mutation: true,
+          }),
+          resultSchema: gitStashPathsResultSchema,
+          backend: async () => (await this.getGitRepositoryExecutor()).stashPaths(parsed, activeContext),
+          resultSha: (result) => result.stashSha,
         });
       },
     );
@@ -1713,6 +1837,21 @@ export class LocalAgent {
         );
       },
     );
+  }
+
+  async githubRerunFailedJobs(input: GitHubRerunFailedJobsInput, context: OperationContext = {}): Promise<GitHubRerunFailedJobsResult> {
+    return this.runSourceControlValidatedAudited("githubRerunFailedJobs", githubRerunFailedJobsInputSchema, input, context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        const mutation = parsed.mode === "rerun";
+        const capability = mutation ? "github.workflow.dispatch" as const : "github.repository.read" as const;
+        metadata.sourceControlCapability = capability;
+        metadata.targetResource = "github:" + repository + ":run/" + parsed.runId + ":attempt/1";
+        metadata.expectedSha = parsed.expectedHeadSha;
+        await this.assertGitHubRepositoryCapability(workspace, capability, repository, parsed.root ?? ".", mutation, activeContext.signal);
+        return githubRerunFailedJobsResultSchema.parse(await new GitHubCiRerun(
+          await this.getGitHubWorkflowApiClient(), this.mutationReceiptStoreFor(workspace)).execute(parsed, activeContext));
+      });
   }
 
   async githubWorkflowOperation(

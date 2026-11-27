@@ -9,6 +9,8 @@ import {
   gitCreateBranchInputSchema,
   gitCreateWorktreeInputSchema,
   gitRemoveWorktreeInputSchema,
+  gitDetachWorktreeInputSchema,
+  gitStashPathsInputSchema,
   gitMergeBranchInputSchema,
   gitSyncBranchInputSchema,
   gitPushBranchInputSchema,
@@ -21,6 +23,7 @@ import {
   githubCreateRepositoryInputSchema,
   githubGetCommitChecksInputSchema,
   githubWorkflowOperationInputSchema,
+  githubRerunFailedJobsInputSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubStartCommitChecksWatchInputSchema,
@@ -43,6 +46,8 @@ const expectedPublicSourceControlNames = [
   "git_create_branch",
   "git_create_worktree",
   "git_remove_worktree",
+  "git_detach_worktree",
+  "git_stash_paths",
   "git_merge_branch",
   "git_sync_branch",
   "git_push_branch",
@@ -54,6 +59,7 @@ const expectedPublicSourceControlNames = [
   "github_create_repository",
   "github_get_commit_checks",
   "github_workflow_operation",
+  "github_rerun_failed_jobs",
   "github_materialize_actions_artifact",
   "github_get_commit_checks_watches",
   "github_start_commit_checks_watch",
@@ -158,6 +164,13 @@ describe("opt-in generated worktree cleanup contract", () => {
     expect(gitRemoveWorktreeInputSchema.safeParse(input).success).toBe(true);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneGeneratedArtifacts: true }).success).toBe(true);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneGeneratedArtifacts: "all" }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneMissingRegistration: true }).success).toBe(true);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneMissingRegistration: true, pruneGeneratedArtifacts: true }).success).toBe(false);
+    const files = [{ path: ".codex/HANDOFF.md", expectedSha256: "a".repeat(64) }];
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneIgnoredFiles: files }).success).toBe(true);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneIgnoredFiles: [...files, ...files] }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneMissingRegistration: true, pruneIgnoredFiles: files }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneIgnoredFiles: [{ ...files[0], path: "../escape" }] }).success).toBe(false);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, force: true }).success).toBe(false);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, destination: ".worktrees/../../outside",
       pruneGeneratedArtifacts: true }).success).toBe(false);
@@ -194,6 +207,16 @@ const inputCases = [
     name: "git_remove_worktree",
     schema: gitRemoveWorktreeInputSchema,
     input: { workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB },
+  },
+  {
+    name: "git_detach_worktree",
+    schema: gitDetachWorktreeInputSchema,
+    input: { workspaceId: "repo", destination: ".worktrees/clean-main", expectedSourceHeadSha: shaA, expectedWorktreeHeadSha: shaB, expectedBranch: "main" },
+  },
+  {
+    name: "git_stash_paths",
+    schema: gitStashPathsInputSchema,
+    input: { workspaceId: "repo", expectedHeadSha: shaA, expectedBranch: "main", expectedIndexTreeSha: shaB, expectedStashSha: null, files: [{ path: "src/a.ts", status: " M", expectedSha256: "a".repeat(64) }] },
   },
   {
     name: "git_stage_paths",
@@ -285,6 +308,13 @@ const inputCases = [
     input: { workspaceId: "repo", owner: "octo", repository: "app",
       workflow: "edge-f09-guarded-rollout.yml", mode: "reconcile",
       expectedMainSha: shaA, operationId: "11111111-2222-4333-8444-555555555555" },
+  },
+  {
+    name: "github_rerun_failed_jobs",
+    schema: githubRerunFailedJobsInputSchema,
+    input: { workspaceId: "repo", owner: "iFael", repository: "mcp-access-stack",
+      runId: 123, expectedHeadSha: shaA, expectedAttempt: 1, mode: "rerun",
+      operationId: "11111111-2222-4333-8444-555555555555" },
   },
   {
     name: "github_materialize_actions_artifact",
@@ -409,7 +439,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes twenty-six public tools and eighteen capabilities", () => {
+  it("exposes twenty-nine public tools and eighteen capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -419,7 +449,7 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(26);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(29);
     expect(sourceControlCapabilities).toHaveLength(18);
 
     for (const forbiddenName of [

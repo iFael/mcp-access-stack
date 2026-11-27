@@ -38,6 +38,9 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   oracle_grant_github_ready_permission: "inspect first, then grant once with the observed SHA-256 and operationId; inspect again to confirm effective policy before using github_mark_pull_request_ready.",
   oracle_grant_worktree_permission: "inspect first, grant only git.worktree.write with the observed policy SHA-256 and operationId, then inspect again before using git_remove_worktree.",
 
+  oracle_grant_dependency_install_permission: "inspect first; grant once with the observed policy SHA-256 and operationId, then inspect again to confirm effective permission for tooling/smoke/browser/editor-fixtures before workspace_install_dependencies.",
+  workspace_install_dependencies: "wait_background_task with the returned task ID; verify the lock SHA from the result before starting install. Never repeat an uncertain operation with a new ID.",
+
   // Commands and background tasks
   run_command: "when it answers confirmation_required, show the reasons and call again with its confirmationId; when it became a background task, wait_background_task with its taskId.",
   start_background_task: "end your answer and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",
@@ -71,6 +74,8 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   git_create_branch: "patch_files for the change, then git_commit_paths.",
   git_create_worktree: "inspect_workspace_git with root set to the returned destination; the original checkout is not synchronized.",
   git_remove_worktree: "inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
+  git_detach_worktree: "inspect_workspace_git with the source and target roots; git_sync_branch on the primary checkout when clean.",
+  git_stash_paths: "record the returned stash SHA; inspect_workspace_git to confirm cleanliness. Never automatically pop or drop a stash.",
   git_stage_paths: "git_commit.",
   git_unstage_paths: "git_stage_paths for the paths to keep.",
   git_commit: "git_push_branch.",
@@ -84,6 +89,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   github_start_commit_checks_watch: "end your answer; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
   github_get_commit_checks_watches: "github_wait_commit_checks_watch with a watchId.",
   github_wait_commit_checks_watch: "still running: end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
+  github_rerun_failed_jobs: "mode=reconcile with the same runId, expectedHeadSha, expectedAttempt and operationId until attempt 2 completes. Never POST again; inspect failed jobs if attempt 2 fails.",
   github_workflow_operation: "reconcile with the same operationId until the run is observed and completed; never dispatch again.",
   github_materialize_actions_artifact: "",
   github_create_repository: "",

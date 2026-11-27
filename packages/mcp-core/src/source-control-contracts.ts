@@ -187,6 +187,8 @@ export const sourceControlOperationNameSchema = z.enum([
   "git_create_branch",
   "git_create_worktree",
   "git_remove_worktree",
+  "git_detach_worktree",
+  "git_stash_paths",
   "git_stage_paths",
   "git_unstage_paths",
   "git_commit",
@@ -201,6 +203,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "github_get_commit_checks_watches",
   "github_wait_commit_checks_watch",
   "github_workflow_operation",
+  "github_rerun_failed_jobs",
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
@@ -287,7 +290,16 @@ export const gitRemoveWorktreeInputSchema = z.object({
   expectedSourceHeadSha: gitShaSchema,
   expectedWorktreeHeadSha: gitShaSchema,
   pruneGeneratedArtifacts: z.boolean().optional(),
-}).strict();
+  pruneMissingRegistration: z.boolean().optional(),
+  pruneIgnoredFiles: z.array(z.object({
+    path: gitPathSchema,
+    expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).strict()).min(1).max(200).optional(),
+}).strict().refine((input) => !input.pruneMissingRegistration || (!input.pruneGeneratedArtifacts && !input.pruneIgnoredFiles),
+  "A missing-registration removal cannot prune existing files.")
+  .refine((input) => !input.pruneIgnoredFiles ||
+    new Set(input.pruneIgnoredFiles.map((file) => file.path)).size === input.pruneIgnoredFiles.length,
+  "Ignored file paths must be unique.");
 export type GitRemoveWorktreeInput = z.input<typeof gitRemoveWorktreeInputSchema>;
 
 export const gitRemoveWorktreeResultSchema = z.object({
@@ -296,8 +308,59 @@ export const gitRemoveWorktreeResultSchema = z.object({
   sourceHeadSha: gitShaSchema,
   removedWorktreeHeadSha: gitShaSchema,
   removed: z.literal(true),
+  removedMissingRegistration: z.literal(true).optional(),
 }).strict();
 export type GitRemoveWorktreeResult = z.infer<typeof gitRemoveWorktreeResultSchema>;
+
+// Release an attached branch without removing its checkout or changing a ref.
+export const gitDetachWorktreeInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  destination: gitCreateWorktreeInputSchema.shape.destination,
+  expectedSourceHeadSha: gitShaSchema,
+  expectedWorktreeHeadSha: gitShaSchema,
+  expectedBranch: gitBranchSchema.refine((branch) => branch !== "HEAD"),
+}).strict();
+export type GitDetachWorktreeInput = z.input<typeof gitDetachWorktreeInputSchema>;
+
+export const gitDetachWorktreeResultSchema = z.object({
+  root: rootSchema,
+  destination: gitDetachWorktreeInputSchema.shape.destination,
+  sourceHeadSha: gitShaSchema,
+  headSha: gitShaSchema,
+  previousBranch: gitBranchSchema,
+  detached: z.literal(true),
+}).strict();
+export type GitDetachWorktreeResult = z.infer<typeof gitDetachWorktreeResultSchema>;
+
+const stashFileSchema = z.object({
+  path: gitPathSchema,
+  status: z.enum([" M", "M ", "MM", "A ", "AM", "??", " D", "D ", "MD", "AD"]),
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
+}).strict().refine((file) => file.status.includes("D") === (file.expectedSha256 === null),
+  "Only a deleted file may have a null hash.");
+
+export const gitStashPathsInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  expectedHeadSha: gitShaSchema,
+  expectedBranch: gitBranchSchema.refine((branch) => branch !== "HEAD"),
+  expectedIndexTreeSha: gitShaSchema,
+  expectedStashSha: gitShaSchema.nullable(),
+  files: z.array(stashFileSchema).min(1).max(200),
+}).strict().refine((input) => new Set(input.files.map((file) => file.path)).size === input.files.length,
+  "Stash paths must be unique.");
+export type GitStashPathsInput = z.input<typeof gitStashPathsInputSchema>;
+
+export const gitStashPathsResultSchema = z.object({
+  root: rootSchema,
+  branch: gitBranchSchema,
+  headSha: gitShaSchema,
+  previousStashSha: gitShaSchema.nullable(),
+  stashSha: gitShaSchema,
+  paths: gitPathListSchema,
+}).strict();
+export type GitStashPathsResult = z.infer<typeof gitStashPathsResultSchema>;
 
 export const gitStagePathsInputSchema = z
   .object({
@@ -883,6 +946,35 @@ export const githubWorkflowOperationResultSchema = z.discriminatedUnion("status"
     state:z.enum(["queued","in_progress","completed"]),conclusion:z.string().nullable()}).strict(),
 ]);
 export type GitHubWorkflowOperationResult = z.infer<typeof githubWorkflowOperationResultSchema>;
+
+// The first version deliberately allows one retry of a failed PR CI run.
+export const githubRerunFailedJobsInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  owner: githubOwnerSchema,
+  repository: githubRepositoryNameSchema,
+  runId: z.number().int().positive(),
+  expectedHeadSha: gitShaSchema,
+  expectedAttempt: z.literal(1),
+  operationId: z.uuid(),
+  mode: z.enum(["rerun", "reconcile"]),
+}).strict();
+export type GitHubRerunFailedJobsInput = z.infer<typeof githubRerunFailedJobsInputSchema>;
+export const githubRerunFailedJobsResultSchema = z.object({
+  status: z.enum(["submitted", "outcome_unknown", "observed"]),
+  operationId: z.uuid(),
+  runId: z.number().int().positive(),
+  headSha: gitShaSchema,
+  expectedAttempt: z.literal(1),
+  observedAttempt: z.literal(2).optional(),
+  state: z.enum(["queued", "in_progress", "completed"]).optional(),
+  conclusion: z.string().nullable().optional(),
+}).strict().refine(value => value.status === "observed"
+  ? value.observedAttempt === 2 && value.state !== undefined &&
+    (value.state === "completed" ? typeof value.conclusion === "string" : value.conclusion === null)
+  : value.observedAttempt === undefined && value.state === undefined && value.conclusion === undefined,
+  "Only an observed attempt has a run state.");
+export type GitHubRerunFailedJobsResult = z.infer<typeof githubRerunFailedJobsResultSchema>;
 
 export const githubGetPullRequestInputSchema = z
   .object({

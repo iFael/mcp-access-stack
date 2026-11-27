@@ -49,13 +49,13 @@ describe("MCP public catalog stability", () => {
         | Record<string, unknown>
         | undefined;
 
-      expect(listed.tools).toHaveLength(135);
+      expect(listed.tools).toHaveLength(140);
       expect(listed.tools.map((tool) => tool.name)).not.toContain("browser_plan");
       expect(listed.tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["memory_context", "memory_update", "memory_recovery_export", "patch_file", "patch_files", "delete_file", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_create_worktree", "git_remove_worktree", "git_sync_branch", "git_publish_tag", "github_get_commit_checks", "github_materialize_actions_artifact", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "oracle_grant_worktree_permission", "oracle_list_instances", "oracle_disk_audit", "oracle_disk_audit_provision", "oracle_apt_maintenance", "prune_releases", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "rename_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "relocate_repository_materialization", "sync_repository", "list_devices", "revoke_device"]),
+        expect.arrayContaining(["memory_context", "memory_update", "memory_recovery_export", "patch_file", "patch_files", "delete_file", "run_workspace_validations", "wait_background_tasks", "git_commit_paths", "git_create_worktree", "git_remove_worktree", "git_detach_worktree", "git_stash_paths", "git_sync_branch", "git_publish_tag", "github_get_commit_checks", "github_rerun_failed_jobs", "github_materialize_actions_artifact", "github_start_commit_checks_watch", "github_get_commit_checks_watches", "github_wait_commit_checks_watch", "github_close_pull_request", "github_mark_pull_request_ready", "oracle_grant_github_ready_permission", "oracle_grant_worktree_permission", "oracle_grant_dependency_install_permission", "oracle_list_instances", "oracle_disk_audit", "oracle_disk_audit_provision", "oracle_apt_maintenance", "workspace_install_dependencies", "prune_releases", "browser_status", "get_current_user", "get_onboarding_state", "list_repositories", "create_repository", "rename_repository", "discover_local_repositories", "import_repositories", "materialize_repository", "relocate_repository_materialization", "sync_repository", "list_devices", "revoke_device"]),
       );
       expect(metadata).toMatchObject({
-        toolCount: 135,
+        toolCount: 140,
         contractRevision: createMcpToolContractRevision(listed.tools),
       });
       expect(getMcpServerCatalogMetadata(server)).toEqual(metadata);
@@ -231,6 +231,49 @@ describe("MCP public catalog stability", () => {
     }
   });
 
+  it.each([true, false])("restricts the dependency grant to an authenticated owner (owner=%s)", async (owner) => {
+    const executor = createTestExecutor();
+    const inspect = jest.fn(async () => ({
+      status: "not_granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "dependency.install.editor-fixtures" as const, policySha256: "a".repeat(64),
+      effective: false, backupCreated: false,
+    }));
+    const grant = jest.fn(async (_input: { expectedPolicySha256: string; operationId: string; actor: string }) => ({
+      status: "granted" as const, workspaceId: "mcp-access-stack" as const,
+      capability: "dependency.install.editor-fixtures" as const, policySha256: "b".repeat(64),
+      effective: true, backupCreated: true,
+    }));
+    const server = createMcpServer({workspaceExecutor: executor, sourceControlExecutor: executor,
+      dependencyInstallPolicyAdmin: {inspect, grant}, ...(owner ? {authenticatedUserId: "edge-owner-1"} : {})});
+    const client = new Client({name: "dependency-grant-test", version: "0.0.0"}, {capabilities: {}});
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(st), client.connect(ct)]);
+      const name = "oracle_grant_dependency_install_permission";
+      const args = {action: "grant", expectedPolicySha256: "a".repeat(64),
+        operationId: "b6ed7ef2-f66a-47d2-832e-e5cd1d50ba48"};
+      const read = await client.callTool({name, arguments: {action: "inspect"}});
+      const result = await client.callTool({name, arguments: args});
+      if (owner) {
+        expect(read.structuredContent).toMatchObject({status: "not_granted", effective: false});
+        expect(result.structuredContent).toMatchObject({status: "granted", effective: true});
+        expect(grant).toHaveBeenCalledWith({expectedPolicySha256: args.expectedPolicySha256,
+          operationId: args.operationId, actor: "edge-owner-1"});
+      } else {
+        expect(read.isError).toBe(true);
+        expect(result.isError).toBe(true);
+      }
+      for (const extra of [{root: "."}, {workspaceId: "other"}, {policyPath: "/etc/policy.json"}, {actor: "forged"}]) {
+        expect((await client.callTool({name, arguments: {...args, ...extra}})).isError).toBe(true);
+      }
+      expect(grant).toHaveBeenCalledTimes(owner ? 1 : 0);
+      expect(inspect).toHaveBeenCalledTimes(owner ? 1 : 0);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("keeps companion-internal tools executable but outside the published MCP catalog", async () => {
     const executor = createTestExecutor();
     const bindRepositories = jest.fn(async (bindings: Array<{
@@ -279,7 +322,7 @@ describe("MCP public catalog stability", () => {
         client.connect(clientTransport),
       ]);
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(135);
+      expect(listed.tools).toHaveLength(140);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_BIND_REPOSITORIES_TOOL)).toBe(false);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_MATERIALIZE_REPOSITORY_TOOL)).toBe(false);
       expect(listed.tools.some((tool) => tool.name === COMPANION_INTERNAL_RELOCATE_REPOSITORY_TOOL)).toBe(false);

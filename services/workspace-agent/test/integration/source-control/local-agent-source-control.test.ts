@@ -112,6 +112,15 @@ function fakeGitExecutor(): GitRepositoryExecutor {
       sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(), removedWorktreeHeadSha: input.expectedWorktreeHeadSha.toLowerCase(),
       removed: true as const,
     })),
+    detachWorktree: jest.fn<GitRepositoryExecutor["detachWorktree"]>(async (input) => ({
+      root: input.root ?? ".", destination: input.destination,
+      sourceHeadSha: input.expectedSourceHeadSha.toLowerCase(), headSha: input.expectedWorktreeHeadSha.toLowerCase(),
+      previousBranch: input.expectedBranch, detached: true as const,
+    })),
+    stashPaths: jest.fn<GitRepositoryExecutor["stashPaths"]>(async (input) => ({
+      root: input.root ?? ".", branch: input.expectedBranch, headSha: input.expectedHeadSha,
+      previousStashSha: input.expectedStashSha, stashSha: SHA_B, paths: input.files.map((file) => file.path),
+    })),
     stagePaths: jest.fn<GitRepositoryExecutor["stagePaths"]>(async (input) => ({
       root: input.root ?? ".",
       headSha: SHA_A,
@@ -258,6 +267,48 @@ function fakeGitHubExecutor(): GitHubExecutor {
     })),
   };
 }
+
+describe("LocalAgent selective CI rerun capability", () => {
+  const input = {
+    workspaceId: "test", owner: "iFael", repository: "mcp-access-stack",
+    runId: 123, expectedHeadSha: SHA_A, expectedAttempt: 1 as const,
+    operationId: "11111111-2222-4333-8444-555555555555", mode: "rerun" as const,
+  };
+  const context = {ownerScope: "trusted:test"};
+  function client() {
+    const rerunFailedJobs = jest.fn<NonNullable<GitHubWorkflowApiClient["rerunFailedJobs"]>>(async () => {});
+    const getWorkflowRun = jest.fn<NonNullable<GitHubWorkflowApiClient["getWorkflowRun"]>>(async () => ({
+      id: 123, workflow_id: 1, name: "CI", display_title: "PR CI", head_sha: SHA_A,
+      head_branch: "feature/task6", event: "pull_request", path: ".github/workflows/ci.yml",
+      status: "completed", conclusion: "failure", run_attempt: 1,
+    }));
+    const workflowClient: GitHubWorkflowApiClient = {
+      getMainRef: async () => { throw new Error("unexpected"); },
+      getWorkflowRuns: async () => { throw new Error("unexpected"); },
+      dispatchWorkflow: async () => { throw new Error("unexpected"); },
+      rerunFailedJobs, getWorkflowRun,
+    };
+    return { workflowClient, rerunFailedJobs, getWorkflowRun };
+  }
+
+  it("requires workflow write capability and a repository binding before POST", async () => {
+    const { workflowClient, rerunFailedJobs } = client();
+    const { agent } = await setupAgent({ capabilities: ["github.repository.read"],
+      workflowClient, origin: "https://github.com/iFael/mcp-access-stack.git" });
+    await expect(agent.githubRerunFailedJobs(input, context)).rejects.toThrow();
+    expect((await agent.githubRerunFailedJobs({...input, mode:"reconcile"}, context)).status).toBe("outcome_unknown");
+    expect(rerunFailedJobs).not.toHaveBeenCalled();
+  });
+
+  it("routes an authorized rerun at most once, even through multiple calls", async () => {
+    const { workflowClient, rerunFailedJobs } = client();
+    const { agent } = await setupAgent({ capabilities: ["github.repository.read", "github.workflow.dispatch"],
+      workflowClient, origin: "https://github.com/iFael/mcp-access-stack.git" });
+    expect((await agent.githubRerunFailedJobs(input, context)).status).toBe("submitted");
+    expect((await agent.githubRerunFailedJobs(input, context)).status).toBe("submitted");
+    expect(rerunFailedJobs).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("LocalAgent unified guarded GitHub workflow operation", () => {
   const input={
@@ -584,6 +635,44 @@ describe("LocalAgent direct authorization and mutation receipts", () => {
     expect(first).toMatchObject({ removed: true, sourceHeadSha: SHA_A, removedWorktreeHeadSha: SHA_B });
     expect(again).toEqual(first);
     expect(allowed.gitExecutor.removeWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies detach without worktree capability and replays the authorized receipt", async () => {
+    const input = { workspaceId: "test", destination: ".worktrees/old-main",
+      expectedSourceHeadSha: SHA_A, expectedWorktreeHeadSha: SHA_B, expectedBranch: "main" };
+    const denied = await setupAgent({ capabilities: ["git.branch.write"] });
+    await expect(denied.agent.gitDetachWorktree(input, { idempotencyKey: "detach-denied" }))
+      .rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(denied.gitExecutor.detachWorktree).not.toHaveBeenCalled();
+    await fixture?.cleanup();
+    fixture = undefined;
+    const allowed = await setupAgent({ capabilities: ["git.worktree.write"] });
+    const first = await allowed.agent.gitDetachWorktree(input, { idempotencyKey: "detach-once" });
+    const replay = await allowed.agent.gitDetachWorktree(input, { idempotencyKey: "detach-once" });
+    expect(first).toMatchObject({ detached: true, headSha: SHA_B, previousBranch: "main" });
+    expect(replay).toEqual(first);
+    expect(allowed.gitExecutor.detachWorktree).toHaveBeenCalledTimes(1);
+    await expect(allowed.agent.gitDetachWorktree({ ...input, expectedBranch: "feature/other" },
+      { idempotencyKey: "detach-once" })).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
+  });
+
+  it("requires both worktree and index capabilities for stash and replays the exact receipt", async () => {
+    const input = { workspaceId: "test", expectedHeadSha: SHA_A, expectedBranch: "feature/stash",
+      expectedIndexTreeSha: SHA_B, expectedStashSha: null,
+      files: [{ path: "a.txt", status: " M" as const, expectedSha256: "a".repeat(64) }] };
+    const denied = await setupAgent({ capabilities: ["git.worktree.write"] });
+    await expect(denied.agent.gitStashPaths(input, { idempotencyKey: "stash-denied" }))
+      .rejects.toMatchObject({ code: "SOURCE_CONTROL_CAPABILITY_DENIED" });
+    expect(denied.gitExecutor.stashPaths).not.toHaveBeenCalled();
+    await fixture?.cleanup();
+    fixture = undefined;
+    const allowed = await setupAgent({ capabilities: ["git.worktree.write", "git.index.write"] });
+    const first = await allowed.agent.gitStashPaths(input, { idempotencyKey: "stash-once" });
+    expect(await allowed.agent.gitStashPaths(input, { idempotencyKey: "stash-once" })).toEqual(first);
+    expect(first).toMatchObject({ stashSha: SHA_B, paths: ["a.txt"] });
+    expect(allowed.gitExecutor.stashPaths).toHaveBeenCalledTimes(1);
+    await expect(allowed.agent.gitStashPaths({ ...input, expectedBranch: "feature/other" },
+      { idempotencyKey: "stash-once" })).rejects.toMatchObject({ code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT" });
   });
 
   it("preserves confirmation flow in standard mode", async () => {

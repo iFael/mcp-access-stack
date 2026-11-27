@@ -28,6 +28,7 @@
       "allowShell": [
         "."
       ],
+      "dependencyInstallRoots": [],
       "allowedShells": [
         "pwsh"
       ],

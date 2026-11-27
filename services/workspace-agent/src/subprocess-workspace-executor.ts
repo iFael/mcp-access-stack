@@ -81,6 +81,10 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
       Promise.reject(this.notImplemented("oracleDiskAuditProvision"));
   }
 
+  workspaceInstallDependencies(...args: Parameters<NonNullable<WorkspaceExecutor["workspaceInstallDependencies"]>>) {
+    return this.fallback?.workspaceInstallDependencies?.(...args) ?? Promise.reject(this.notImplemented("workspaceInstallDependencies"));
+  }
+
   oracleAptMaintenance(...args: Parameters<WorkspaceExecutor["oracleAptMaintenance"]>) {
     return this.fallback?.oracleAptMaintenance(...args) ??
       Promise.reject(this.notImplemented("oracleAptMaintenance"));
@@ -204,6 +208,12 @@ export class SubprocessWorkspaceExecutor implements WorkspaceExecutor, GitReposi
   }
   removeWorktree(...args: Parameters<GitRepositoryExecutor["removeWorktree"]>) {
     return this.fallback?.removeWorktree?.(...args) ?? Promise.reject(this.notImplemented("removeWorktree"));
+  }
+  detachWorktree(...args: Parameters<GitRepositoryExecutor["detachWorktree"]>) {
+    return this.fallback?.detachWorktree?.(...args) ?? Promise.reject(this.notImplemented("detachWorktree"));
+  }
+  stashPaths(...args: Parameters<GitRepositoryExecutor["stashPaths"]>) {
+    return this.fallback?.stashPaths?.(...args) ?? Promise.reject(this.notImplemented("stashPaths"));
   }
   stagePaths(...args: Parameters<GitRepositoryExecutor["stagePaths"]>) {
     return this.fallback?.stagePaths?.(...args) ?? Promise.reject(this.notImplemented("stagePaths"));
