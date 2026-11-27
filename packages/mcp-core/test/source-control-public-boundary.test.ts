@@ -23,6 +23,7 @@ import {
   githubCreateRepositoryInputSchema,
   githubGetCommitChecksInputSchema,
   githubWorkflowOperationInputSchema,
+  githubRerunFailedJobsInputSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubGetCommitChecksWatchesInputSchema,
   githubStartCommitChecksWatchInputSchema,
@@ -58,6 +59,7 @@ const expectedPublicSourceControlNames = [
   "github_create_repository",
   "github_get_commit_checks",
   "github_workflow_operation",
+  "github_rerun_failed_jobs",
   "github_materialize_actions_artifact",
   "github_get_commit_checks_watches",
   "github_start_commit_checks_watch",
@@ -308,6 +310,13 @@ const inputCases = [
       expectedMainSha: shaA, operationId: "11111111-2222-4333-8444-555555555555" },
   },
   {
+    name: "github_rerun_failed_jobs",
+    schema: githubRerunFailedJobsInputSchema,
+    input: { workspaceId: "repo", owner: "iFael", repository: "mcp-access-stack",
+      runId: 123, expectedHeadSha: shaA, expectedAttempt: 1, mode: "rerun",
+      operationId: "11111111-2222-4333-8444-555555555555" },
+  },
+  {
     name: "github_materialize_actions_artifact",
     schema: githubMaterializeActionsArtifactInputSchema,
     input: {
@@ -430,7 +439,7 @@ function collectObjectKeys(value: unknown, output = new Set<string>()): Set<stri
 }
 
 describe("typed source-control public boundary", () => {
-  it("exposes twenty-eight public tools and eighteen capabilities", () => {
+  it("exposes twenty-nine public tools and eighteen capabilities", () => {
     expect([...SOURCE_CONTROL_TOOL_NAMES].sort()).toEqual(
       [...expectedPublicSourceControlNames].sort(),
     );
@@ -440,7 +449,7 @@ describe("typed source-control public boundary", () => {
     expect([...sourceControlCapabilities].sort()).toEqual(
       [...expectedSourceControlCapabilities].sort(),
     );
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(28);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(29);
     expect(sourceControlCapabilities).toHaveLength(18);
 
     for (const forbiddenName of [

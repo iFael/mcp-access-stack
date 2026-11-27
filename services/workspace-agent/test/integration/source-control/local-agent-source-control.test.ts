@@ -268,6 +268,48 @@ function fakeGitHubExecutor(): GitHubExecutor {
   };
 }
 
+describe("LocalAgent selective CI rerun capability", () => {
+  const input = {
+    workspaceId: "test", owner: "iFael", repository: "mcp-access-stack",
+    runId: 123, expectedHeadSha: SHA_A, expectedAttempt: 1 as const,
+    operationId: "11111111-2222-4333-8444-555555555555", mode: "rerun" as const,
+  };
+  const context = {ownerScope: "trusted:test"};
+  function client() {
+    const rerunFailedJobs = jest.fn<NonNullable<GitHubWorkflowApiClient["rerunFailedJobs"]>>(async () => {});
+    const getWorkflowRun = jest.fn<NonNullable<GitHubWorkflowApiClient["getWorkflowRun"]>>(async () => ({
+      id: 123, workflow_id: 1, name: "CI", display_title: "PR CI", head_sha: SHA_A,
+      head_branch: "feature/task6", event: "pull_request", path: ".github/workflows/ci.yml",
+      status: "completed", conclusion: "failure", run_attempt: 1,
+    }));
+    const workflowClient: GitHubWorkflowApiClient = {
+      getMainRef: async () => { throw new Error("unexpected"); },
+      getWorkflowRuns: async () => { throw new Error("unexpected"); },
+      dispatchWorkflow: async () => { throw new Error("unexpected"); },
+      rerunFailedJobs, getWorkflowRun,
+    };
+    return { workflowClient, rerunFailedJobs, getWorkflowRun };
+  }
+
+  it("requires workflow write capability and a repository binding before POST", async () => {
+    const { workflowClient, rerunFailedJobs } = client();
+    const { agent } = await setupAgent({ capabilities: ["github.repository.read"],
+      workflowClient, origin: "https://github.com/iFael/mcp-access-stack.git" });
+    await expect(agent.githubRerunFailedJobs(input, context)).rejects.toThrow();
+    expect((await agent.githubRerunFailedJobs({...input, mode:"reconcile"}, context)).status).toBe("outcome_unknown");
+    expect(rerunFailedJobs).not.toHaveBeenCalled();
+  });
+
+  it("routes an authorized rerun at most once, even through multiple calls", async () => {
+    const { workflowClient, rerunFailedJobs } = client();
+    const { agent } = await setupAgent({ capabilities: ["github.repository.read", "github.workflow.dispatch"],
+      workflowClient, origin: "https://github.com/iFael/mcp-access-stack.git" });
+    expect((await agent.githubRerunFailedJobs(input, context)).status).toBe("submitted");
+    expect((await agent.githubRerunFailedJobs(input, context)).status).toBe("submitted");
+    expect(rerunFailedJobs).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("LocalAgent unified guarded GitHub workflow operation", () => {
   const input={
     workspaceId:"test",owner:"octo",repository:"repo",

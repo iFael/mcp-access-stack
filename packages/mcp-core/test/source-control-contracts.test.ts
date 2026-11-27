@@ -125,6 +125,7 @@ describe("source-control contracts", () => {
       "github_get_commit_checks_watches",
       "github_wait_commit_checks_watch",
       "github_workflow_operation",
+      "github_rerun_failed_jobs",
       "github_create_repository",
       "github_get_pull_request",
       "github_create_pull_request",

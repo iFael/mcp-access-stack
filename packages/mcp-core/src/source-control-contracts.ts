@@ -203,6 +203,7 @@ export const sourceControlOperationNameSchema = z.enum([
   "github_get_commit_checks_watches",
   "github_wait_commit_checks_watch",
   "github_workflow_operation",
+  "github_rerun_failed_jobs",
   "github_create_repository",
   "github_get_pull_request",
   "github_create_pull_request",
@@ -945,6 +946,35 @@ export const githubWorkflowOperationResultSchema = z.discriminatedUnion("status"
     state:z.enum(["queued","in_progress","completed"]),conclusion:z.string().nullable()}).strict(),
 ]);
 export type GitHubWorkflowOperationResult = z.infer<typeof githubWorkflowOperationResultSchema>;
+
+// The first version deliberately allows one retry of a failed PR CI run.
+export const githubRerunFailedJobsInputSchema = z.object({
+  workspaceId: workspaceIdSchema,
+  root: rootSchema.optional(),
+  owner: githubOwnerSchema,
+  repository: githubRepositoryNameSchema,
+  runId: z.number().int().positive(),
+  expectedHeadSha: gitShaSchema,
+  expectedAttempt: z.literal(1),
+  operationId: z.uuid(),
+  mode: z.enum(["rerun", "reconcile"]),
+}).strict();
+export type GitHubRerunFailedJobsInput = z.infer<typeof githubRerunFailedJobsInputSchema>;
+export const githubRerunFailedJobsResultSchema = z.object({
+  status: z.enum(["submitted", "outcome_unknown", "observed"]),
+  operationId: z.uuid(),
+  runId: z.number().int().positive(),
+  headSha: gitShaSchema,
+  expectedAttempt: z.literal(1),
+  observedAttempt: z.literal(2).optional(),
+  state: z.enum(["queued", "in_progress", "completed"]).optional(),
+  conclusion: z.string().nullable().optional(),
+}).strict().refine(value => value.status === "observed"
+  ? value.observedAttempt === 2 && value.state !== undefined &&
+    (value.state === "completed" ? typeof value.conclusion === "string" : value.conclusion === null)
+  : value.observedAttempt === undefined && value.state === undefined && value.conclusion === undefined,
+  "Only an observed attempt has a run state.");
+export type GitHubRerunFailedJobsResult = z.infer<typeof githubRerunFailedJobsResultSchema>;
 
 export const githubGetPullRequestInputSchema = z
   .object({

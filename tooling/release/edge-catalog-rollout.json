@@ -4,8 +4,8 @@
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
   "previousRevision": "214cb5ddf906f322744e1b436f9c47f7c855100b283e7757f938d66423690414",
   "previousToolCount": 135,
-  "targetRevision": "1e33a644e47fee8e59fd245f613ff9bd376ae2382b15fb8bd6e09a1780626a4e",
-  "targetToolCount": 138,
+  "targetRevision": "d247d131cfc44b20f1b652263f3bc188c400034c652acb4ff0e251fde1b537cc",
+  "targetToolCount": 139,
   "requiredTools": [
     "memory_context",
     "memory_update",
@@ -14,6 +14,7 @@
     "release_orchestrator",
     "mcp_update",
     "github_workflow_operation",
+    "github_rerun_failed_jobs",
     "browser_user_messages",
     "browser_user_reply",
     "browser_progress",

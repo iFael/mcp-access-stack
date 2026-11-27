@@ -2110,6 +2110,7 @@ const expectedSourceControlAnnotations = {
   github_get_repository: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   github_workflow_operation: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  github_rerun_failed_jobs: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -2125,7 +2126,7 @@ const expectedSourceControlAnnotations = {
 } as const;
 
 describe("registerSourceControlTools", () => {
-  it("publishes twenty-eight source-control tools in the workspace surface", () => {
+  it("publishes twenty-nine source-control tools in the workspace surface", () => {
     expect(SOURCE_CONTROL_TOOL_NAMES).toEqual([
       "git_create_branch",
       "git_create_worktree",
@@ -2143,6 +2144,7 @@ describe("registerSourceControlTools", () => {
       "github_get_repository",
       "github_get_commit_checks",
       "github_workflow_operation",
+      "github_rerun_failed_jobs",
       "github_materialize_actions_artifact",
       "github_start_commit_checks_watch",
       "github_get_commit_checks_watches",
@@ -2156,9 +2158,9 @@ describe("registerSourceControlTools", () => {
       "github_read",
       "github_issue_write",
     ]);
-    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(28);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(73);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(73);
+    expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(29);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(74);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(74);
     expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
     expect(WORKSPACE_TOOL_NAMES).toContain("workspace_install_dependencies");
   });
@@ -2183,6 +2185,23 @@ describe("registerSourceControlTools", () => {
     await tool.handler(input as never,{} as never);
     expect(operation).toHaveBeenCalledTimes(1);
     expect(operation.mock.calls[0]?.[0]).toEqual(input);
+  });
+
+  it("routes selective CI rerun through the typed executor and rejects a second retry", async () => {
+    const input = { workspaceId: "ws", owner: "iFael", repository: "mcp-access-stack",
+      runId: 123, expectedHeadSha: sourceControlShaA, expectedAttempt: 1, mode: "rerun",
+      operationId: "11111111-2222-4333-8444-555555555555" };
+    const operation = jest.fn(async (_input: unknown) => ({
+      status: "submitted" as const, runId: 123, headSha: sourceControlShaA,
+      expectedAttempt: 1 as const, operationId: input.operationId,
+    }));
+    const executor = Object.assign(new MockSourceControlExecutor(), { githubRerunFailedJobs: operation });
+    const server = new McpServer({name: "test", version: "0.0.0"}, {capabilities: {tools: {}}});
+    registerSourceControlTools(server, executor, {includeTools: ["github_rerun_failed_jobs"], securitySchemes: [{type: "noauth"}]});
+    const tool = (server as unknown as {_registeredTools: Record<string, RegisteredTool>})._registeredTools.github_rerun_failed_jobs!;
+    expect((await tool.handler(input as never, {} as never)).structuredContent).toMatchObject({status: "submitted", runId: 123});
+    expect((await tool.handler({...input, expectedAttempt: 2} as never, {} as never)).isError).toBe(true);
+    expect(operation).toHaveBeenCalledTimes(1);
   });
 
   it("composes explicit path staging and commit without silent rollback", async () => {

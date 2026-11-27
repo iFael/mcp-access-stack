@@ -24,6 +24,8 @@ import type {
   GitHubGetCommitChecksInput,
   GitHubWorkflowOperationInput,
   GitHubWorkflowOperationResult,
+  GitHubRerunFailedJobsInput,
+  GitHubRerunFailedJobsResult,
   GitHubMaterializeActionsArtifactInput,
   GitHubMaterializeActionsArtifactResult,
   GitHubGetPullRequestInput,
@@ -124,6 +126,8 @@ export interface GitHubChecksWatchExecutor {
 
 /** Unified typed GitHub Actions control, dispatch and reconciliation in one operation. */
 export interface GitHubWorkflowExecutor {
+  githubRerunFailedJobs(input: GitHubRerunFailedJobsInput,
+    context?: OperationContext): Promise<GitHubRerunFailedJobsResult>;
   githubWorkflowOperation(input: GitHubWorkflowOperationInput,
     context?: OperationContext): Promise<GitHubWorkflowOperationResult>;
 }

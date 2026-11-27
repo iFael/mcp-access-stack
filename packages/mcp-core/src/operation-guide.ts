@@ -182,6 +182,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "outcome_unknown or a timeout on a mutation: reconcile read-only with the same identifiers; never repeat the mutation.",
       "AGENT_UNAVAILABLE right after promote_release: the connector is reconnecting; wait and read get_release_state again.",
       "Failed CI check: github_get_commit_checks on the SHA names the failing check; github_read kind=workflow_runs with headSha finds its run, kind=run_jobs with the runId lists the failed steps, and kind=job_logs with that jobId gives the end of the log, where the error is.",
+      "For a diagnosed transient failure of PR CI in mcp-access-stack, github_rerun_failed_jobs may request one retry of failed jobs and dependents at runId, exact head SHA and expectedAttempt=1. Reconcile the same operationId until attempt 2 completes. Never rerun releases or repeatedly rerun until green.",
       "Failed workflow dispatched by github_workflow_operation: reconcile it to get the runId, then read run_jobs and job_logs the same way.",
       "Service problem on the execution node: service_get_status for the allowlisted service, with the diagnostic window when the status alone does not explain it.",
       "Endpoint problem (the Edge /health, a release page): http_get the public URL and read the status and body.",

@@ -304,6 +304,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
     return this.agent.githubGetCommitChecks(...args);
   }
+  githubRerunFailedJobs(...args: Parameters<LocalAgent["githubRerunFailedJobs"]>) {
+    return this.agent.githubRerunFailedJobs(...args);
+  }
   githubWorkflowOperation(...args: Parameters<LocalAgent["githubWorkflowOperation"]>) {
     return this.agent.githubWorkflowOperation(...args);
   }

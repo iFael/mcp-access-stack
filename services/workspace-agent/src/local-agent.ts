@@ -138,6 +138,8 @@ import {
   githubGetCommitChecksInputSchema,
   githubWorkflowOperationInputSchema,
   githubWorkflowOperationResultSchema,
+  githubRerunFailedJobsInputSchema,
+  githubRerunFailedJobsResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -190,6 +192,8 @@ import {
   type GitHubGetCommitChecksInput,
   type GitHubWorkflowOperationInput,
   type GitHubWorkflowOperationResult,
+  type GitHubRerunFailedJobsInput,
+  type GitHubRerunFailedJobsResult,
   type GitHubMaterializeActionsArtifactInput,
   type GitHubMaterializeActionsArtifactResult,
   type GitHubGetCommitChecksWatchesInput,
@@ -267,6 +271,7 @@ import { FileMutationReceiptStore } from "./source-control/file-mutation-receipt
 import { GhCliUserCredentialProvider } from "./source-control/gh-cli-user-credential-provider.js";
 import { GitHubHttpClient, type GitHubWorkflowApiClient } from "./source-control/github-http-client.js";
 import { GitHubReleaseWorkflowOperation } from "./source-control/github-release-workflow-operation.js";
+import { GitHubCiRerun } from "./source-control/github-ci-rerun.js";
 import {inspectGitHubPublicReleaseAssets,
   type GitHubPublicDistributionInspection} from "./release/github-public-distribution-inspection.js";
 import { GitHubCommitChecksWatchManager, type GitHubCommitChecksWatchFinishedEvent } from "./source-control/github-checks-watch-manager.js";
@@ -1832,6 +1837,21 @@ export class LocalAgent {
         );
       },
     );
+  }
+
+  async githubRerunFailedJobs(input: GitHubRerunFailedJobsInput, context: OperationContext = {}): Promise<GitHubRerunFailedJobsResult> {
+    return this.runSourceControlValidatedAudited("githubRerunFailedJobs", githubRerunFailedJobsInputSchema, input, context,
+      async (workspace, parsed, activeContext, metadata) => {
+        const repository = parsed.owner + "/" + parsed.repository;
+        const mutation = parsed.mode === "rerun";
+        const capability = mutation ? "github.workflow.dispatch" as const : "github.repository.read" as const;
+        metadata.sourceControlCapability = capability;
+        metadata.targetResource = "github:" + repository + ":run/" + parsed.runId + ":attempt/1";
+        metadata.expectedSha = parsed.expectedHeadSha;
+        await this.assertGitHubRepositoryCapability(workspace, capability, repository, parsed.root ?? ".", mutation, activeContext.signal);
+        return githubRerunFailedJobsResultSchema.parse(await new GitHubCiRerun(
+          await this.getGitHubWorkflowApiClient(), this.mutationReceiptStoreFor(workspace)).execute(parsed, activeContext));
+      });
   }
 
   async githubWorkflowOperation(

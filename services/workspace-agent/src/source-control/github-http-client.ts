@@ -126,6 +126,7 @@ export interface GitHubWorkflowApiClient {
     context?: OperationContext): Promise<GitHubWorkflowRunsRecord>;
   getWorkflowRun?(owner:string,repository:string,runId:number,
     context?:OperationContext):Promise<GitHubWorkflowRunDetail>;
+  rerunFailedJobs?(owner: string, repository: string, runId: number, context?: OperationContext): Promise<void>;
   getReleaseByTag?(owner:string,repository:string,tag:string,
     context?:OperationContext):Promise<GitHubPublicReleaseRecord>;
   getReleaseAssetChecksum?(owner:string,repository:string,assetId:number,
@@ -312,6 +313,15 @@ export class GitHubHttpClient implements GitHubApiClient {
       path:`/repos/${segment(owner)}/${segment(repository)}/actions/runs/${positiveInteger(runId)}`,
       mutation:false,
     },context);
+  }
+
+  async rerunFailedJobs(owner: string, repository: string, runId: number, context?: OperationContext): Promise<void> {
+    await performGitHubRequest<unknown>(this.#credentialProvider, this.#fetchImpl, {
+      method: "POST",
+      path: `/repos/${segment(owner)}/${segment(repository)}/actions/runs/${positiveInteger(runId)}/rerun-failed-jobs`,
+      mutation: true,
+      expectedStatus: 201,
+    }, context);
   }
 
   getReleaseByTag(owner:string,repository:string,tag:string,
@@ -720,6 +730,7 @@ interface FixedRequest {
   path: string;
   body?: object;
   mutation: boolean;
+  expectedStatus?: number;
 }
 
 async function performGitHubRequest<T>(
@@ -777,6 +788,10 @@ async function performGitHubRequest<T>(
     throw unavailableError(request.mutation);
   }
 
+  if (request.expectedStatus !== undefined && response.status !== request.expectedStatus) {
+    await discardBody(response);
+    throw unavailableError(request.mutation);
+  }
   const text = await readResponseTextBounded(response);
   if (text.length === 0) return {} as T;
   try {

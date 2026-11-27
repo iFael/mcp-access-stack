@@ -88,6 +88,7 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   github_start_commit_checks_watch: "end your answer; you are woken when CI ends. Then github_wait_commit_checks_watch with the watchId.",
   github_get_commit_checks_watches: "github_wait_commit_checks_watch with a watchId.",
   github_wait_commit_checks_watch: "still running: end your answer, you are woken when it ends; failed: github_read kind=run_jobs and job_logs.",
+  github_rerun_failed_jobs: "mode=reconcile with the same runId, expectedHeadSha, expectedAttempt and operationId until attempt 2 completes. Never POST again; inspect failed jobs if attempt 2 fails.",
   github_workflow_operation: "reconcile with the same operationId until the run is observed and completed; never dispatch again.",
   github_materialize_actions_artifact: "",
   github_create_repository: "",

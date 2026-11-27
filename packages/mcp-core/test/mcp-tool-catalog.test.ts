@@ -10,8 +10,8 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(138);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(138);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(139);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(139);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).not.toContain("browser_plan");
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
@@ -33,6 +33,7 @@ describe("MCP tool catalog identity", () => {
         "git_detach_worktree",
         "git_stash_paths",
         "github_materialize_actions_artifact",
+        "github_rerun_failed_jobs",
         "delete_file",
         "get_operation_guide",
         "github_read",

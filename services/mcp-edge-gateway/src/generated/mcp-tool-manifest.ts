@@ -15071,6 +15071,154 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "mode=reconcile with the same runId, expectedHeadSha, expectedAttempt and operationId until attempt 2 completes. Never POST again; inspect failed jobs if attempt 2 fails.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "One bounded retry of a completed failed first attempt of iFael/mcp-access-stack PR CI (.github/workflows/ci.yml). Requires runId, exact head SHA, expectedAttempt=1 and stable operationId. Uses GitHub rerun-failed-jobs (failed jobs and dependents only). Never dispatches deploy/release or retries an uncertain POST. Do not rerun concurrently from another client. Reconcile with the same identifiers until attempt 2 is observed and completed; an accepted POST is not success. Next: mode=reconcile with the same runId, expectedHeadSha, expectedAttempt and operationId until attempt 2 completes. Never POST again; inspect failed jobs if attempt 2 fails.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "expectedAttempt": {
+          "const": 1,
+          "type": "number"
+        },
+        "expectedHeadSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "rerun",
+            "reconcile"
+          ],
+          "type": "string"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "owner",
+        "repository",
+        "runId",
+        "expectedHeadSha",
+        "expectedAttempt",
+        "operationId",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "name": "github_rerun_failed_jobs",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedAttempt": {
+          "const": 1,
+          "type": "number"
+        },
+        "headSha": {
+          "pattern": "^[a-fA-F0-9]{40}$",
+          "type": "string"
+        },
+        "observedAttempt": {
+          "const": 2,
+          "type": "number"
+        },
+        "operationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "runId": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "submitted",
+            "outcome_unknown",
+            "observed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "operationId",
+        "runId",
+        "headSha",
+        "expectedAttempt"
+      ],
+      "type": "object"
+    },
+    "title": "Rerun only failed GitHub PR CI jobs"
+  },
+  {
+    "_meta": {
       "securitySchemes": [
         {
           "scopes": [
@@ -32346,15 +32494,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "1e33a644e47fee8e59fd245f613ff9bd376ae2382b15fb8bd6e09a1780626a4e",
-  "serverVersion": "0.4.0-catalog.c1e33a644e47f.s6e4480b8bf8a",
-  "toolCount": 138,
-  "toolSetRevision": "6e4480b8bf8a5cc6d285b427b799e690090656effea714f7b8b035ed005458fc"
+  "contractRevision": "d247d131cfc44b20f1b652263f3bc188c400034c652acb4ff0e251fde1b537cc",
+  "serverVersion": "0.4.0-catalog.cd247d131cfc4.sc58a916da490",
+  "toolCount": 139,
+  "toolSetRevision": "c58a916da490a3fc831ed7d6f5a579f412d37e5c54d135facb9fa8918ea60949"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c1e33a644e47f.s6e4480b8bf8a"
+  "version": "0.4.0-catalog.cd247d131cfc4.sc58a916da490"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

@@ -142,6 +142,8 @@ import {
   GITHUB_OPERATION_WORKFLOWS,
   githubWorkflowOperationInputSchema,
   githubWorkflowOperationResultSchema,
+  githubRerunFailedJobsInputSchema,
+  githubRerunFailedJobsResultSchema,
   githubMaterializeActionsArtifactInputSchema,
   githubMaterializeActionsArtifactResultSchema,
   githubGetCommitChecksWatchesInputSchema,
@@ -242,6 +244,7 @@ export const SOURCE_CONTROL_TOOL_NAMES = [
   "github_get_repository",
   "github_get_commit_checks",
   "github_workflow_operation",
+  "github_rerun_failed_jobs",
   "github_materialize_actions_artifact",
   "github_start_commit_checks_watch",
   "github_get_commit_checks_watches",
@@ -3132,6 +3135,21 @@ const sourceControlMcpSchemas = {
     }).strict(),
     output: mcpGitHubCommitChecksResult,
   },
+  github_rerun_failed_jobs: {
+    input: z.object({
+      workspaceId: mcpSourceControlWorkspaceId, root: mcpSourceControlRoot.optional(),
+      owner: mcpGitHubOwner, repository: mcpGitHubRepositoryName,
+      runId: z.number().int().positive(), expectedHeadSha: mcpSourceControlSha,
+      expectedAttempt: z.literal(1), operationId: z.uuid(), mode: z.enum(["rerun", "reconcile"]),
+    }).strict(),
+    output: z.object({
+      status: z.enum(["submitted", "outcome_unknown", "observed"]), operationId: z.uuid(),
+      runId: z.number().int().positive(), headSha: mcpSourceControlSha,
+      expectedAttempt: z.literal(1), observedAttempt: z.literal(2).optional(),
+      state: z.enum(["queued", "in_progress", "completed"]).optional(),
+      conclusion: z.string().nullable().optional(),
+    }).strict().refine(value => githubRerunFailedJobsResultSchema.safeParse(value).success),
+  },
   github_workflow_operation: {
     input: z.object({
       workspaceId: mcpSourceControlWorkspaceId,
@@ -3371,6 +3389,7 @@ const sourceControlAnnotations: Record<SourceControlToolName, {
   github_get_repository: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_materialize_actions_artifact: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
+  github_rerun_failed_jobs: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_workflow_operation: { readOnlyHint: false, destructiveHint: true, openWorldHint: true, idempotentHint: true },
   github_start_commit_checks_watch: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true },
   github_get_commit_checks_watches: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true },
@@ -3902,6 +3921,28 @@ export function registerSourceControlTools(
     );
   }
 
+  if (shouldInclude("github_rerun_failed_jobs", include)) {
+    server.registerTool("github_rerun_failed_jobs", {
+      title: "Rerun only failed GitHub PR CI jobs",
+      description: "One bounded retry of a completed failed first attempt of iFael/mcp-access-stack PR CI (.github/workflows/ci.yml). Requires runId, exact head SHA, expectedAttempt=1 and stable operationId. Uses GitHub rerun-failed-jobs (failed jobs and dependents only). Never dispatches deploy/release or retries an uncertain POST. Do not rerun concurrently from another client. Reconcile with the same identifiers until attempt 2 is observed and completed; an accepted POST is not success.",
+      inputSchema: sourceControlMcpSchemas.github_rerun_failed_jobs.input,
+      outputSchema: sourceControlMcpSchemas.github_rerun_failed_jobs.output,
+      annotations: sourceControlAnnotations.github_rerun_failed_jobs,
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        if (!executor.githubRerunFailedJobs) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Typed CI rerun unavailable.");
+        const parsed = githubRerunFailedJobsInputSchema.parse(input);
+        const result = githubRerunFailedJobsResultSchema.parse(await withToolOperationContext(
+          options.operationContextFactory, extra, MAX_SYNCHRONOUS_OPERATION_TIMEOUT_MS,
+          context => executor.githubRerunFailedJobs!(parsed, context)));
+        return sourceControlSuccess("Selective CI rerun status.", result);
+      } catch (error) { return toolError(error); }
+    });
+  }
+
   if (shouldInclude("github_materialize_actions_artifact", include)) {
     server.registerTool("github_materialize_actions_artifact", {
       title: "Materialize pinned GitHub Actions artifact",
@@ -4292,6 +4333,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   githubGetRepository: "github_get_repository",
   githubGetCommitChecks: "github_get_commit_checks",
   githubWorkflowOperation: "github_workflow_operation",
+  githubRerunFailedJobs: "github_rerun_failed_jobs",
   githubMaterializeActionsArtifact: "github_materialize_actions_artifact",
   githubStartCommitChecksWatch: "github_start_commit_checks_watch",
   githubGetCommitChecksWatches: "github_get_commit_checks_watches",
