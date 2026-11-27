@@ -32,6 +32,8 @@ async function setupRepository(options: { branch?: string } = {}): Promise<{
 }> {
   fixture = await createFixture({ profile: "full-repo-write" });
   initializeGitRepository(fixture.workspacePath);
+  // These fixtures assert exact LF bytes, independent of the runner's global Git config.
+  git(fixture.workspacePath, ["config", "core.autocrlf", "false"]);
   git(fixture.workspacePath, ["checkout", "-b", options.branch ?? "main"]);
   await writeWorkspaceFile(fixture.workspacePath, "base.txt", "base\n");
   git(fixture.workspacePath, ["add", "base.txt"]);
@@ -784,6 +786,21 @@ describe("GitRepositoryService explicit stash", () => {
     expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\n");
     expect(git(root, ["show", ":base.txt"])).toBe("staged\n");
     expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\n");
+  });
+
+  it("preserves Git's native CRLF checkout and LF index semantics with autocrlf enabled", async () => {
+    const { service, root, input } = await setupStash();
+    git(root, ["config", "core.autocrlf", "true"]);
+    await writeWorkspaceFile(root, "base.txt", "unstaged\r\n");
+    await writeWorkspaceFile(root, "note[1].txt", "untracked\r\n");
+    const result = await service.stashPaths({ ...input, files: [
+      { path: "base.txt", status: "MM", expectedSha256: sha256("unstaged\r\n") },
+      { path: "note[1].txt", status: "??", expectedSha256: sha256("untracked\r\n") },
+    ] });
+    git(root, ["stash", "apply", "--index", result.stashSha]);
+    expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\r\n");
+    expect(git(root, ["show", ":base.txt"])).toBe("staged\n");
+    expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\r\n");
   });
 
   it("preserves a previously existing stash and checkpoints an explicit deletion", async () => {

@@ -357,6 +357,15 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     await noStaging(root);
   });
 
+  test("Windows native deletion rejects an in-workspace junction even when the canonical target is writable", async () => {
+    if (process.platform !== "win32") return;
+    const { agent, root } = await setup();
+    await writeWorkspaceFile(root, "real/remove.txt", "expected");
+    await symlink(path.join(root, "real"), path.join(root, "alias"), "junction");
+    await expect(agent.deleteFile({ ...input, path: "alias/remove.txt" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(await readFile(path.join(root, "real/remove.txt"), "utf8")).toBe("expected");
+  });
+
   test("Windows native deletion rejects a hardlinked file and preserves both names", async () => {
     if (process.platform !== "win32") return;
     const { agent, root } = await setup();

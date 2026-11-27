@@ -49,15 +49,22 @@ public static class McpHandleDelete {
       actual.Substring(0,4) == wanted.Substring(0,4) &&
       actual.Substring(5) == wanted.Substring(5);
   }
-  public static int Delete(string target, string expectedHash, long limit) {
-    if (target.Length < 4 || !Char.IsLetter(target[0]) || target[1] != ':' ||
-        target[2] != '\\' || target.Substring(2).Contains(":") || limit < 1 ||
-        limit > 67108864 || expectedHash.Length != 64) return 10;
+  static bool LocalPath(string value) {
+    return value.Length >= 4 && Char.IsLetter(value[0]) && value[1] == ':' &&
+      value[2] == '\\' && !value.Substring(2).Contains(":");
+  }
+  public static int Delete(string target, string canonical, string expectedHash, long limit) {
+    if (!LocalPath(target) || !LocalPath(canonical) ||
+        Char.ToUpperInvariant(target[0]) != Char.ToUpperInvariant(canonical[0]) ||
+        limit < 1 || limit > 67108864 || expectedHash.Length != 64) return 10;
     var parents = new List<SafeFileHandle>();
     var names = new List<string>();
     try {
       string directory = Path.GetPathRoot(target);
+      string canonicalDirectory = Path.GetPathRoot(canonical);
       string[] segments = target.Substring(directory.Length).Split('\\');
+      string[] canonicalSegments = canonical.Substring(canonicalDirectory.Length).Split('\\');
+      if (segments.Length != canonicalSegments.Length) return 10;
       for (int i = 0; i < segments.Length; i++) {
         if (segments[i].Length == 0 || segments[i] == "." || segments[i] == ".." ||
             segments[i].EndsWith(".") || segments[i].EndsWith(" ")) return 10;
@@ -66,12 +73,13 @@ public static class McpHandleDelete {
         SafeFileHandle parent = CreateFileW(@"\\?\" + directory, 0x80, 1,
           IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
         parents.Add(parent);
-        names.Add(directory);
+        names.Add(canonicalDirectory);
         Info pi;
         if (parent.IsInvalid) return 11;
         if (!GetFileInformationByHandle(parent, out pi) ||
-            (pi.Attributes & 0x410) != 0x10 || !SamePath(parent, directory)) return 10;
+            (pi.Attributes & 0x410) != 0x10 || !SamePath(parent, canonicalDirectory)) return 10;
         directory = Path.Combine(directory, segments[i]);
+        canonicalDirectory = Path.Combine(canonicalDirectory, canonicalSegments[i]);
       }
       // GENERIC_READ | DELETE, FILE_SHARE_READ only, OPEN_REPARSE_POINT.
       using (SafeFileHandle file = CreateFileW(@"\\?\" + target, 0x80010000, 1,
@@ -79,7 +87,7 @@ public static class McpHandleDelete {
         if (file.IsInvalid) return 11;
         Info fi;
         if (GetFileType(file) != 1 || !GetFileInformationByHandle(file, out fi) ||
-            (fi.Attributes & 0x410) != 0 || fi.Links != 1 || !SamePath(file, target)) return 10;
+            (fi.Attributes & 0x410) != 0 || fi.Links != 1 || !SamePath(file, canonical)) return 10;
         ulong size = ((ulong)fi.SizeHigh << 32) | fi.SizeLow;
         if (size > (ulong)limit) return 12;
         using (FileStream stream = new FileStream(file, FileAccess.Read, 65536, false))
@@ -104,7 +112,7 @@ public static class McpHandleDelete {
               latest.SizeHigh != fi.SizeHigh || latest.SizeLow != fi.SizeLow ||
               latest.Write.dwHighDateTime != fi.Write.dwHighDateTime ||
               latest.Write.dwLowDateTime != fi.Write.dwLowDateTime ||
-              (latest.Attributes & 0x410) != 0 || !SamePath(file, target)) return 10;
+              (latest.Attributes & 0x410) != 0 || !SamePath(file, canonical)) return 10;
           for (int i = 0; i < parents.Count; i++) {
             Info pi;
             if (!GetFileInformationByHandle(parents[i], out pi) ||
@@ -122,21 +130,21 @@ public static class McpHandleDelete {
 }
 '@
   $request = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:MCP_HANDLE_DELETE_REQUEST)) | ConvertFrom-Json
-  exit ([McpHandleDelete]::Delete([string]$request.target, [string]$request.hash, [long]$request.limit))
+  exit ([McpHandleDelete]::Delete([string]$request.target, [string]$request.canonical, [string]$request.hash, [long]$request.limit))
 } catch {
   exit 13
 }
 `;
 
-export async function deleteWindowsFile(target: string, expectedSha256: string, limit: number): Promise<void> {
-  if (process.platform !== "win32" || !/^[a-z]:\\/iu.test(target) ||
+export async function deleteWindowsFile(target: string, canonical: string, expectedSha256: string, limit: number): Promise<void> {
+  if (process.platform !== "win32" || !/^[a-z]:\\/iu.test(target) || !/^[a-z]:\\/iu.test(canonical) ||
       !/^[a-f0-9]{64}$/u.test(expectedSha256) || !Number.isSafeInteger(limit) ||
       limit < 1 || limit > 64 * 1024 * 1024) {
     throw new AppError("PERMISSION_DENIED", "Native Windows deletion requires a bounded local drive path.");
   }
   const powershell = path.win32.join(process.env.SystemRoot ?? "C:\\Windows",
     "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  const request = Buffer.from(JSON.stringify({ target, hash: expectedSha256, limit }), "utf8").toString("base64");
+  const request = Buffer.from(JSON.stringify({ target, canonical, hash: expectedSha256, limit }), "utf8").toString("base64");
   const code = await new Promise<number | undefined>((resolve) => {
     execFile(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_DELETE_SCRIPT, "utf16le").toString("base64")], {
       windowsHide: true, timeout: 25_000, maxBuffer: 4096,

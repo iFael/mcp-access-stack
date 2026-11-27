@@ -204,13 +204,12 @@ export class FileService {
       throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace deletion-size limit.");
     }
     if (input.dryRun !== true && process.platform === "win32") {
-      // The native helper rejects reparse points throughout the canonical chain.
-      // Do not follow an alias in the caller's logical path to that chain.
-      if (authorized.absolutePath.toLowerCase() !== authorized.canonicalPath.toLowerCase()) {
-        throw new AppError("INVALID_ARGUMENT", "Windows deletion cannot traverse an aliased path.");
-      }
+      // Open the original path, not a resolved alias. The native helper pins
+      // every ancestor and checks each handle against the authorized canonical
+      // chain (including expansion of ordinary Windows short names).
       const currentHash = input.expectedSha256.toLowerCase();
-      await deleteWindowsFile(authorized.canonicalPath, currentHash, Math.min(maxDeleteFileBytes, 64 * 1024 * 1024));
+      await deleteWindowsFile(authorized.absolutePath, authorized.canonicalPath, currentHash,
+        Math.min(maxDeleteFileBytes, 64 * 1024 * 1024));
       return { path: logicalPath, sha256Before: currentHash, deleted: true, dryRun: false };
     }
     // Read through the opened descriptor, not by reopening the pathname.
