@@ -1,7 +1,15 @@
 import { describe, expect, it, jest } from "@jest/globals";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { InProcessWorkspaceExecutor } from "../../../workspace-agent/src/in-process-workspace-executor.js";
+import { createMcpServer } from "../../src/mcp/server.js";
 import { LocalAgent } from "../../../workspace-agent/src/local-agent.js";
 import {
   createFixture,
+  git,
+  initializeGitRepository,
+  makeWorkspacePolicy,
+  writePolicy,
   writeWorkspaceFile,
 } from "../../../workspace-agent/test/support/helpers.js";
 import { createGatewayApplication } from "../../src/app.js";
@@ -15,6 +23,70 @@ import {
 jest.setTimeout(30_000);
 
 describe("gateway to embedded local agent integration", () => {
+  it("stages and commits once through real persistent mutation receipts and replays the same composite identity", async () => {
+    const workspace = await createFixture({ profile: "full-repo-write", confirmationMode: "trusted-workspace" });
+    const root = workspace.workspacePath;
+    let server: ReturnType<typeof createMcpServer> | undefined;
+    let client: Client | undefined;
+    try {
+      initializeGitRepository(root);
+      git(root, ["checkout", "-b", "feature/composite-receipts"]);
+      await writeWorkspaceFile(root, "base.txt", "base\n");
+      git(root, ["add", "base.txt"]);
+      git(root, ["commit", "-m", "baseline"]);
+      const head = git(root, ["rev-parse", "HEAD"]).trim();
+      await writePolicy(workspace.policyPath, [{
+        ...makeWorkspacePolicy(root, {profile: "full-repo-write", confirmationMode: "trusted-workspace"}),
+        allowWrites: ["."],
+        sourceControl: {capabilities: ["git.index.write", "git.commit.write"], accountOwners: [], additionalRepositories: []},
+      }]);
+      await writeWorkspaceFile(root, "base.txt", "changed\n");
+      await writeWorkspaceFile(root, "unrelated.txt", "preserve\n");
+
+      const input = {workspaceId: "test", paths: ["base.txt"], expectedHeadSha: head, message: "composite"};
+      const identity = "composite-e2e-stable";
+      const connect = async () => {
+        // A new LocalAgent reconstructs the file-backed receipt store from disk.
+        const executor = new InProcessWorkspaceExecutor(await LocalAgent.create(workspace.policyPath));
+        server = createMcpServer({workspaceExecutor: executor, sourceControlExecutor: executor,
+          operationContextFactory: (extra, _timeoutMs) => ({
+            context: {signal: extra.signal, idempotencyKey: identity, ownerScope: "owner:test"},
+            release: () => undefined,
+          }),
+        });
+        client = new Client({name: "composite-e2e", version: "0.0.0"}, {capabilities: {}});
+        const [ct, st] = InMemoryTransport.createLinkedPair();
+        await Promise.all([client.connect(ct), server.connect(st)]);
+      };
+      await connect();
+      const first = await client!.callTool({name: "git_commit_paths", arguments: input});
+      expect(first.isError).not.toBe(true);
+      expect(first.structuredContent).toMatchObject({status: "completed", previousHeadSha: head, paths: ["base.txt"]});
+      const committed = git(root, ["rev-parse", "HEAD"]).trim();
+      expect(first.structuredContent).toMatchObject({commitSha: committed});
+      expect(git(root, ["rev-list", "--count", "HEAD"]).trim()).toBe("2");
+      expect(git(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", committed]).trim()).toBe("base.txt");
+      expect(git(root, ["status", "--short"])).toContain("?? unrelated.txt");
+      await client!.close();
+      await server!.close();
+      await connect();
+      const replay = await client!.callTool({name: "git_commit_paths", arguments: input});
+      expect(replay.structuredContent).toEqual(first.structuredContent);
+      const conflict = await client!.callTool({name: "git_commit_paths", arguments: {...input, message: "changed identity"}});
+      expect(conflict.structuredContent).toMatchObject({
+        status: "reconciliation_required", phase: "commit",
+        error: {code: "SOURCE_CONTROL_IDEMPOTENCY_CONFLICT"},
+      });
+      expect(git(root, ["rev-parse", "HEAD"]).trim()).toBe(committed);
+      expect(git(root, ["rev-list", "--count", "HEAD"]).trim()).toBe("2");
+      expect(git(root, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+    } finally {
+      await client?.close();
+      await server?.close();
+      await workspace.cleanup();
+    }
+  });
+
   it("reads a workspace file through MCP using the embedded LocalAgent", async () => {
     const workspace = await createFixture();
     let gateway: ReturnType<typeof createGatewayApplication> | undefined;

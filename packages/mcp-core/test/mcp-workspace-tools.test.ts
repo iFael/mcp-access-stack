@@ -2205,6 +2205,39 @@ describe("registerSourceControlTools", () => {
     expect(operation).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["idempotencyKey", "invocationId", "correlationId"] as const)(
+    "uses distinct stable receipt identities for composite stage and commit with %s",
+    async (identityField) => {
+      const executor = new MockSourceControlExecutor();
+      const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+      const parentKey = "p".repeat(128);
+      const signal = new AbortController().signal;
+      const context: OperationContext = {
+        [identityField]: parentKey, ownerScope: "owner:test", signal,
+        ...(identityField === "idempotencyKey" ? { invocationId: "parent" } : {}),
+      };
+      registerSourceControlTools(server, executor, {
+        includeTools: ["git_commit_paths"],
+        securitySchemes: [{ type: "noauth" }],
+        operationContextFactory: () => ({ context, release: () => undefined }),
+      });
+      const tool = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools["git_commit_paths"]!;
+      const input = { workspaceId: "ws", paths: ["a.txt"], message: "composite", expectedHeadSha: sourceControlShaA };
+      const first = await tool.handler(input, { signal });
+      expect(first.structuredContent).toMatchObject({ status: "completed" });
+      const stageContext = executor.calls[0]?.context as OperationContext;
+      const commitContext = executor.calls[1]?.context as OperationContext;
+      expect(stageContext).toEqual(context);
+      expect(stageContext[identityField]).toBe(parentKey);
+      expect(commitContext.idempotencyKey).toMatch(/^[a-f0-9]{64}$/);
+      expect(commitContext.idempotencyKey).not.toBe(parentKey);
+      expect(commitContext).toMatchObject({ ...context, idempotencyKey: commitContext.idempotencyKey });
+      await tool.handler(input, { signal });
+      expect(executor.calls[2]?.context).toEqual(stageContext);
+      expect(executor.calls[3]?.context).toEqual(commitContext);
+    },
+  );
+
   it("composes explicit path staging and commit without silent rollback", async () => {
     const executor = new MockSourceControlExecutor();
     const server = new McpServer(

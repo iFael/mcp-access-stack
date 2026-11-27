@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -3668,6 +3669,16 @@ export function registerSourceControlTools(
                 }
 
                 try {
+                  // Keep the original stage receipt identity for reconciliation,
+                  // but give commit its own stable, operation-scoped identity.
+                  const parentKey = context.idempotencyKey ?? context.invocationId ?? context.correlationId;
+                  const commitContext = parentKey === undefined ? context : {
+                    ...context,
+                    idempotencyKey: createHash("sha256")
+                      .update("git_commit_paths:commit:v1\0")
+                      .update(parentKey)
+                      .digest("hex"),
+                  };
                   const committed = gitCommitResultSchema.parse(
                     await executor.commit(
                       {
@@ -3677,7 +3688,7 @@ export function registerSourceControlTools(
                         expectedHeadSha: parsed.expectedHeadSha,
                         expectedIndexTreeSha: staged.indexTreeSha,
                       },
-                      context,
+                      commitContext,
                     ),
                   );
                   return {
