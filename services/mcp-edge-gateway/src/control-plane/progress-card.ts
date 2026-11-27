@@ -329,7 +329,7 @@ export class ProgressPlans {
       const planId = typeof args.planId === "string"
         ? args.planId : await this.planForSession(userId, progressSession(body));
       const plan = plans.find((entry) => entry.planId === planId);
-      return plan ? toolResult(id, `Plan ${plan.planId}.`, plan) : toolError(id, "NOT_FOUND", "This plan is no longer kept.");
+      return plan ? toolResult(id, `Plan ${plan.planId}.`, await this.visiblePlan(plan)) : toolError(id, "NOT_FOUND", "This plan is no longer kept.");
     }
 
     const now = this.now().toISOString();
@@ -343,8 +343,9 @@ export class ProgressPlans {
       await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
       // Reusing an existing card also restores its session association after a reconnect/update.
       await this.bindSession(userId, progressSession(body), plan.planId);
-      const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
-      return toolResult(id, `Plan shown again (${done}/${plan.steps.length} done).`, plan);
+      const visible = await this.visiblePlan(plan);
+      const done = visible.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
+      return toolResult(id, `Plan shown again (${done}/${visible.steps.length} done).`, visible);
     }
     const allowed = name === "browser_progress" ? ["title", "steps"] : ["planId", "title", "steps"];
     const input = readPlanInput(args, allowed);
@@ -355,8 +356,7 @@ export class ProgressPlans {
       const existing = (generic || automatic) ? plans.find((entry) => entry.planId === existingId) : undefined;
       if (existing) {
         // Explicit planning adopts the automatically created card.
-        plan = { ...existing, title: input.title!, steps: timed(existing.steps, input.steps, now),
-          updatedAt: now, shownAt: now };
+        plan = { ...replaceChecklist(existing, input.title, input.steps, now), shownAt: now };
         await this.storage.put(key, plans.map((entry) => entry.planId === existingId ? plan : entry));
         await this.storage.delete(`${AUTO_PLAN_PREFIX}${existingId}`);
       } else {
@@ -367,14 +367,39 @@ export class ProgressPlans {
     } else {
       const current = plans.find((entry) => entry.planId === args.planId);
       if (!current) return toolError(id, "NOT_FOUND", "No plan with this planId; open one with browser_progress.");
-      plan = { ...current, ...(input.title === undefined ? {} : { title: input.title }), steps: timed(current.steps, input.steps, now), updatedAt: now, ...(generic ? { shownAt: now } : {}) };
+      plan = { ...replaceChecklist(current, input.title, input.steps, now), ...(generic ? { shownAt: now } : {}) };
       await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
+      // An explicit checklist replaces automatic phase tracking, even when the
+      // card was initially created without a plan.
+      await this.storage.delete(`${AUTO_PLAN_PREFIX}${plan.planId}`);
     }
-    const done = plan.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
+    const visible = await this.visiblePlan(plan);
+    const done = visible.steps.filter((step) => step.state === "done" || step.state === "skipped").length;
     const text = name === "browser_progress"
-      ? `Plan shown to the user (planId ${plan.planId}, ${done}/${plan.steps.length} done). Update it with browser_progress_update and this planId; the same card follows.`
-      : `Plan updated: ${done}/${plan.steps.length} done.`;
-    return toolResult(id, text, plan);
+      ? `Plan shown to the user (planId ${plan.planId}, ${done}/${visible.steps.length} done). Update it with browser_progress_update and this planId; the same card follows.`
+      : `Plan updated: ${done}/${visible.steps.length} done.`;
+    return toolResult(id, text, visible);
+  }
+
+  /** The checklist is not a transcript of the tools used to implement it.
+   * Keep detailed observations in storage for correlation, not on the card.
+   * Automatic plans still show the status of persistent work, grouped by kind.
+   * Project on every response so already mounted cards also stop accumulating.
+   */
+  private async visiblePlan(plan: ProgressPlan): Promise<ProgressPlan> {
+    const { observedSteps, ...visible } = plan;
+    if (!await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${plan.planId}`)) return visible;
+    const groups: ProgressPlanStep[] = [];
+    for (const [prefix, label] of [["CI — ", "Monitoramento de CI"], ["Tarefa — ", "Tarefas em segundo plano"]] as const) {
+      const entries = (observedSteps ?? []).filter((step) => step.text.startsWith(prefix));
+      if (entries.length === 0) continue;
+      const running = entries.filter((step) => step.state === "doing").length;
+      const failed = entries.filter((step) => step.state === "failed").length;
+      const done = entries.filter((step) => step.state === "done").length;
+      groups.push({ text: label, state: running ? "doing" : failed ? "failed" : "done",
+        detail: [running ? `${running} em andamento` : "", failed ? `${failed} com falha` : "", done ? `${done} concluída${done === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") });
+    }
+    return groups.length ? { ...visible, steps: [...visible.steps, ...groups].slice(-20) } : visible;
   }
 
   private readonly sessionQueue = new Map<string, Promise<unknown>>();
@@ -420,10 +445,17 @@ export class ProgressPlans {
         return;
       }
       const automatic = await this.storage.get<boolean>(`${AUTO_PLAN_PREFIX}${existing.planId}`);
-      const previous = automatic ? existing.steps : existing.observedSteps ?? [];
+      // Without an explicit plan, a fresh batch after an idle period is the
+      // current work. Keep parallel/persistent work together until it settles.
+      const fresh = automatic && existing.activity?.status === "idle" &&
+        !existing.observedSteps?.some((step) => step.state === "doing");
+      const current = fresh
+        ? { ...existing, title: `MCP V3 — ${phase}`, steps: [], observedSteps: [] }
+        : existing;
+      const previous = automatic ? current.steps : current.observedSteps ?? [];
       const steps = upsertObserved(previous.filter((step) => step.text !== "Aguardando operação"), { text: phase, state: "doing" }, now);
       await this.storage.put(key, plans.map((entry) => entry.planId === existing.planId
-        ? { ...entry, ...(automatic ? { steps } : { observedSteps: steps }), activity, updatedAt: now } : entry));
+        ? { ...current, ...(automatic ? { steps } : { observedSteps: steps }), activity, updatedAt: now } : entry));
       });
     } catch (error) {
       calls.delete(body as object);
@@ -530,6 +562,10 @@ export class ProgressPlans {
       if (!plan || await this.storage.get<string>(`${OWNER_PREFIX}${target.planId}`) !== target.userId) continue;
       const now = this.now().toISOString();
       if (ownerUserId && target.userId !== ownerUserId) continue;
+      // The persistent ledger retains old bindings, but a late event cannot
+      // attach itself again to a checklist that has moved to another task.
+      const currentBinding = binding?.userId === target.userId && binding.planId === target.planId;
+      if (!currentBinding && !plan.observedSteps?.some((step) => step.text === updated.text)) continue;
       const targetState = state === "doing" ? updated.ownerStates?.[target.userId] ?? state : state;
       const observedSteps = upsertObserved(plan.observedSteps ?? [], { text: updated.text, state: targetState }, now);
       const activity = plan.activity?.status === "running" ? plan.activity : { status: observedSteps.some((step) => step.state === "doing") ? "waiting" as const : "idle" as const, observedAt: now };
@@ -656,17 +692,29 @@ export class ProgressPlans {
     if (!current) return false;
     const now = this.now().toISOString();
     const plan: ProgressPlan = {
-      ...current,
-      ...(update.title === undefined ? {} : { title: update.title }),
-      steps: timed(current.steps, update.steps, now),
-      updatedAt: now,
+      ...replaceChecklist(current, update.title, update.steps, now),
       ...(update.steps.some((step) => step.state === "doing") || current.activity
         ? { activity: { status: update.steps.some((step) => step.state === "doing") ? "waiting" as const : "idle" as const, observedAt: now } }
         : {}),
     };
     await this.storage.put(key, plans.map((entry) => (entry.planId === plan.planId ? plan : entry)));
+    await this.storage.delete(`${AUTO_PLAN_PREFIX}${plan.planId}`);
     return true;
   }
+}
+
+/** A new task title starts a fresh checklist, not a new card or ledger. */
+function replaceChecklist(current: ProgressPlan, title: string | undefined, steps: ProgressStep[], now: string): ProgressPlan {
+  const changedTask = title !== undefined && title !== current.title;
+  const { observedSteps, activity, ...plan } = current;
+  return {
+    ...plan,
+    title: title ?? current.title,
+    steps: timed(changedTask ? [] : current.steps, steps, now),
+    updatedAt: now,
+    ...(!changedTask && observedSteps ? { observedSteps } : {}),
+    ...(!changedTask && activity ? { activity } : {}),
+  };
 }
 
 function progressToolName(body: unknown): string | null {
