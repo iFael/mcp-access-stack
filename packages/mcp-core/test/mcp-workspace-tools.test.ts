@@ -2159,10 +2159,11 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(29);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(74);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(74);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(75);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(75);
     expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
     expect(WORKSPACE_TOOL_NAMES).toContain("workspace_install_dependencies");
+    expect(WORKSPACE_TOOL_NAMES).toContain("oracle_grant_dependency_install_permission");
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

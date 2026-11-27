@@ -8,6 +8,7 @@ import {
   AppError,
   asAppError,
   policyFileSchema,
+  ORACLE_EDITOR_DEPENDENCY_ROOT,
   type PolicyFile,
 } from "@vs-code-gpt/shared";
 import { createGatewayApplication } from "./app.js";
@@ -17,7 +18,7 @@ import { loadGatewayConfig } from "./config.js";
 import { ScopedBrowserWorkerPool } from "./browser/scoped-browser-worker-pool.js";
 import { LocalRepositoryManager, parseGitHubAccountOwners, withGlobalGitHubRepositoryCreatePolicy } from "./companion/local-repository-manager.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
-import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, ReadyReviewPolicyGrant, WorktreePolicyGrant, type LocalAgent} from "@vs-code-gpt/local-agent";
+import {createLocalAgentMcpUpdatePort, loadOracleControlBindingFromEnvironment, McpUpdateRunner, ReadyReviewPolicyGrant, WorktreePolicyGrant, DependencyInstallPolicyGrant, type LocalAgent} from "@vs-code-gpt/local-agent";
 import { EdgeConnector } from "./edge/connector.js";
 import type { CompanionUpdateRequest, ProgressUpdate, WakeEvent } from "@mcp-access-stack/edge-protocol";
 import {OracleSourceProviderConnector} from "./edge/oracle-source-provider.js";
@@ -121,6 +122,15 @@ async function main(): Promise<void> {
     () => hasEffectiveCapability("git.worktree.write"),
     reloadGrantedPolicy,
   );
+  const dependencyInstallPolicyAdmin = new DependencyInstallPolicyGrant(
+    runtime.policyPath,
+    path.join(runtime.runtimeRoot, "policy-dependency-install-grant-audit.jsonl"),
+    () => effectivePolicy.workspaces.some((item) => item.id === "mcp-access-stack" &&
+      item.enabled && item.permissionProfile === "full-repo-write" &&
+      item.confirmationMode === "trusted-workspace" &&
+      (item.dependencyInstallRoots?.includes(ORACLE_EDITOR_DEPENDENCY_ROOT) ?? false)),
+    reloadGrantedPolicy,
+  );
   const sourceOptions=await loadOracleSourceProviderFromEnvironment(process.env,
     config=>reloadable.oracleSourceReadPort(config));
   const sourceConnector=sourceOptions===undefined?undefined:new OracleSourceProviderConnector(sourceOptions);
@@ -162,6 +172,7 @@ async function main(): Promise<void> {
     memoryStore,
     policyAdmin,
     worktreePolicyAdmin,
+    dependencyInstallPolicyAdmin,
     ...(browserPool === undefined
       ? {}
       : {

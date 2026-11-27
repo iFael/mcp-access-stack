@@ -23,6 +23,7 @@ export {
   validatePolicyFile,
   ReadyReviewPolicyGrant,
   WorktreePolicyGrant,
+  DependencyInstallPolicyGrant,
   type PolicyApplyResult,
   type PolicyValidationResult,
 } from "./policy-deployment.js";

@@ -95,21 +95,25 @@ export function validateDependencyLock(buffer: Buffer, manifest: Buffer): void {
   }
 }
 
-export async function authorizeDependencyRoot(workspace: ResolvedWorkspace, input: WorkspaceDependencyInstallInput): Promise<string> {
-  if (process.platform !== "linux" || constants.O_DIRECTORY === undefined || constants.O_NOFOLLOW === undefined) {
-    throw new AppError("CAPABILITY_UNSUPPORTED", "Isolated dependency publication currently requires Linux pinned directories.");
-  }
+export function assertDependencyInstallPolicy(workspace: ResolvedWorkspace, root: string): void {
   if (workspace.permissionProfile !== "full-repo-write" || workspace.confirmationMode !== "trusted-workspace" ||
-      workspace.workspaceKind === "aggregate" || !workspace.dependencyInstallRoots?.includes(input.root) ||
-      !workspace.allowShell.some((root) => root === "." || input.root === root || input.root.startsWith(root + "/")) ||
-      input.root.split("/").some((part) => [".worktrees", ".git", "runtime", ".runtime-private", "node_modules"].includes(part.toLowerCase()))) {
+      workspace.workspaceKind === "aggregate" || !workspace.dependencyInstallRoots?.includes(root) ||
+      !workspace.allowShell.some((allowed) => allowed === "." || root === allowed || root.startsWith(allowed + "/")) ||
+      root.split("/").some((part) => [".worktrees", ".git", "runtime", ".runtime-private", "node_modules"].includes(part.toLowerCase()))) {
     throw new AppError("PERMISSION_DENIED", "Dependency installation requires an explicitly opted-in trusted workspace subdirectory.");
   }
   const security = new PathSecurity(workspace);
   for (const suffix of ["", "/package.json", "/package-lock.json", "/node_modules"]) {
-    security.authorizeWriteLogical(input.root + suffix);
+    security.authorizeWriteLogical(root + suffix);
   }
-  const authorized = await security.authorizeExisting(input.root, "directory");
+}
+
+export async function authorizeDependencyRoot(workspace: ResolvedWorkspace, input: WorkspaceDependencyInstallInput): Promise<string> {
+  if (process.platform !== "linux" || constants.O_DIRECTORY === undefined || constants.O_NOFOLLOW === undefined) {
+    throw new AppError("CAPABILITY_UNSUPPORTED", "Isolated dependency publication currently requires Linux pinned directories.");
+  }
+  assertDependencyInstallPolicy(workspace, input.root);
+  const authorized = await new PathSecurity(workspace).authorizeExisting(input.root, "directory");
   if (authorized.canonicalRelativePath !== input.root || authorized.canonicalPath !== authorized.absolutePath) {
     throw new AppError("INVALID_PATH", "Dependency directory must not traverse links.");
   }

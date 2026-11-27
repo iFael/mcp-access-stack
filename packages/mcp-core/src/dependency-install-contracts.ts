@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const ORACLE_EDITOR_DEPENDENCY_ROOT = "tooling/smoke/browser/editor-fixtures" as const;
+export const ORACLE_EDITOR_DEPENDENCY_GRANT = "dependency.install.editor-fixtures" as const;
+
 const sha = z.string().regex(/^[a-f0-9]{64}$/u);
 export const workspaceDependencyInstallInputSchema = z.object({
   workspaceId: z.string().trim().min(1),
