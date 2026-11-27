@@ -428,6 +428,51 @@ async function main(): Promise<void> {
       'const pending = chrome.debugger.sendCommand(target, method, params).then(value => { ' +
       'if (method === "Page.getLayoutMetrics") globalThis.__mcpSmokeCaptureLayout = { tabId: target.tabId, view: value.cssVisualViewport, content: value.cssContentSize }; return value; });');
   }
+
+  if (process.env.PERSONAL_SMOKE_COMPOSITOR_ONLY === "1") {
+    // This wrapper exists only in the generated, disposable fixture extension.
+    // Record bounded metadata, never frame pixels, document contents or URLs.
+    smokeScript += `
+      globalThis.__mcpSmokeCompositorTrace = [];
+      const smokeTrace = (entry) => {
+        const trace = globalThis.__mcpSmokeCompositorTrace;
+        trace.push({ t: Math.round(performance.now()), ...entry });
+        if (trace.length > 512) trace.shift();
+      };
+      const smokeMethods = new Set(["Page.enable", "Page.getLayoutMetrics", "Page.startScreencast",
+        "Page.screencastFrameAck", "Page.stopScreencast", "Page.captureScreenshot",
+        "Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride"]);
+      const smokeSend = chrome.debugger.sendCommand.bind(chrome.debugger);
+      chrome.debugger.sendCommand = async (target, method, params) => {
+        const observed = smokeMethods.has(method) || (method === "Runtime.evaluate" &&
+          ["document.visibilityState", "window.devicePixelRatio"].includes(params?.expression));
+        if (!observed) return smokeSend(target, method, params);
+        smokeTrace({ event: "send", tabId: target.tabId, method, frame: params?.sessionId });
+        try {
+          const value = await smokeSend(target, method, params);
+          smokeTrace({ event: "reply", tabId: target.tabId, method, frame: params?.sessionId,
+            ...(method === "Runtime.evaluate" ? { value: value?.result?.value } : {}),
+            ...(method === "Page.getLayoutMetrics" ? { width: value?.cssVisualViewport?.clientWidth,
+              height: value?.cssVisualViewport?.clientHeight } : {}) });
+          return value;
+        } catch (error) {
+          smokeTrace({ event: "reject", tabId: target.tabId, method, frame: params?.sessionId,
+            error: String(error?.message || error).slice(0, 160) });
+          throw error;
+        }
+      };
+      chrome.debugger.onEvent.addListener((source, method, params) => {
+        if (method === "Page.screencastFrame" || method === "Page.screencastVisibilityChanged") {
+          smokeTrace({ event: method, tabId: source.tabId, childSession: !!source.sessionId,
+            frame: params?.sessionId, visible: params?.visible });
+        }
+      });
+      chrome.debugger.onDetach.addListener((source, reason) => smokeTrace({
+        event: "detach", tabId: source.tabId, reason }));
+      chrome.tabs.onActivated.addListener(info => smokeTrace({ event: "activated", tabId: info.tabId }));
+      chrome.windows.onFocusChanged.addListener(id => smokeTrace({ event: "window-focus", windowId: id }));
+    `;
+  }
   await writeFile(extensionScript, smokeScript);
   let context: BrowserContext | undefined;
   let nativeProcess: ChildProcess | undefined;
@@ -872,6 +917,102 @@ async function main(): Promise<void> {
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER BACKGROUND CAPTURE PASS");
     };
+
+    if (process.env.PERSONAL_SMOKE_COMPOSITOR_ONLY === "1") {
+      const url = `http://capture-site.test:${sitePort}/`;
+      const taskId = "personal-compositor-lifecycle";
+      const target = (await bridge.open({ url, taskId })).tab.tabId;
+      const targetPage = await waitForFixturePage(context, url);
+      const other = (await bridge.open({ url: url + "?other=1", taskId })).tab.tabId;
+      const otherPage = await waitForFixturePage(context, url + "?other=1");
+      const worker = context.serviceWorkers().find(candidate => new URL(candidate.url()).pathname === "/service-worker.js");
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      const id = Number(target.split(":")[1]);
+      const traces: unknown[] = [];
+      const observe = async () => ({
+        page: await targetPage.evaluate("({ visibility: document.visibilityState, hidden: document.hidden, focus: document.hasFocus(), width: innerWidth, height: innerHeight, dpr: devicePixelRatio })"),
+        chrome: await worker.evaluate(`(async()=>{ const tab=await chrome.tabs.get(${id}); const win=await chrome.windows.get(tab.windowId); return {active:tab.active, windowFocused:win.focused, windowState:win.state, discarded:tab.discarded}; })()`),
+      });
+      const probe = async (label: string) => {
+        const before = await observe();
+        let result: unknown;
+        try {
+          const shot = await bridge.screenshot({ tabId: target, region: { x: 300, y: 100, width: 120, height: 80 }, scale: "device" });
+          const data = (shot as typeof shot & { contentBase64?: string }).contentBase64;
+          result = { ok: true, size: data ? jpegSize(Buffer.from(data, "base64")) : null };
+        } catch (error) { result = { ok: false, error: String(error) }; }
+        const trace = await worker.evaluate("globalThis.__mcpSmokeCompositorTrace.slice()");
+        const observation = { label, before, after: await observe(), result, trace };
+        traces.push(observation);
+        console.log("COMPOSITOR " + JSON.stringify(observation));
+        await worker.evaluate("globalThis.__mcpSmokeCompositorTrace.length = 0");
+      };
+      try {
+        await bridge.selectTab({ tabId: target });
+        await probe("natural-selected");
+        await bridge.selectTab({ tabId: other });
+        await probe("natural-hidden");
+        await bridge.viewport({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 2 });
+        await probe("emulated-hidden");
+        await bridge.viewport({ tabId: target, preset: "reset" });
+        await probe("reset-hidden");
+        await bridge.selectTab({ tabId: target });
+        await probe("reset-selected");
+        // Discriminate geometry override from DPR and from applying while hidden.
+        await bridge.viewport({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 2 });
+        await probe("emulated-visible");
+        await bridge.selectTab({ tabId: other });
+        await probe("emulated-then-hidden");
+        await bridge.selectTab({ tabId: target });
+        await bridge.viewport({ tabId: target, preset: "reset" });
+        await probe("visible-reset");
+        await bridge.selectTab({ tabId: other });
+        await bridge.viewport({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 1 });
+        await probe("dpr-one-hidden");
+        await bridge.selectTab({ tabId: target });
+        await bridge.viewport({ tabId: target, preset: "reset" });
+        await probe("recovered-visible");
+        await bridge.selectTab({ tabId: other });
+        await probe("recovered-hidden");
+        if (process.env.PERSONAL_SMOKE_COMPOSITOR_RAW === "1") {
+          // Isolated fixture only: change exactly one CDP method, on the
+          // already attached owned target, to separate Chrome from MCP emulation.
+          const raw = (method: string, params?: object) => worker.evaluate(`(async()=> {
+            const target = {tabId:${id}};
+            if (!(await chrome.debugger.getTargets()).some(t=>t.tabId===${id} && t.attached))
+              throw new Error("Fixture target must already be attached");
+            await chrome.debugger.sendCommand(target,${JSON.stringify(method)},${JSON.stringify(params ?? {})});
+          })()`);
+          try {
+            await raw("Emulation.setDeviceMetricsOverride", { width: 1000, height: 700,
+              deviceScaleFactor: 1, mobile: false, screenWidth: 1000, screenHeight: 700 });
+            await probe("raw-metrics-only-hidden");
+            await bridge.selectTab({ tabId: target });
+            await probe("raw-metrics-visible");
+          } finally {
+            await raw("Emulation.clearDeviceMetricsOverride");
+          }
+          await probe("raw-metrics-reset-visible");
+        }
+        await bridge.selectTab({ tabId: target });
+        if (process.env.PERSONAL_SMOKE_HEADFUL === "1") {
+          await bridge.viewport({ tabId: target, preset: "window", width: 1280, height: 900 });
+          await probe("isolated-window");
+          // Only the fixture's owned window is minimized. Restore in finally.
+          const windowId = await worker.evaluate(`chrome.tabs.get(${id}).then(tab=>tab.windowId)`) as number;
+          try {
+            await worker.evaluate(`chrome.windows.update(${windowId}, {state:"minimized"})`);
+            await targetPage.waitForFunction("document.visibilityState === 'hidden'", undefined, { timeout: 4000 });
+            await probe("isolated-minimized");
+          } finally {
+            await worker.evaluate(`chrome.windows.update(${windowId}, {state:"normal",focused:false})`);
+          }
+          await probe("isolated-restored");
+        }
+        report("compositor diagnostic summary", { samples: traces.length, otherVisibility: await otherPage.evaluate("document.visibilityState") });
+      } finally { await bridge.finishTask({ taskId }); }
+      return;
+    }
     if (process.env.PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY === "1") {
       await verifyBackgroundCapture(context);
       return;
