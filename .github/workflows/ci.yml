@@ -385,6 +385,14 @@ jobs:
           PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY: "1"
           PERSONAL_SMOKE_NATIVE_BACKGROUND: "1"
         run: npm run smoke:browser:personal-frames
+
+      - name: Install locked test-only editor dependencies without lifecycle scripts
+        run: npm ci --prefix tooling/smoke/browser/editor-fixtures --ignore-scripts --no-audit --no-fund
+
+      - name: Verify real editor models through native Chrome input
+        env:
+          PERSONAL_SMOKE_REAL_EDITORS_ONLY: "1"
+        run: npm run smoke:browser:personal-frames
   pr-workspace-agent-unit:
     needs: impact
     if: >-

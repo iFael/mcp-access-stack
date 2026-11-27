@@ -6134,6 +6134,36 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(snapshotPage("drag-a").refs[0]).toMatchObject({ role: "generic", name: "A" });
   });
 
+  it("exposes the actual zero-width Monaco EditContext only inside a visible editor", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const host = Object.assign(fakeElement({tagName:"DIV"}), {
+      isConnected: true, getBoundingClientRect: () => ({width:420,height:200}),
+    });
+    const input = (name: string, withContext: boolean, parent: typeof host | null) =>
+      Object.assign(fakeElement({tagName:"DIV",attributes:{role:"textbox","aria-label":name}}), {
+        isConnected:true, editContext:withContext?{text:"private model"}:null,
+        closest:(selector:string)=>selector===".monaco-editor"?parent:null,
+        getBoundingClientRect:()=>({width:0,height:19}),
+      });
+    const valid = input("Fixture Monaco",true,host);
+    const ordinary = input("Ordinary hidden input",false,host);
+    const orphan = input("No editor host",true,null);
+    const hiddenHost = Object.assign(fakeElement({tagName:"DIV"}), {
+      isConnected:true,getBoundingClientRect:()=>({width:0,height:0}),
+    });
+    const hidden = input("Hidden editor",true,hiddenHost);
+    const disconnected = input("Disconnected editor",true,host);
+    disconnected.isConnected=false;
+    const dom = createDom([valid,ordinary,orphan,hidden,disconnected]);
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`,dom.context) as
+      (generation:string)=>{refs:Array<{ref:string;role:string;name:string}>;content:string};
+    const result = snapshot("native-edit-context");
+    expect(result.refs).toHaveLength(1);
+    expect(result.refs[0]).toMatchObject({role:"textbox",name:"Fixture Monaco"});
+    expect(vm.runInContext("__mcpV3OwnedRefElements",dom.context).get(result.refs[0]!.ref)).toBe(valid);
+    expect(result.content).not.toContain("private model");
+  });
+
   it("emits richer safe DOM semantics without exposing input values", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const checkbox = fakeElement({

@@ -7438,7 +7438,20 @@ function snapshotPage(generation, compact = false) {
     const element = elements[index];
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
-    if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) continue;
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    if (rect.width === 0 || rect.height === 0) {
+      // Monaco's native EditContext has zero width by design. Bind the
+      // actual editing control, not its decorative IME textarea. Only a
+      // connected textbox inside a visible Monaco surface qualifies.
+      const host = rect.width === 0 && rect.height > 0 && element.isConnected &&
+        element.editContext != null && element.getAttribute("role") === "textbox"
+        ? element.closest?.(".monaco-editor") : null;
+      if (!host?.isConnected) continue;
+      const hostStyle = getComputedStyle(host);
+      const hostRect = host.getBoundingClientRect();
+      if (hostStyle.display === "none" || hostStyle.visibility === "hidden" ||
+          hostRect.width <= 0 || hostRect.height <= 0) continue;
+    }
     // A native link, checkbox or field keeps its semantic role even when it
     // uses cursor:pointer or tabindex. The guarded click probe must see the
     // same role; only an otherwise generic element becomes a button.

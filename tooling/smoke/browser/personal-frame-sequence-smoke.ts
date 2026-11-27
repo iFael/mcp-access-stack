@@ -11,6 +11,7 @@
 // PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
 // PERSONAL_SMOKE_NATIVE_BACKGROUND=1 retains Chrome's normal background throttling for that test.
 // PERSONAL_SMOKE_RICH_FRAME_ONLY=1 checks editable and protected rich text in scriptable frames.
+// PERSONAL_SMOKE_REAL_EDITORS_ONLY=1 checks installed real editor fixtures (isolated lockfile required).
 // PERSONAL_SMOKE_PERFORMANCE_ONLY=1 measures paired verified actions and native bridge telemetry.
 // PERSONAL_SMOKE_OOPIF_FOCUS_ONLY=1 exercises independent nested navigation and focus samples.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
@@ -22,6 +23,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
+import { createEditorFixture, verifyRealEditors } from "./editor-fixtures/fixture.js";
 
 interface LegacyFixtureRouter {
   handle(request: http.IncomingMessage, response: http.ServerResponse, url: URL): boolean;
@@ -310,8 +312,10 @@ async function main(): Promise<void> {
   const legacyFixture = createLegacyLegacySiteFixtureRouter({ largeMenu: true });
   let slowHelpResponses = 0;
   let redirectHits = 0;
-  const server = http.createServer((req, res) => {
+  const editorFixture = process.env.PERSONAL_SMOKE_REAL_EDITORS_ONLY === "1" ? await createEditorFixture() : undefined;
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (editorFixture && await editorFixture.handle(req, res, url)) return;
     if (url.hostname === "recovery-site.test" && url.pathname === "/runs" && !url.search) {
       redirectHits++;
       res.writeHead(302, { location: "/runs?v3=false", "cache-control": "no-store" }).end();
@@ -474,6 +478,11 @@ async function main(): Promise<void> {
     }
     if (!bridge.isConnected()) throw new Error("The generated extension did not connect to the bridge.");
     report("connection", { ...bridge.connectionInfo(), capabilities: undefined });
+
+    if (editorFixture) {
+      await verifyRealEditors(bridge, context, sitePort, waitForFixturePage);
+      return;
+    }
 
     if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
       const url = `http://recovery-site.test:${sitePort}/`;
