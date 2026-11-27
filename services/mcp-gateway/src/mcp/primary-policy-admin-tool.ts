@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { AppError, asAppError } from "@vs-code-gpt/shared";
+import { AppError, asAppError, ORACLE_EDITOR_DEPENDENCY_GRANT, ORACLE_EDITOR_DEPENDENCY_ROOT } from "@vs-code-gpt/shared";
 import { z } from "zod";
 
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -12,7 +12,7 @@ const grantInputSchema = z.discriminatedUnion("action", [
   }).strict(),
 ]);
 
-type GrantCapability = "github.pull_request.ready" | "git.worktree.write";
+type GrantCapability = "github.pull_request.ready" | "git.worktree.write" | typeof ORACLE_EDITOR_DEPENDENCY_GRANT;
 const grantResultSchema = <C extends GrantCapability>(capability: C) => z.object({
   status: z.enum(["not_granted", "granted", "already_granted"]),
   workspaceId: z.literal("mcp-access-stack"),
@@ -41,10 +41,11 @@ interface NarrowPolicyAdmin<C extends GrantCapability> {
 
 export type PrimaryPolicyAdmin = NarrowPolicyAdmin<"github.pull_request.ready">;
 export type WorktreePolicyAdmin = NarrowPolicyAdmin<"git.worktree.write">;
+export type DependencyInstallPolicyAdmin = NarrowPolicyAdmin<typeof ORACLE_EDITOR_DEPENDENCY_GRANT>;
 
 function registerNarrowPolicyAdminTool<C extends GrantCapability>(
   server: McpServer,
-  name: "oracle_grant_github_ready_permission" | "oracle_grant_worktree_permission",
+  name: "oracle_grant_github_ready_permission" | "oracle_grant_worktree_permission" | "oracle_grant_dependency_install_permission",
   capability: C,
   admin: NarrowPolicyAdmin<C> | undefined,
   authenticatedUserId: string | undefined,
@@ -53,17 +54,19 @@ function registerNarrowPolicyAdminTool<C extends GrantCapability>(
   server.registerTool(
     name,
     {
-      title: capability === "git.worktree.write"
+      title: capability === ORACLE_EDITOR_DEPENDENCY_GRANT ? "Inspect or grant Oracle editor fixture dependency permission" : capability === "git.worktree.write"
         ? "Inspect or grant Oracle Git worktree permission"
         : "Inspect or grant Oracle GitHub ready-for-review permission",
-      description: capability === "git.worktree.write"
+      description: capability === ORACLE_EDITOR_DEPENDENCY_GRANT
+        ? `Oracle owner-only fixed opt-in for ${ORACLE_EDITOR_DEPENDENCY_ROOT} in mcp-access-stack. Inspect first, then grant with policy SHA-256 CAS and operationId. Preserves existing permissions; backup, audit and in-process reload. Cannot choose a path or grant arbitrary shell execution.`
+        : capability === "git.worktree.write"
         ? "Oracle-only fixed git.worktree.write grant for mcp-access-stack: inspect first, then grant with policy SHA-256 CAS and operationId. Audits, backs up and reloads the policy in-process; cannot choose paths or other capabilities."
         : "Oracle-only administrative operation. Inspects the installed policy or grants only github.pull_request.ready to mcp-access-stack using policy SHA-256 CAS, a UUID operation ID, backup, audit and in-process policy reload. No arbitrary file paths or capabilities.",
       inputSchema: grantInputSchema,
       outputSchema: grantResultSchema(capability),
       annotations: {
         readOnlyHint: false,
-        destructiveHint: capability === "git.worktree.write",
+        destructiveHint: capability !== "github.pull_request.ready",
         openWorldHint: false,
         idempotentHint: true,
       },
@@ -109,4 +112,14 @@ export function registerWorktreePolicyAdminTool(
 ): void {
   registerNarrowPolicyAdminTool(server, "oracle_grant_worktree_permission",
     "git.worktree.write", admin, authenticatedUserId, securitySchemes);
+}
+
+export function registerDependencyInstallPolicyAdminTool(
+  server: McpServer,
+  admin?: DependencyInstallPolicyAdmin,
+  authenticatedUserId?: string,
+  securitySchemes: Array<{ type: "oauth2" | "noauth"; scopes?: string[] }> = [{ type: "noauth" }],
+): void {
+  registerNarrowPolicyAdminTool(server, "oracle_grant_dependency_install_permission",
+    ORACLE_EDITOR_DEPENDENCY_GRANT, admin, authenticatedUserId, securitySchemes);
 }

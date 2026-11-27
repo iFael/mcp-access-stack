@@ -1,12 +1,13 @@
 import { appendFile, copyFile, lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { AppError, policyFileSchema, type PolicyFile, type SourceControlCapability } from "@vs-code-gpt/shared";
+import { AppError, policyFileSchema, ORACLE_EDITOR_DEPENDENCY_ROOT, ORACLE_EDITOR_DEPENDENCY_GRANT, type PolicyFile, type SourceControlCapability } from "@vs-code-gpt/shared";
 import { WorkspaceRegistry } from "./workspace-registry.js";
+import { assertDependencyInstallPolicy } from "./tasks/dependency-install.js";
 
 
 /** Strictly scoped Oracle capability grants; callers never choose a path or capability. */
-type OracleGrantCapability = "github.pull_request.ready" | "git.worktree.write";
+type OracleGrantCapability = "github.pull_request.ready" | "git.worktree.write" | typeof ORACLE_EDITOR_DEPENDENCY_GRANT;
 type OracleGrantStatus = "not_granted" | "granted" | "already_granted";
 
 export interface OracleGrantResult<C extends OracleGrantCapability> {
@@ -28,7 +29,7 @@ class FixedOraclePolicyGrant<C extends OracleGrantCapability> {
     private readonly onApplied: () => Promise<void>,
     private readonly capability: C,
     private readonly prerequisite: SourceControlCapability,
-    private readonly auditLabel: "ready" | "worktree",
+    private readonly auditLabel: "ready" | "worktree" | "dependency-install",
   ) {}
 
   async inspect(): Promise<OracleGrantResult<C>> {
@@ -49,6 +50,9 @@ class FixedOraclePolicyGrant<C extends OracleGrantCapability> {
     try {
       const current = await this.readCurrent();
       if (current.granted) {
+        if (this.capability === ORACLE_EDITOR_DEPENDENCY_GRANT) {
+          assertDependencyInstallPolicy((await WorkspaceRegistry.fromPolicy(current.policy)).get("mcp-access-stack"), ORACLE_EDITOR_DEPENDENCY_ROOT);
+        }
         if (!this.effective()) await this.onApplied();
         return this.result(current.sha256, "already_granted", false);
       }
@@ -64,8 +68,13 @@ class FixedOraclePolicyGrant<C extends OracleGrantCapability> {
       // Preserve unrelated fields: schema parsing may inject defaults.
       const next = JSON.parse(current.bytes.toString("utf8")) as PolicyFile;
       const target = next.workspaces.find((item) => item.id === "mcp-access-stack")!;
-      target.sourceControl!.capabilities.push(this.capability);
-      await WorkspaceRegistry.fromPolicy(next);
+      if (this.capability === ORACLE_EDITOR_DEPENDENCY_GRANT) {
+        target.dependencyInstallRoots = [...(target.dependencyInstallRoots ?? []), ORACLE_EDITOR_DEPENDENCY_ROOT];
+        assertDependencyInstallPolicy((await WorkspaceRegistry.fromPolicy(next)).get("mcp-access-stack"), ORACLE_EDITOR_DEPENDENCY_ROOT);
+      } else {
+        target.sourceControl!.capabilities.push(this.capability);
+        await WorkspaceRegistry.fromPolicy(next);
+      }
       const contents = Buffer.from(JSON.stringify(next, null, 2) + "\n", "utf8");
       const nextSha = createHash("sha256").update(contents).digest("hex");
       await appendFile(this.auditPath, JSON.stringify({
@@ -137,7 +146,9 @@ class FixedOraclePolicyGrant<C extends OracleGrantCapability> {
     }
     return {
       bytes, sha256, policy,
-      granted: workspace.sourceControl?.capabilities.includes(this.capability) ?? false,
+      granted: this.capability === ORACLE_EDITOR_DEPENDENCY_GRANT
+        ? workspace.dependencyInstallRoots?.includes(ORACLE_EDITOR_DEPENDENCY_ROOT) ?? false
+        : workspace.sourceControl?.capabilities.includes(this.capability) ?? false,
     };
   }
 
@@ -162,6 +173,14 @@ export class WorktreePolicyGrant extends FixedOraclePolicyGrant<"git.worktree.wr
   constructor(policyPath: string, auditPath: string, effective: () => boolean, onApplied: () => Promise<void>) {
     super(policyPath, auditPath, effective, onApplied,
       "git.worktree.write", "git.branch.write", "worktree");
+  }
+}
+
+/** Fixed opt-in for isolated editor test dependencies; never grants arbitrary paths. */
+export class DependencyInstallPolicyGrant extends FixedOraclePolicyGrant<typeof ORACLE_EDITOR_DEPENDENCY_GRANT> {
+  constructor(policyPath: string, auditPath: string, effective: () => boolean, onApplied: () => Promise<void>) {
+    super(policyPath, auditPath, effective, onApplied,
+      ORACLE_EDITOR_DEPENDENCY_GRANT, "git.branch.write", "dependency-install");
   }
 }
 
