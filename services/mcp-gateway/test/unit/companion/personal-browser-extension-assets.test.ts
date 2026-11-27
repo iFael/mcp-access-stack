@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.19");
+    expect(manifest.version).toBe("1.17.20");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -5135,9 +5135,9 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
         chrome: { debugger: {
           onEvent: { addListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.add(fn),
             removeListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.delete(fn) },
-          sendCommand: async (_target: unknown, method: string, params?: {sessionId: number}) => {
+          sendCommand: async (_target: unknown, method: string, params?: {sessionId: number; expression?: string}) => {
             calls.push(method);
-            if (method === "Runtime.evaluate") return { result: { value: "hidden" } };
+            if (method === "Runtime.evaluate") return { result: { value: params?.expression === "window.devicePixelRatio" ? 1 : "hidden" } };
             if (method === "Page.startScreencast") {
               if (scenario === "start rejection") throw new Error("already active");
               for (const listener of listeners) {
@@ -5198,6 +5198,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       releasePersonalTaskDebugger: async () => { detachStarted.resolve(); return detach.promise; },
       chrome: { debugger: { sendCommand: async (_: unknown, method: string) => {
         if (method === "Page.captureScreenshot") { captureStarted.resolve(); return capture.promise; }
+        if (method === "Runtime.evaluate") return { result: { value: 1 } };
         return {};
       } } },
     });
@@ -5292,6 +5293,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
             captureStarted.resolve();
             return capture.promise;
           }
+          if (method === "Runtime.evaluate") return { result: { value: 1 } };
           return {};
         },
       } },
@@ -5321,7 +5323,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     }
   });
 
-  it("captures a bounded CSS viewport region using page scroll offsets and device scale", async () => {
+  it("captures bounded regions at the requested CSS or device resolution without double scaling DPR", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ name: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
@@ -5340,6 +5342,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
           commands.push({ name, params });
           if (name === "Page.getLayoutMetrics") return {
             cssVisualViewport: { clientWidth: 800, clientHeight: 600, pageX: 32, pageY: 80 },
+            cssContentSize: { width: 800, height: 1800 },
           };
           if (name === "Runtime.evaluate") return { result: { value: 2 } };
           if (name === "Page.captureScreenshot") return { data: "AQID" };
@@ -5355,7 +5358,17 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       scale: "device",
     })).resolves.toMatchObject({ sizeBytes: 3, mimeType: "image/jpeg" });
     expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
-      clip: { x: 42, y: 100, width: 200, height: 100, scale: 2 },
+      clip: { x: 42, y: 100, width: 200, height: 100, scale: 1 },
+    });
+    commands.length = 0;
+    await screenshot({ tabId: "personal:7", region: { x: 10, y: 20, width: 200, height: 100 }, scale: "css" });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 42, y: 100, width: 200, height: 100, scale: 0.5 },
+    });
+    commands.length = 0;
+    await screenshot({ tabId: "personal:7", region: { x: 10, y: 20, width: 200, height: 100 }, zoom: 3 });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 42, y: 100, width: 200, height: 100, scale: 1.5 },
     });
     commands.length = 0;
     await expect(screenshot({
@@ -5367,7 +5380,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     // Zoom re-renders the clip at a higher resolution, bounded by the pixel budget.
     await screenshot({ tabId: "personal:7", region: { x: 10, y: 20, width: 200, height: 100 }, scale: "device", zoom: 3 });
     expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
-      clip: { x: 42, y: 100, width: 200, height: 100, scale: 6 },
+      clip: { x: 42, y: 100, width: 200, height: 100, scale: 3 },
     });
     commands.length = 0;
     await expect(screenshot({ tabId: "personal:7", region: { x: 0, y: 0, width: 800, height: 600 },
@@ -5375,6 +5388,23 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       .rejects.toMatchObject({ code: "LIMIT_EXCEEDED" });
     await expect(screenshot({ tabId: "personal:7", zoom: 2 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     expect(commands.some((c) => c.name === "Page.captureScreenshot")).toBe(false);
+    await screenshot({ tabId: "personal:7" });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 32, y: 80, width: 800, height: 600, scale: 0.5 },
+    });
+    commands.length = 0;
+    await screenshot({ tabId: "personal:7", scale: "device" });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).not.toHaveProperty("clip");
+    commands.length = 0;
+    await screenshot({ tabId: "personal:7", fullPage: true });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 0, y: 0, width: 800, height: 1800, scale: 0.5 },
+    });
+    commands.length = 0;
+    await screenshot({ tabId: "personal:7", fullPage: true, scale: "device" });
+    expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
+      clip: { x: 0, y: 0, width: 800, height: 1800, scale: 1 },
+    });
   });
 
   it("activates only a verified MCP-owned tab and does not adopt another user's tab", async () => {
@@ -5413,7 +5443,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.19");
+    expect(parsedManifest.version).toBe("1.17.20");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
