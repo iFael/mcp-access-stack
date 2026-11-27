@@ -347,7 +347,7 @@ describe("GitRepositoryService isolated worktrees", () => {
     await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "BLOCKED_PATH" });
     expect((await lstat(path.join(target, "runtime"))).isDirectory()).toBe(true);
     await rmdir(path.join(target, "runtime"));
-    await expect(service.removeWorktree({ ...input, pruneIgnoredFiles: [{ ...input.pruneIgnoredFiles[0], expectedSha256: "f".repeat(64) }] }))
+    await expect(service.removeWorktree({ ...input, pruneIgnoredFiles: [{ path: input.pruneIgnoredFiles[0]!.path, expectedSha256: "f".repeat(64) }] }))
       .rejects.toThrow();
     expect(await readFile(path.join(target, "node_modules/cache.txt"), "utf8")).toBe("generated\n");
     expect(await readFile(path.join(target, ".codex/HANDOFF.md"), "utf8")).toBe("historical\n");

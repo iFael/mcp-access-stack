@@ -25,6 +25,7 @@ import type { ResolvedWorkspace } from "../internal-types.js";
 import { collectAuthorizedFiles, listAuthorizedWorkspaceRoots } from "./discovery.js";
 import { searchAuthorizedFiles } from "./search.js";
 import { PathSecurity } from "../path-security.js";
+import { deleteWindowsFile } from "./windows-delete.js";
 import {
   atomicWriteBuffer,
   countOccurrences,
@@ -178,9 +179,9 @@ export class FileService {
     const authorized = await security.authorizeExisting(input.path, "file");
     security.authorizeWriteLogical(authorized.canonicalRelativePath);
 
-    // Linux can anchor a staging rename to an opened parent directory via procfs.
-    // Other platforms remain fail-closed until they have an equivalent primitive.
-    if (input.dryRun !== true && (process.platform !== "linux" ||
+    // Linux pins staging via procfs; Windows uses native handle disposition.
+    // All other platforms remain fail-closed.
+    if (input.dryRun !== true && process.platform !== "win32" && (process.platform !== "linux" ||
       constants.O_DIRECTORY === undefined || constants.O_NOFOLLOW === undefined)) {
       throw new AppError("PERMISSION_DENIED", "Safe file deletion is unavailable on this platform.");
     }
@@ -201,6 +202,16 @@ export class FileService {
     const maxDeleteFileBytes = workspace.limits.maxDeleteFileBytes ?? workspace.limits.maxFileBytes;
     if (initial.size > maxDeleteFileBytes) {
       throw new AppError("FILE_TOO_LARGE", "File exceeds the workspace deletion-size limit.");
+    }
+    if (input.dryRun !== true && process.platform === "win32") {
+      // The native helper rejects reparse points throughout the canonical chain.
+      // Do not follow an alias in the caller's logical path to that chain.
+      if (authorized.absolutePath.toLowerCase() !== authorized.canonicalPath.toLowerCase()) {
+        throw new AppError("INVALID_ARGUMENT", "Windows deletion cannot traverse an aliased path.");
+      }
+      const currentHash = input.expectedSha256.toLowerCase();
+      await deleteWindowsFile(authorized.canonicalPath, currentHash, Math.min(maxDeleteFileBytes, 64 * 1024 * 1024));
+      return { path: logicalPath, sha256Before: currentHash, deleted: true, dryRun: false };
     }
     // Read through the opened descriptor, not by reopening the pathname.
     // This does not authorize destructive deletion; it only narrows the

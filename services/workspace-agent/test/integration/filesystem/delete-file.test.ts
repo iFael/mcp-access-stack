@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, open, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, open, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, jest, test } from "@jest/globals";
@@ -16,6 +16,8 @@ import {
   writeWorkspaceFile,
 } from "../../support/helpers.js";
 
+jest.setTimeout(45_000);
+const nativeDeletion = process.platform === "linux" || process.platform === "win32";
 let fixture: Fixture | undefined;
 afterEach(async () => {
   await fixture?.cleanup();
@@ -55,7 +57,7 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     await expect(agent.deleteFile({ ...input, dryRun: true })).resolves.toEqual({
       path: "remove.txt", sha256Before: input.expectedSha256, deleted: false, dryRun: true,
     });
-    if (process.platform === "linux") {
+    if (nativeDeletion) {
       await expect(agent.deleteFile(input)).resolves.toEqual({
         path: "remove.txt", sha256Before: input.expectedSha256, deleted: true, dryRun: false,
       });
@@ -78,7 +80,7 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
       .resolves.toMatchObject({ deleted: false, sha256Before: target.expectedSha256 });
     await expect(agent.deleteFile({ ...target, dryRun: true, expectedSha256: "0".repeat(64) }))
       .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
-    if (process.platform === "linux") {
+    if (nativeDeletion) {
       await expect(agent.deleteFile(target)).resolves.toMatchObject({ deleted: true });
       await expect(lstat(path.join(root, "remove.txt"))).rejects.toMatchObject({ code: "ENOENT" });
     } else {
@@ -124,7 +126,7 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     const { agent, root } = await setup();
     await writeWorkspaceFile(root, "remove.txt", "changed");
     await expect(agent.deleteFile(input)).rejects.toMatchObject({
-      code: process.platform === "linux" ? "INVALID_ARGUMENT" : "PERMISSION_DENIED",
+      code: nativeDeletion ? "INVALID_ARGUMENT" : "PERMISSION_DENIED",
     });
     await expect(readFile(path.join(root, "remove.txt"), "utf8")).resolves.toBe("changed");
     await noStaging(root);
@@ -172,7 +174,7 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     await writeWorkspaceFile(root, "nested/remove.txt", "expected");
     await expect(agent.deleteFile({ ...input, path: "nested/remove.txt", dryRun: true }))
       .resolves.toMatchObject({ deleted: false, dryRun: true });
-    if (process.platform === "linux") {
+    if (nativeDeletion) {
       await expect(agent.deleteFile({ ...input, path: "nested/remove.txt" }))
         .resolves.toMatchObject({ deleted: true });
       await expect(lstat(path.join(root, "nested/remove.txt")))
@@ -203,7 +205,7 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
         return authorized;
       });
     try {
-      if (process.platform === "linux") {
+      if (nativeDeletion) {
         await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
           .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
       } else {
@@ -251,7 +253,7 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     await writeWorkspaceFile(root, "nested/remove.txt", "expected");
     await writeWorkspaceFile(fixture!.basePath, "remove.txt", "expected");
     const workspace = (await WorkspaceRegistry.load(fixture!.policyPath)).get("test");
-    if (process.platform === "linux") {
+    if (nativeDeletion) {
       await expect(new FileService().deleteFile(workspace, { ...input, path: "nested/remove.txt" }))
         .resolves.toMatchObject({ deleted: true });
       await expect(lstat(path.join(root, "nested/remove.txt")))
@@ -353,6 +355,26 @@ describe("typed file deletion (pinned parent and staged inode validation)", () =
     await expect(readFile(path.join(root, "nested-original", "remove.txt"), "utf8"))
       .resolves.toBe("expected");
     await noStaging(root);
+  });
+
+  test("Windows native deletion rejects a hardlinked file and preserves both names", async () => {
+    if (process.platform !== "win32") return;
+    const { agent, root } = await setup();
+    const other = path.join(root, "hardlink.txt");
+    await link(path.join(root, "remove.txt"), other);
+    await expect(agent.deleteFile(input)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(await readFile(other, "utf8")).toBe("expected");
+    expect(await readFile(path.join(root, "remove.txt"), "utf8")).toBe("expected");
+  });
+
+  test("Windows native deletion treats apostrophes and Unicode as literal file names", async () => {
+    if (process.platform !== "win32") return;
+    const { agent, root } = await setup();
+    const name = "arquivo d'água.txt";
+    await writeWorkspaceFile(root, name, "expected");
+    await expect(agent.deleteFile({ ...input, path: name })).resolves.toMatchObject({ deleted: true });
+    await expect(lstat(path.join(root, name))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(root, "remove.txt"), "utf8")).toBe("expected");
   });
 
   test("rejects existing symlink ancestor pointing outside workspace", async () => {
