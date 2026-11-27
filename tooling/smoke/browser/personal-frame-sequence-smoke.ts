@@ -930,7 +930,10 @@ async function main(): Promise<void> {
       const id = Number(target.split(":")[1]);
       const traces: unknown[] = [];
       const observe = async () => ({
-        page: await targetPage.evaluate("({ visibility: document.visibilityState, hidden: document.hidden, focus: document.hasFocus(), width: innerWidth, height: innerHeight, dpr: devicePixelRatio })"),
+        page: await targetPage.evaluate<{
+          visibility: string; hidden: boolean; focus: boolean;
+          width: number; height: number; dpr: number;
+        }>("({ visibility: document.visibilityState, hidden: document.hidden, focus: document.hasFocus(), width: innerWidth, height: innerHeight, dpr: devicePixelRatio })"),
         chrome: await worker.evaluate(`(async()=>{ const tab=await chrome.tabs.get(${id}); const win=await chrome.windows.get(tab.windowId); return {active:tab.active, windowFocused:win.focused, windowState:win.state, discarded:tab.discarded}; })()`),
       });
       const probe = async (label: string) => {
