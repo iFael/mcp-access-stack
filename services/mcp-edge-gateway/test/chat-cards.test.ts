@@ -199,8 +199,7 @@ describe("automatic progress across MCP tools", () => {
     await plans.startTool(github, "user_1");
     await plans.finishTool(github, "user_1", response({ passed: true }));
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_1"))).structuredContent)
-      .toMatchObject({ planId: id, steps: [
-        { text: "Pesquisa e navegação", state: "done" },
+      .toMatchObject({ planId: id, title: "MCP V3 — GitHub e CI", steps: [
         { text: "GitHub e CI", state: "done" },
       ] });
     expect((await result(await plans.handle(sessionTool("browser_progress_read", "chat-a"), "user_2"))).isError).toBe(true);
@@ -209,7 +208,8 @@ describe("automatic progress across MCP tools", () => {
   });
 
   it("opens one generic Fluxo and correlates an early CI terminal event without changing manual steps", async () => {
-    const plans = new ProgressPlans(memory());
+    const storage = memory();
+    const plans = new ProgressPlans(storage);
     const open = sessionTool("mcp_fluxo", "fluxo");
     open.params.arguments = { action: "open", title: "Investigar", steps: [{ text: "Investigar", state: "doing" }] };
     const first = await result(await plans.handle(open, "owner"));
@@ -221,7 +221,12 @@ describe("automatic progress across MCP tools", () => {
     await plans.finishPersistent({ kind: "checks", watchId, workspaceId: "w", repository: "r", commitSha: "a".repeat(40), state: "passed" });
     await plans.finishTool(watch, "owner", response({ status: "started", watch: { id: watchId, workspaceId: "w", state: "watching" } }));
     const read = await result(await plans.handle(call("browser_progress_read", { planId: first.structuredContent?.planId }), "owner"));
-    expect(read.structuredContent).toMatchObject({ steps: [{ text: "Investigar", state: "doing" }], observedSteps: expect.arrayContaining([{ text: `CI — ${watchId}`, state: "done" }]) });
+    expect(read.structuredContent).toMatchObject({ steps: [{ text: "Investigar", state: "doing" }] });
+    expect(read.structuredContent?.observedSteps).toBeUndefined();
+    // Early terminal correlation is still retained in the internal plan.
+    expect(storage.values.get("progress-plans:owner")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ observedSteps: expect.arrayContaining([expect.objectContaining({ text: `CI — ${watchId}`, state: "done" })]) }),
+    ]));
     expect((await result(await plans.handle(call("mcp_fluxo", { action: "open", operation: "update_mcp" }), "owner"))).isError).toBe(true);
   });
 
@@ -251,10 +256,109 @@ describe("automatic progress across MCP tools", () => {
     await plans.finishTool(task, "owner", response({ task: { id: taskId, workspaceId: "w", state: "running" } }));
     await plans.finishPersistent({ kind: "task", taskId, workspaceId: "w", state: "failed" }, "other");
     const current = await result(await plans.handle(call("browser_progress_read", { planId: first.structuredContent?.planId }), "owner"));
-    expect(current.structuredContent?.observedSteps).toEqual(expect.arrayContaining([expect.objectContaining({ text: `Tarefa — ${taskId}`, state: "doing" })]));
+    expect(current.structuredContent?.steps).toContainEqual({ text: "Tarefas em segundo plano", state: "doing", detail: "1 em andamento" });
+    expect(current.structuredContent?.observedSteps).toBeUndefined();
+    expect(JSON.stringify(current.structuredContent)).not.toContain(taskId);
     await plans.finishPersistent({ kind: "task", taskId, workspaceId: "w", state: "succeeded" }, "owner");
     const finished = await result(await plans.handle(call("browser_progress_read", { planId: first.structuredContent?.planId }), "owner"));
-    expect(finished.structuredContent?.observedSteps).toEqual(expect.arrayContaining([expect.objectContaining({ text: `Tarefa — ${taskId}`, state: "done" })]));
+    expect(finished.structuredContent?.steps).toContainEqual({ text: "Tarefas em segundo plano", state: "done", detail: "1 concluída" });
+  });
+
+  it("groups parallel persistent work without exposing identifiers on automatic cards", async () => {
+    const plans = new ProgressPlans(memory());
+    const open = sessionTool("mcp_fluxo", "parallel-summary");
+    open.params.arguments = { action: "open" };
+    const first = await result(await plans.handle(open, "owner"));
+    const planId = first.structuredContent!.planId as string;
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+    for (const id of ids) {
+      const task = sessionTool("start_background_task", "parallel-summary");
+      await plans.startTool(task, "owner");
+      await plans.finishTool(task, "owner", response({ task: { id, workspaceId: "w", state: "running" } }));
+    }
+    const read = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    expect(read.structuredContent?.steps).toContainEqual({ text: "Tarefas em segundo plano", state: "doing", detail: "2 em andamento" });
+    expect(read.structuredContent?.observedSteps).toBeUndefined();
+    for (const id of ids) expect(JSON.stringify(read.structuredContent)).not.toContain(id);
+    await plans.finishPersistent({ kind: "task", taskId: ids[0]!, workspaceId: "w", state: "succeeded" }, "owner");
+    const partial = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    expect(partial.structuredContent?.steps).toContainEqual({ text: "Tarefas em segundo plano", state: "doing", detail: "1 em andamento · 1 concluída" });
+    await plans.finishPersistent({ kind: "task", taskId: ids[1]!, workspaceId: "w", state: "failed" }, "owner");
+    const next = sessionTool("browser_snapshot", "parallel-summary");
+    await plans.startTool(next, "owner");
+    await plans.finishTool(next, "owner", response({ ok: true }));
+    await plans.finishPersistent({ kind: "task", taskId: ids[1]!, workspaceId: "w", state: "failed" }, "owner");
+    const nextRead = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    expect(nextRead.structuredContent).toMatchObject({ planId, title: "MCP V3 — Pesquisa e navegação",
+      steps: [{ text: "Pesquisa e navegação", state: "done" }] });
+    expect(nextRead.structuredContent?.observedSteps).toBeUndefined();
+  });
+
+  it("keeps historical technical observations out of every explicit card response", async () => {
+    const storage = memory();
+    const plans = new ProgressPlans(storage);
+    const open = sessionTool("mcp_fluxo", "long-conversation");
+    open.params.arguments = { action: "open", title: "Primeira tarefa", steps: [{ text: "Validar", state: "doing" }] };
+    const first = await result(await plans.handle(open, "owner"));
+    const planId = first.structuredContent!.planId as string;
+    const watchId = "11111111-1111-4111-8111-111111111111";
+    const watch = sessionTool("github_start_commit_checks_watch", "long-conversation");
+    await plans.startTool(watch, "owner");
+    await plans.finishTool(watch, "owner", response({ watch: { id: watchId, workspaceId: "w", state: "failed" } }));
+    const update = sessionTool("browser_progress_update", "long-conversation");
+    update.params.arguments = { planId, title: "Segunda tarefa", steps: [{ text: "Publicar", state: "done" }] };
+    const changed = await result(await plans.handle(update, "owner"));
+    const read = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    const shown = await result(await plans.handle(call("mcp_fluxo", { action: "show", planId }), "owner"));
+    for (const output of [changed, read, shown]) {
+      expect(output.structuredContent).toMatchObject({ planId, title: "Segunda tarefa", steps: [{ text: "Publicar", state: "done" }] });
+      expect(output.structuredContent?.observedSteps ?? []).toEqual([]);
+      expect(JSON.stringify(output.structuredContent)).not.toContain(watchId);
+    }
+    // A late event still reconciles the technical record, not the visible checklist.
+    await plans.finishPersistent({ kind: "checks", watchId, workspaceId: "w", repository: "r", commitSha: "a".repeat(40), state: "passed" }, "owner");
+    expect(JSON.stringify(storage.values.get("progress-persistent-v1"))).toContain(watchId);
+    const after = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    expect(after.structuredContent?.observedSteps ?? []).toEqual([]);
+  });
+
+  it("does not let late task events or reused step names inherit old task state", async () => {
+    const storage = memory();
+    let now = "2026-11-19T14:00:00.000Z";
+    const plans = new ProgressPlans(storage, () => new Date(now));
+    const open = sessionTool("mcp_fluxo", "new-task");
+    open.params.arguments = { action: "open", title: "Primeira tarefa", steps: [{ text: "Validar", state: "doing" }] };
+    const first = await result(await plans.handle(open, "owner"));
+    const planId = first.structuredContent!.planId as string;
+    const taskId = "11111111-1111-4111-8111-111111111111";
+    const task = sessionTool("start_background_task", "new-task");
+    await plans.startTool(task, "owner");
+    await plans.finishTool(task, "owner", response({ task: { id: taskId, workspaceId: "w", state: "running" } }));
+    now = "2026-11-19T14:10:00.000Z";
+    const changed = await result(await plans.handle(call("browser_progress_update", {
+      planId, title: "Segunda tarefa", steps: [{ text: "Validar", state: "doing" }],
+    }), "owner"));
+    expect(changed.structuredContent?.steps).toEqual([{ text: "Validar", state: "doing", startedAt: now }]);
+    now = "2026-11-19T14:11:00.000Z";
+    await plans.finishPersistent({ kind: "task", taskId, workspaceId: "w", state: "failed" }, "owner");
+    const after = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    expect(after.structuredContent).toEqual(changed.structuredContent);
+    expect(JSON.stringify(storage.values.get("progress-persistent-v1"))).toContain(taskId);
+  });
+
+  it("turns an automatic card into an explicit checklist when the agent updates it", async () => {
+    const plans = new ProgressPlans(memory());
+    const open = sessionTool("mcp_fluxo", "auto-update");
+    open.params.arguments = { action: "open" };
+    const first = await result(await plans.handle(open, "owner"));
+    const planId = first.structuredContent!.planId as string;
+    await plans.handle(call("browser_progress_update", { planId, title: "Plano atual", steps: [{ text: "Validar", state: "doing" }] }), "owner");
+    const tool = sessionTool("read_file", "auto-update");
+    await plans.startTool(tool, "owner");
+    await plans.finishTool(tool, "owner", response({ ok: true }));
+    const read = await result(await plans.handle(call("browser_progress_read", { planId }), "owner"));
+    expect(read.structuredContent?.steps).toEqual([expect.objectContaining({ text: "Validar", state: "doing" })]);
+    expect(read.structuredContent?.observedSteps ?? []).toEqual([]);
   });
 
   it("reports live tool activity on an explicit card without rewriting its planned steps", async () => {
