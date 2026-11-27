@@ -273,6 +273,8 @@ jobs:
            needs.impact.outputs.mcpGateway == 'true' ||
            needs.impact.outputs.browserWorker == 'true' ||
            needs.impact.outputs.rootBroad == 'true')
+        env:
+          MCP_TYPECHECK_JOBS: "2"
         run: npm run typecheck
 
       - name: Build MCP Gateway
@@ -359,7 +361,9 @@ jobs:
         with:
           node-version: 26
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            tooling/smoke/browser/editor-fixtures/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -379,6 +383,20 @@ jobs:
         env:
           PERSONAL_SMOKE_HEADFUL: "1"
         run: xvfb-run -a npm run smoke:browser:personal-frames
+
+      - name: Verify genuinely hidden Chromium screenshots without focus emulation
+        env:
+          PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY: "1"
+          PERSONAL_SMOKE_NATIVE_BACKGROUND: "1"
+        run: npm run smoke:browser:personal-frames
+
+      - name: Install locked test-only editor dependencies without lifecycle scripts
+        run: npm ci --prefix tooling/smoke/browser/editor-fixtures --ignore-scripts --no-audit --no-fund
+
+      - name: Verify real editor models through native Chrome input
+        env:
+          PERSONAL_SMOKE_REAL_EDITORS_ONLY: "1"
+        run: npm run smoke:browser:personal-frames
   pr-workspace-agent-unit:
     needs: impact
     if: >-

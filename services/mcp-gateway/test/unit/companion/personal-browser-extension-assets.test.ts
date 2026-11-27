@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.18");
+    expect(manifest.version).toBe("1.17.19");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -752,7 +752,7 @@ describe("personal browser extension assets", () => {
     let changedLabel = false;
     let selected = false;
     const context = vm.createContext({
-      performance: { now: () => 5 }, Date, JSON, Math, setTimeout,
+      performance: { now: () => 5 }, Date, JSON, Math, setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       delay: (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
@@ -1520,12 +1520,128 @@ describe("personal browser extension assets", () => {
     expect(reads).toBe(1);
   });
 
+  it.each([
+    ["direct", "click", "mousePressed", false], ["direct", "click", "mouseReleased", false],
+    ["direct", "fill", "insertText", false], ["direct", "fill", "textKeyDown", false],
+    ["legacy", "click", "mouseReleased", false], ["legacy", "fill", "insertText", false],
+    ["legacy", "fill", "textKeyDown", false], ["legacy", "select", "ArrowDown", false],
+    ["legacy", "press", "Enter", false],
+    ["direct", "click", "mouseReleased", true], ["legacy", "fill", "insertText", true],
+  ] as const)("recovers interrupted %s frame %s at %s without replay or later steps", async (mode, action, lost, shared) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const dispatched = deferred<void>();
+    const controller = new AbortController();
+    const events: string[] = [];
+    const fences = new Map();
+    const viewport = { borrowers: 0 };
+    const guard = { url: "https://host.example/" };
+    const frame = { frameId: 17, documentId: "child-1", url: "https://child.example/" };
+    const observed = { target: { label: "Next", role: "button", submitLike: false },
+      point: { x: 25, y: 30 }, viewport: { width: 300, height: 200 },
+      editable: true, keyEvents: lost === "textKeyDown", option: { value: "mg", moves: 2 } };
+    const step = { action, framePath: ["content"], locator: { selector: "#field" }, value: "Hi", key: "Enter" };
+    const expectedTargets = action === "click" || action === "press" ? [{ index: 1, ...observed.target }] : [];
+    const ctx = vm.createContext({
+      setTimeout, clearTimeout, performance,
+      chromeTabIdFrom: (id: string) => Number(id.split(":")[1]), requireOwnedMetadata: async () => ({}),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      throwIfAborted: (signal?: AbortSignal) => {
+        if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "EXECUTION_OUTCOME_UNKNOWN" });
+      },
+      assertPersonalNavigationTarget: () => undefined, takeFreshPersonalDebugger: () => false,
+      settlePersonalViewport: async () => undefined, delay: async () => undefined,
+      probePersonalLegacyTarget: async () => ({ frame, observed, graph: {} }),
+      resolvePersonalFramePoint: async () => ({ x: 225, y: 130 }),
+      preflightPersonalLegacyTargets: async () => expectedTargets,
+      domIndex: async () => { events.push("index"); return { items: [], totalCount: 0, truncated: false }; },
+      personalLegacyEnter: (key: string) => key === "Enter",
+      parseChromeKey: (key: string) => ({ key, code: key, keyCode: 13, modifiers: 0 }),
+      watchPersonalFrameNavigations: () => ({
+        settle: async () => { events.push("settle"); },
+        dispose: () => { events.push("dispose"); },
+      }),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalViewportSessions: new Map(shared ? [["7", viewport]] : []),
+      refuseDuringPersonalHandoff: async () => undefined, refusePausedPersonalTab: async () => undefined,
+      cancellationError: () => Object.assign(new Error("generic cancellation"), { code: "EXECUTION_OUTCOME_UNKNOWN" }),
+      chrome: {
+        tabs: { get: async () => ({ url: guard.url }) },
+        debugger: { attach: async () => undefined, detach: async () => { events.push("detach"); },
+          sendCommand: async (_: unknown, method: string, params: Record<string, unknown>) => {
+            const name = method === "Input.insertText" ? "insertText" : params.text === "H" && params.type === "keyDown"
+              ? "textKeyDown" : params.type === "keyDown" ? String(params.key) : String(params.type);
+            events.push(name);
+            if (name === lost) { dispatched.resolve(); return pending.promise; }
+            return {};
+          } },
+        scripting: { executeScript: async ({ target, func }: { target: { allFrames?: boolean }; func: { name: string } }) => {
+          if (target.allFrames) return [{ frameId: 17, documentId: "child-1", result: { url: frame.url, name: "content" } }];
+          if (func.name === "probeDirectFrameControl") return [{ ...frame, result: { x: 25, y: 30 } }];
+          if (func.name === "probeDirectFrameElement") return [{ frameId: 0, result: { x: 225, y: 130 } }];
+          if (func.name === "confirmDirectFrameFocus") return [{ ...frame, result: true }];
+          if (func.name === "personalFocusedFieldNeedsKeys") return [{ ...frame, result: lost === "textKeyDown" }];
+          if (func.name === "verifyPersonalLegacyActionTarget") return [{ ...frame, result: action !== "select" }];
+          throw new Error("Unexpected probe: " + func.name);
+        } },
+      },
+    });
+    for (const name of ["describePersonalFrame", "probeDirectFrameControl", "probeDirectFrameElement",
+      "confirmDirectFrameFocus", "personalFocusedFieldNeedsKeys", "verifyPersonalLegacyActionTarget",
+      "physicalTypingKey", "insertPersonalTextWithKeys", "directFrameAction", "runPersonalLegacyMutation", "frameSequence", "runRequest", "enqueueMutation", "mutationQueueKey"])
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const direct = vm.runInContext("directFrameAction", ctx) as (input: unknown, signal: AbortSignal, filling: boolean) => Promise<unknown>;
+    const sequence = vm.runInContext("frameSequence", ctx) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const input = { tabId: "personal:7", guard };
+    vm.runInContext('const mutationQueues = new Map(); const MUTATING_OPERATIONS = new Set(["frameClick", "frameFill", "frameSequence", "snapshot"]); ', ctx);
+    ctx.perform = (operation: string, request: unknown, signal: AbortSignal) => operation === "snapshot" ? Promise.resolve("ready") :
+      operation === "frameSequence" ? sequence(request, signal) : direct(request, signal, operation === "frameFill");
+    const request = vm.runInContext("runRequest", ctx) as (operation: string, input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const result = (mode === "direct" ? request(action === "fill" ? "frameFill" : "frameClick",
+      { ...input, frame: "content", selector: "#field", value: "Hi" }, controller.signal) :
+      request("frameSequence", { ...input, phase: "execute", expectedTargets,
+        steps: [{ action: "index" }, step, { action: "index" }] }, controller.signal))
+      .then(() => ({ code: "completed", message: "" }), (error: { code: string; message: string }) => error);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([dispatched.promise.then(() => "dispatched"), result.then(error => error.code)]))
+        .resolves.toBe("dispatched");
+      const beforeAbort = [...events];
+      controller.abort("deadline");
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve({ code: "stuck" }), 500); })]))
+        .resolves.toMatchObject({ code: "EXECUTION_OUTCOME_UNKNOWN" });
+      const expected = [...beforeAbort, ...(shared ? [] : ["detach"]), ...(mode === "legacy" ? ["dispose"] : [])];
+      expect(events).toEqual(expected);
+      expect(fences.size).toBe(shared ? 1 : 0);
+      expect(viewport.borrowers).toBe(0);
+      const cleanSignal = new AbortController().signal;
+      if (shared) await expect(request("snapshot", input, cleanSignal)).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+      await expect(request("snapshot", { tabId: "personal:8" }, cleanSignal)).resolves.toBe("ready");
+      if (mode === "legacy") expect((await result).message).toContain("Completed step indexes: [0].");
+      pending.resolve({});
+      // The async sendCommand mock adopts pending.promise before its own acknowledgement settles.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (shared && action === "click") {
+        expect(fences.has("7")).toBe(true);
+        fences.get("7").detached();
+      }
+      expect(fences.size).toBe(0);
+      await expect(request("snapshot", input, cleanSignal)).resolves.toBe("ready");
+      expect(events).toEqual(expected);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("uses real CDP events for a uniquely identified direct cross-origin frame and verifies focus before filling", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
     let changed = false;
     let focused = true;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -1598,6 +1714,55 @@ describe("personal browser extension assets", () => {
     changed = true;
     await expect(frameClick({ tabId: "personal:7", frame: "content", selector: "#submit", guard }))
       .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+  });
+
+  it("preserves rich frame tokens and read-only fields before and after native focus", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const url = "https://editor.example/";
+    let protectedTokens = false;
+    let readOnly = false;
+    const element = {
+      id: "rich", tagName: "DIV", isConnected: true, isContentEditable: true,
+      innerText: "original", disabled: false, readOnly: false,
+      getAttribute: (name: string) => name === "role" ? "textbox" :
+        name === "aria-readonly" && readOnly ? "true" : null,
+      querySelector: (selector: string) => selector === '[contenteditable="false"]' && protectedTokens ? {} : null,
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+      scrollIntoView: () => undefined,
+    };
+    const ctx = vm.createContext({
+      document: { querySelectorAll: () => [element], querySelector: () => element,
+        activeElement: element, elementFromPoint: () => element },
+      location: { href: url }, innerWidth: 800, innerHeight: 600,
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+    });
+    for (const name of ["probeDirectFrameControl", "confirmDirectFrameFocus",
+      "probePersonalLegacyReadStep", "verifyPersonalLegacyActionTarget"]) {
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    }
+    const direct = vm.runInContext("probeDirectFrameControl", ctx) as (...args: unknown[]) => unknown;
+    const focus = vm.runInContext("confirmDirectFrameFocus", ctx) as (...args: unknown[]) => unknown;
+    const legacy = vm.runInContext("probePersonalLegacyReadStep", ctx) as (...args: unknown[]) => unknown;
+    const verify = vm.runInContext("verifyPersonalLegacyActionTarget", ctx) as (...args: unknown[]) => unknown;
+    const step = { action: "fill", locator: { id: "rich" }, value: "replacement" };
+    expect(direct(url, "#rich", null, "exact", null, true)).toMatchObject({ x: 60, y: 30 });
+    expect(legacy(url, step)).toMatchObject({ found: true });
+    expect(focus(url, "#rich")).toBe(true);
+    expect(verify(url, "fillFocus")).toBe(true);
+    protectedTokens = true;
+    expect(direct(url, "#rich", null, "exact", null, true)).toEqual({ protectedTokens: true });
+    expect(legacy(url, step)).toEqual({ protectedTokens: true });
+    expect(focus(url, "#rich")).toBe("protectedTokens");
+    expect(verify(url, "fillFocus")).toBe("protectedTokens");
+    // Clicking the insertion point is still permitted; only replacement is refused.
+    expect(direct(url, "#rich", null, "exact", null, false)).toMatchObject({ x: 60, y: 30 });
+    expect(legacy(url, { ...step, action: "click" })).toMatchObject({ found: true });
+    protectedTokens = false;
+    readOnly = true;
+    expect(direct(url, "#rich", null, "exact", null, true)).toEqual({ notEditable: true });
+    expect(legacy(url, step)).toEqual({ notEditable: true });
+    expect(focus(url, "#rich")).toBe("notEditable");
+    expect(verify(url, "fillFocus")).toBe("notEditable");
   });
 
   it("refuses obscured direct frames and transformed or ambiguous iframe geometry", () => {
@@ -2025,6 +2190,39 @@ describe("personal browser extension assets", () => {
     expect(events).toEqual(["perform", "perform"]);
   });
 
+  it("keeps the recovery fence until an interrupted editor observation is cleaned up", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const cleanup = deferred<void>();
+    const cleanupStarted = deferred<void>();
+    const held = { arm: () => undefined };
+    const fences = new Map();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const context = vm.createContext({
+      setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalTaskDebuggers: new Map([["7", held]]),
+      releasePersonalTaskDebugger: async () => true,
+    });
+    vm.runInContext(extractFunction(serviceWorker, "recoverInterruptedPersonalInput"), context);
+    const recover = vm.runInContext("recoverInterruptedPersonalInput", context) as
+      (target: unknown, attached: boolean, held: unknown, pending: Promise<unknown>, cleanup: () => Promise<void>) => Promise<void>;
+    const recovering = recover({ tabId: 7 }, false, held, pending.promise, async () => {
+      cleanupStarted.resolve(); await cleanup.promise;
+    });
+    await cleanupStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    await recovering;
+    expect(fences.has("7")).toBe(true);
+    cleanup.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(fences.has("7")).toBe(false);
+    pending.resolve({});
+    expect(timers.size).toBe(0);
+  });
+
   it("does not release the recovery fence until a stalled detach is acknowledged", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const wheel = deferred<unknown>();
@@ -2064,6 +2262,7 @@ describe("personal browser extension assets", () => {
     const commands: string[] = [];
     const phases: string[] = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw Object.assign(new Error("deadline"), { code: "OPERATION_CANCELLED" }); },
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -2103,7 +2302,7 @@ describe("personal browser extension assets", () => {
     const context = vm.createContext({ WebSocket: FakeSocket, BRIDGE_URL: "ws://localhost/",
       inFlightRequests: pending, endAllPersonalRecordings: () => undefined,
       clearTimeout: () => undefined, setTimeout: () => 1 });
-    vm.runInContext("let socket; let reconnectTimer;", context);
+    vm.runInContext("let socket; let reconnectTimer; let reconnectFailures = 0;", context);
     vm.runInContext(extractFunction(serviceWorker, "connect"), context);
     const connect = vm.runInContext("connect", context) as () => void;
     connect();
@@ -2125,11 +2324,104 @@ describe("personal browser extension assets", () => {
     expect(vm.runInContext("socket", context)).toBeUndefined();
   });
 
+  it("backs off repeated short connections and never bypasses a pending reconnect timer", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const connections: FakeSocket[] = [];
+    class FakeSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = 0;
+      onopen?: () => void;
+      onclose?: (event: { code: number }) => void;
+      constructor() { connections.push(this); }
+    }
+    let clock = 0;
+    const scheduled: Array<{ callback: () => void; ms: number }> = [];
+    const context = vm.createContext({
+      WebSocket: FakeSocket, BRIDGE_URL: "ws://localhost/",
+      inFlightRequests: new Map(), endAllPersonalRecordings: () => undefined,
+      performance: { now: () => clock }, Math: Object.assign(Object.create(Math), { random: () => 0 }),
+      send: () => undefined, PROTOCOL_VERSION: 1, EXTENSION_VERSION: "test", CAPABILITIES: [],
+      pushPersonalSiteApprovals: () => undefined, pushPersonalTaskMessages: () => undefined,
+      pushPersonalWakeSettings: () => undefined,
+      clearTimeout: () => undefined,
+      setTimeout: (callback: () => void, ms: number) => scheduled.push({ callback, ms }),
+    });
+    vm.runInContext("let socket; let reconnectTimer; let reconnectFailures = 0;", context);
+    vm.runInContext(extractFunction(serviceWorker, "connect"), context);
+    const connect = vm.runInContext("connect", context) as () => void;
+    connect();
+    for (const expected of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+      const connection = connections.at(-1)!;
+      connection.readyState = FakeSocket.OPEN;
+      connection.onopen?.();
+      connection.onclose?.({ code: 4000 });
+      expect(scheduled).toHaveLength(1);
+      const timer = scheduled.shift()!;
+      expect(timer.ms).toBe(expected);
+      const count = connections.length;
+      connect(); // Heartbeat, startup and installation share the same gate.
+      expect(connections).toHaveLength(count);
+      clock += timer.ms;
+      timer.callback();
+      expect(connections).toHaveLength(count + 1);
+    }
+    const stable = connections.at(-1)!;
+    stable.readyState = FakeSocket.OPEN;
+    stable.onopen?.();
+    clock += 60_000;
+    stable.onclose?.({ code: 1006 });
+    expect(scheduled[0]?.ms).toBe(1000);
+  });
+
   it("generates the extension mutation queue from the shared mutation contract", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     expect(serviceWorker).toContain(
       `const MUTATING_OPERATIONS = new Set(${JSON.stringify(PERSONAL_BROWSER_MUTATING_OPERATIONS)});`,
     );
+  });
+
+  it.each(["keyDown", "keyUp"])("bounds lost %s acknowledgement without dispatching subsequent keys", async (lost) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: fences,
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        debugger: { sendCommand: async (_: unknown, _method: string, params: { type: string; key: string }) => {
+          events.push(params.type + ":" + params.key);
+          if (params.type === lost) { started.resolve(); return pending.promise; }
+          return {};
+        } },
+      },
+    });
+    for (const name of ["parseChromeKey", "press"]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const press = vm.runInContext("press", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const result = press({ tabId: "personal:7", key: "a b", guard: { url: "https://example.com/" } },
+      controller.signal).catch((error: { code: string }) => error.code);
+    await started.promise;
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      expect(events).toEqual(lost === "keyDown" ? ["keyDown:a", "retire"] : ["keyDown:a", "keyUp:a", "retire"]);
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
   });
 
   it("dispatches guarded click, fill and keyboard through Chrome CDP rather than synthetic DOM events", async () => {
@@ -2273,6 +2565,7 @@ describe("personal browser extension assets", () => {
     let focused = false;
     let moved = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
       probeGuardedElement: () => ({ x: 40, y: 30 }),
@@ -2731,10 +3024,87 @@ describe("personal browser extension assets", () => {
       .toMatchObject({ x: 21, y: 40 });
   });
 
+  it.each([
+    ["intercept", false], ["mousePressed", false], ["drop", false],
+    ["mouseReleased", false], ["disable", false], ["drop", true],
+  ] as const)("bounds a lost drag %s acknowledgement (shared=%s) without replay or a compensating drop", async (lost, shared) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const viewport = { borrowers: 0 };
+    const listeners = new Set<(source: { tabId: number }, method: string, params: unknown) => void>();
+    const data = { items: [{ mimeType: "text/plain", data: "card" }], dragOperationsMask: -1 };
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined, delay: async () => undefined,
+      settlePersonalViewport: async () => undefined, takeFreshPersonalDebugger: () => false,
+      cancellationError: () => Object.assign(new Error("cancelled"), { code: "EXECUTION_OUTCOME_UNKNOWN" }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalViewportSessions: new Map(shared ? [["7", viewport]] : []),
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        scripting: { executeScript: async ({ args }: { args: unknown[] }) => [{
+          result: { x: args[0] === "source" ? 20 : 80, y: 40 },
+        }] },
+        debugger: {
+          onEvent: { addListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.add(fn),
+            removeListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.delete(fn) },
+          sendCommand: async (_: unknown, method: string, params: { type?: string; enabled?: boolean; buttons?: number }) => {
+            const event = method === "Input.setInterceptDrags" ? params.enabled ? "intercept" : "disable" : params.type ?? method;
+            events.push(event);
+            if (event === lost) { started.resolve(); return pending.promise; }
+            if (params.type === "mouseMoved" && params.buttons === 1) {
+              for (const listener of listeners) listener({ tabId: 7 }, "Input.dragIntercepted", { data });
+            }
+            return {};
+          },
+        },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "drag"), context);
+    const drag = vm.runInContext("drag", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const input = { tabId: "personal:7", from: { ref: "source" }, to: { ref: "destination" }, steps: 3,
+      fromGuard: { ref: "source", url: "https://example.com/" },
+      toGuard: { ref: "destination", url: "https://example.com/" } };
+    const result = drag(input, controller.signal).catch((error: { code: string }) => error.code);
+    await expect(Promise.race([started.promise.then(() => "dispatched"), result])).resolves.toBe("dispatched");
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      const expected = ["intercept", "mouseMoved", "mousePressed", "mouseMoved", "dragEnter", "dragOver", "drop", "mouseReleased", "disable"];
+      expect(events).toEqual([...expected.slice(0, expected.indexOf(lost) + 1), ...(shared ? [] : ["retire"])]);
+      expect(listeners.size).toBe(0);
+      if (shared) {
+        expect(viewport.borrowers).toBe(0);
+        expect(fences.has("7")).toBe(true);
+        pending.resolve({});
+        await pending.promise;
+        // A late acknowledgement alone cannot clear a partial drag.
+        expect(fences.has("7")).toBe(true);
+        fences.get("7").detached();
+      }
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("drags across canvas pixels with native CDP and refuses unmatched screenshot guards", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
       settlePersonalViewport: async () => false,
@@ -2769,11 +3139,12 @@ describe("personal browser extension assets", () => {
     expect(commands).toHaveLength(0);
   });
 
-  it("drags with trusted CDP events and always releases the mouse on abort", async () => {
+  it("drags with trusted CDP events and refuses an unbound source", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     let aborted = false;
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -2819,6 +3190,7 @@ describe("personal browser extension assets", () => {
     let metricsReads = 0;
     const data = { items: [{ mimeType: "text/plain", data: "card" }], dragOperationsMask: -1 };
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -2876,6 +3248,7 @@ describe("personal browser extension assets", () => {
     let kind: Record<string, unknown> = { kind: "checkbox", checked: false };
     const commands: Array<{ method: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -2926,6 +3299,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
@@ -2957,7 +3331,8 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const events: Array<{ method: string; params: unknown }> = [];
     const context = vm.createContext({
-      setTimeout: (callback: () => void) => { callback(); return 0; },
+      setTimeout: (callback: () => void, ms: number) => ms === 15 ? (callback(), 0) : setTimeout(callback, ms),
+      clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3093,6 +3468,72 @@ describe("personal browser extension assets", () => {
       .toMatchObject({ ready: true, protectedTokens: true });
   });
 
+  it.each([
+    ["fill", "Input.insertText", false, false],
+    ["fill", "rawKeyDown", false, false],
+    ["typeText", "Input.insertText", false, false],
+    ["typeText", "Input.insertText", true, false],
+    ["typeText", "Input.imeSetComposition", false, true],
+  ] as const)("bounds interrupted %s %s (submit=%s, IME=%s)", async (operation, lost, submit, slowly) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const context = vm.createContext({
+      setTimeout, clearTimeout,
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined,
+      cancellationError: () => Object.assign(new Error("cancelled"), { code: "EXECUTION_OUTCOME_UNKNOWN" }),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: fences,
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        tabs: { get: async () => ({ url: "https://example.com/" }) },
+        scripting: { executeScript: async ({ func, args }: { func: { name: string }; args: unknown[] }) => {
+          if (func.name === "observePersonalEditableMutation") {
+            events.push(String(args[0]));
+            return [{ frameId: 0, documentId: "doc", result: { ready: true, matches: true } }];
+          }
+          return [{ result: { x: 20, y: 25 } }];
+        } },
+        debugger: { sendCommand: async (_: unknown, method: string, params: { type?: string }) => {
+          events.push(params.type ?? method);
+          if ((params.type ?? method) === lost) { started.resolve(); return pending.promise; }
+          return {};
+        } },
+      },
+    });
+    for (const name of ["observePersonalEditableMutation", "physicalTypingKey", "imeComposedCharacter", operation]) vm.runInContext(extractFunction(serviceWorker, name), context);
+    const execute = vm.runInContext(operation, context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const guard = { ref: "target", url: "https://example.com/" };
+    const input = operation === "fill" ? { tabId: "personal:7", ref: "target", value: "replacement", guard }
+      : { tabId: "personal:7", text: slowly ? "東京" : "replacement", submit, slowly, guard };
+    const result = execute(input, controller.signal).catch((error: { code: string }) => error.code);
+    await started.promise;
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      const nativeEvents = events.filter(event => !["before", "after", "cleanup", "retire"].includes(event));
+      expect(nativeEvents).toEqual(operation === "fill"
+        ? lost === "rawKeyDown" ? ["rawKeyDown"] : ["rawKeyDown", "keyUp", "rawKeyDown", "keyUp", "Input.insertText"]
+        : slowly ? ["rawKeyDown", "Input.imeSetComposition"] : ["Input.insertText"]);
+      expect(events.filter(event => event === "cleanup")).toHaveLength(submit ? 0 : 1);
+      expect(events).not.toContain("after");
+      expect(events).toContain("retire");
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve({});
+      await result;
+    }
+  });
+
   it("refuses to report success when typing has no focused editor or visible text change", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const sent: string[] = [];
@@ -3100,7 +3541,8 @@ describe("personal browser extension assets", () => {
     let changed = false;
     let matches = false;
     const context = vm.createContext({
-      setTimeout: (callback: () => void) => { callback(); return 0; },
+      setTimeout: (callback: () => void, ms: number) => ms === 15 ? (callback(), 0) : setTimeout(callback, ms),
+      clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3139,7 +3581,8 @@ describe("personal browser extension assets", () => {
     let checks = 0;
     let abortAfter = Number.POSITIVE_INFINITY;
     const context = vm.createContext({
-      setTimeout: (callback: () => void) => { callback(); return 0; },
+      setTimeout: (callback: () => void, ms: number) => ms === 15 ? (callback(), 0) : setTimeout(callback, ms),
+      clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => {
@@ -3274,6 +3717,7 @@ describe("personal browser extension assets", () => {
     let actualUrl = "https://example.com/";
     let failTree = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       crypto: { randomUUID: () => "document-uuid" },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
@@ -3400,6 +3844,7 @@ describe("personal browser extension assets", () => {
     let focused = false;
     let matches = false;
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined, delay: async () => undefined,
       resolveGuardedAxPoint: async () => ({ x: 40, y: 30 }),
@@ -3437,7 +3882,7 @@ describe("personal browser extension assets", () => {
     const commands: string[] = [];
     const context = vm.createContext({
       URL, Date, Map, Object, String, Promise, Number, Uint8Array, TextDecoder, atob,
-      setTimeout: (fn: () => void) => { fn(); return 1; },
+      setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
       crypto: { randomUUID: () => "uuid" },
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
@@ -3524,7 +3969,7 @@ describe("personal browser extension assets", () => {
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
-      setTimeout: (fn: () => void) => { fn(); return 1; },
+      setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       sanitizePersonalDiagnosticText,
       chrome: { debugger: {
@@ -3757,6 +4202,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3807,6 +4253,7 @@ describe("personal browser extension assets", () => {
     const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
     let probe: Record<string, unknown> = { x: 40, y: 60 };
     const context = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
@@ -3861,6 +4308,7 @@ describe("personal browser extension assets", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       chromeTabIdFrom: (id: string) => Number(id.slice("personal:".length)),
       requireOwnedMetadata: async (id: number) => {
         if (id !== 7) throw Object.assign(new Error("not owned"), { code: "TAB_NOT_FOUND" });
@@ -3953,6 +4401,56 @@ ${extractConst(serviceWorker, "PERSONAL_DEBUGGER_IDLE_MS")}`, ctx);
     expect(calls.filter((call) => call === "detach")).toHaveLength(2);
   });
 
+  it.each([false, true])("bounds a stalled debugger detach (task-owned=%s) and retains the exact transition", async (taskOwned) => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<void>();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const calls: string[] = [];
+    const transitions = new Map();
+    const held = new Map(taskOwned ? [["7", { ready: true, arm: () => undefined }]] : []);
+    const ctx = vm.createContext({
+      setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalDebuggerTransitions: transitions, __mcpV3PersonalTaskDebuggers: held,
+      personalTaskDebuggers: held, personalViewportSessions: new Map(), personalDialogArms: new Map(),
+      personalNetworkCaptures: new Map(), personalRecordings: new Map(),
+      holdPersonalTaskDebugger: () => held.set("7", { ready: true, arm: () => undefined }),
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        detach: () => { calls.push("detach"); return pending.promise; },
+      } },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger", "releasePersonalTaskDebugger"])
+      vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const detach = vm.runInContext("detachGuardedDebugger", ctx) as (target: { tabId: number }, attached: boolean) => Promise<void>;
+    const release = vm.runInContext("releasePersonalTaskDebugger", ctx) as (tabId: number) => Promise<boolean>;
+    const target = { tabId: 7 };
+    const first = (taskOwned ? release(7) : detach(target, true)).catch((error: { code: string }) => error.code);
+    const second = attach(target).catch((error: { code: string }) => error.code);
+    expect(calls).toEqual(["detach"]);
+    for (const callback of [...timers.values()]) callback();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([Promise.all([first, second]), new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toEqual([taskOwned ? false : "BROWSER_WORKER_TIMEOUT", "BROWSER_WORKER_TIMEOUT"]);
+      expect(transitions.has("7")).toBe(true);
+      if (taskOwned) expect(held.get("7")?.ready).toBe(false);
+      pending.resolve();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(transitions.size).toBe(0);
+      expect(held.size).toBe(0);
+      await expect(attach(target)).resolves.toBe(false);
+      expect(calls).toEqual(["detach", "attach"]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve();
+      await Promise.all([first, second]);
+    }
+  });
+
   it("waits for a pending Chrome debugger detach before attaching again", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: string[] = [];
@@ -3995,6 +4493,86 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await releasing;
     expect(await acquiring).toBe("acquired");
     expect(calls).toEqual(["attach", "detach", "attach"]);
+  });
+
+  it("bounds a stalled debugger attach, rejects competing attaches and retires a late session", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const pending = deferred<void>();
+    const detached = deferred<void>();
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const calls: string[] = [];
+    const transitions = new Map();
+    const held = new Map();
+    const ctx = vm.createContext({
+      setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
+      clearTimeout: (id: number) => timers.delete(id),
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalDebuggerTransitions: transitions, __mcpV3PersonalTaskDebuggers: held,
+      holdPersonalTaskDebugger: () => { calls.push("hold"); held.set("7", { arm: () => undefined }); },
+      chrome: { debugger: {
+        attach: () => { calls.push("attach"); return pending.promise; },
+        detach: async () => { calls.push("detach"); detached.resolve(); },
+      } },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger"]) vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const first = attach({ tabId: 7 }).catch((error: { code: string }) => error.code);
+    const second = attach({ tabId: 7 }).catch((error: { code: string }) => error.code);
+    expect(calls).toEqual(["attach"]);
+    for (const callback of [...timers.values()]) callback();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([Promise.all([first, second]), new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 500); })]))
+        .resolves.toEqual(["BROWSER_WORKER_TIMEOUT", "BROWSER_WORKER_TIMEOUT"]);
+      expect(transitions.has("7")).toBe(true);
+      pending.resolve();
+      await detached.promise;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(calls).toEqual(["attach", "detach"]);
+      expect(transitions.size).toBe(0);
+      expect(held.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      pending.resolve();
+      await Promise.all([first, second]);
+    }
+  });
+
+  it("does not reuse a debugger while its Page.enable setup is pending", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const enabled = deferred<void>();
+    const started = deferred<void>();
+    const calls: string[] = [];
+    const transitions = new Map();
+    const held = new Map();
+    const ctx = vm.createContext({
+      setTimeout, clearTimeout,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      __mcpV3PersonalDebuggerTransitions: transitions, __mcpV3PersonalTaskDebuggers: held,
+      holdPersonalTaskDebugger: () => { held.set("7", { arm: () => undefined }); },
+      chrome: { debugger: {
+        attach: async () => { calls.push("attach"); },
+        onEvent: {},
+        sendCommand: async (_: unknown, method: string) => { calls.push(method); started.resolve(); return enabled.promise; },
+      } },
+    });
+    for (const name of ["borrowPersonalDebugger", "attachGuardedDebugger"]) vm.runInContext(extractFunction(serviceWorker, name), ctx);
+    const attach = vm.runInContext("attachGuardedDebugger", ctx) as (target: { tabId: number }) => Promise<boolean>;
+    const first = attach({ tabId: 7 });
+    await started.promise;
+    let reused = false;
+    const second = attach({ tabId: 7 }).then(value => { reused = true; return value; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(reused).toBe(false);
+      expect(calls).toEqual(["attach", "Page.enable"]);
+    } finally {
+      enabled.resolve();
+      await Promise.all([first, second]);
+    }
+    expect(reused).toBe(true);
+    expect(transitions.size).toBe(0);
   });
 
   it("serializes concurrent debugger attachments on the same Chrome tab", async () => {
@@ -4186,6 +4764,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     let detached = 0;
     const listeners = new Set<Function>();
     const ctx = vm.createContext({
+      setTimeout, clearTimeout,
       Date, Map, Promise,
       chromeTabIdFrom: () => 7,
       requireOwnedMetadata: async () => ({}),
@@ -4411,7 +4990,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       requireOwnedMetadata: async () => ({}),
       throwIfAborted: () => undefined,
       cancellationError: () => new Error("cancelled"),
-      setTimeout: (fn: () => void) => { fn(); return 1; },
+      setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
       coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
       sanitizePersonalDiagnosticText,
       chrome: {
@@ -4503,7 +5082,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     const worker = () => {
       const context = vm.createContext({
         chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}), throwIfAborted: () => undefined,
-        cancellationError: () => new Error("cancelled"), setTimeout: (fn: () => void) => { fn(); return 1; },
+        cancellationError: () => new Error("cancelled"), setTimeout: (fn: () => void, ms: number) => ms === 8000 ? setTimeout(fn, ms) : (fn(), 1), clearTimeout,
         coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
         sanitizePersonalDiagnosticText, chrome,
       });
@@ -4535,6 +5114,159 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(session.size).toBe(0);
   });
 
+  it.each(["success", "capture failure", "start rejection", "stop failure", "cancel"])(
+    "scopes hidden screenshot compositor lifecycle: %s", async scenario => {
+      const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+      const calls: string[] = [];
+      const acknowledgements: number[] = [];
+      const listeners = new Set<(source: {tabId: number; sessionId?: string}, method: string, params: {sessionId: number}) => void>();
+      const held = new Map([["7", { arm: () => undefined }]]);
+      const controller = new AbortController();
+      const context = vm.createContext({
+        MAX_FULL_PAGE_PIXELS: 40_000_000, MAX_SCREENSHOT_BASE64_CHARS: 3_000_000,
+        setTimeout, clearTimeout, chromeTabIdFrom: () => 7,
+        requireOwnedMetadata: async () => ({}),
+        throwIfAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw Object.assign(new Error("cancelled"), { code: "OPERATION_CANCELLED" }); },
+        cancellationError: () => Object.assign(new Error("cancelled"), { code: "OPERATION_CANCELLED" }),
+        coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+        crypto: { randomUUID: () => "example" }, base64ByteLength: () => 3,
+        __mcpV3PersonalTaskDebuggers: held, __mcpV3PersonalPendingInput: new Map(),
+        releasePersonalTaskDebugger: async () => { calls.push("retire"); held.clear(); return true; },
+        chrome: { debugger: {
+          onEvent: { addListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.add(fn),
+            removeListener: (fn: typeof listeners extends Set<infer T> ? T : never) => listeners.delete(fn) },
+          sendCommand: async (_target: unknown, method: string, params?: {sessionId: number}) => {
+            calls.push(method);
+            if (method === "Runtime.evaluate") return { result: { value: "hidden" } };
+            if (method === "Page.startScreencast") {
+              if (scenario === "start rejection") throw new Error("already active");
+              for (const listener of listeners) {
+                listener({ tabId: 8 }, "Page.screencastFrame", { sessionId: 1 });
+                listener({ tabId: 7, sessionId: "nested" }, "Page.screencastFrame", { sessionId: 2 });
+                listener({ tabId: 7 }, "Page.screencastFrame", { sessionId: 3 });
+              }
+            }
+            if (method === "Page.screencastFrameAck") acknowledgements.push(params!.sessionId);
+            if (method === "Page.captureScreenshot") {
+              if (scenario === "capture failure") throw new Error("capture failed");
+              if (scenario === "cancel") controller.abort();
+              return { data: "AQID" };
+            }
+            if (method === "Page.stopScreencast" && scenario === "stop failure") throw new Error("stop failed");
+            return {};
+          },
+        } },
+      });
+      vm.runInContext(extractFunction(serviceWorker, "screenshot"), context);
+      const screenshot = vm.runInContext("screenshot", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+      const result = screenshot({ tabId: "personal:7" }, controller.signal);
+      if (scenario === "success") await expect(result).resolves.toMatchObject({ sizeBytes: 3 });
+      else if (scenario === "stop failure") await expect(result).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
+      else if (scenario === "cancel") await expect(result).rejects.toMatchObject({ code: "OPERATION_CANCELLED" });
+      else await expect(result).rejects.toBeDefined();
+      expect(acknowledgements).toEqual(scenario === "start rejection" ? [] : [3]);
+      expect(listeners.size).toBe(0);
+      expect(calls.filter(call => call === "Page.stopScreencast")).toHaveLength(scenario === "start rejection" ? 0 : 1);
+      // Cancellation after dispatch follows the existing interrupted-command
+      // recovery path, retiring the task debugger even after a confirmed stop.
+      expect(calls.includes("retire")).toBe(scenario === "stop failure" || scenario === "cancel");
+      if (scenario !== "start rejection") {
+        expect(calls.indexOf("Page.screencastFrameAck")).toBeLessThan(calls.indexOf("Page.captureScreenshot"));
+        expect(calls.indexOf("Page.captureScreenshot")).toBeLessThan(calls.indexOf("Page.stopScreencast"));
+      }
+    },
+  );
+
+  it("bounds screenshot recovery when the exact debugger detach also stalls", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const capture = deferred<unknown>();
+    const captureStarted = deferred<void>();
+    const detach = deferred<boolean>();
+    const detachStarted = deferred<void>();
+    const fences = new Map();
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      setTimeout: (fn: () => void) => { timers.set(++nextTimer, fn); return nextTimer; },
+      clearTimeout: (id: number) => timers.delete(id),
+      __mcpV3PersonalPendingInput: fences,
+      __mcpV3PersonalTaskDebuggers: held,
+      releasePersonalTaskDebugger: async () => { detachStarted.resolve(); return detach.promise; },
+      chrome: { debugger: { sendCommand: async (_: unknown, method: string) => {
+        if (method === "Page.captureScreenshot") { captureStarted.resolve(); return capture.promise; }
+        return {};
+      } } },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "screenshot"), context);
+    const screenshot = vm.runInContext("screenshot", context) as (input: unknown) => Promise<unknown>;
+    const result = screenshot({ tabId: "personal:7" }).catch((error: { code: string }) => error.code);
+    await captureStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    await detachStarted.promise;
+    for (const callback of [...timers.values()]) callback();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("BROWSER_WORKER_TIMEOUT");
+      expect(fences.has("7")).toBe(true);
+      detach.resolve(true);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(fences.has("7")).toBe(false);
+    } finally {
+      if (timer) clearTimeout(timer);
+      detach.resolve(true);
+      capture.resolve({});
+      await result;
+    }
+  });
+
+  it("bounds a lost hover acknowledgement without replaying movement", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const move = deferred<unknown>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    const held = new Map([["7", { arm: () => undefined }]]);
+    const fences = new Map();
+    const context = vm.createContext({
+      chromeTabIdFrom: () => 7, requireOwnedMetadata: async () => ({}),
+      probeGuardedElement: () => undefined,
+      throwIfAborted: () => undefined,
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      setTimeout, clearTimeout,
+      __mcpV3PersonalPendingInput: fences, __mcpV3PersonalTaskDebuggers: held,
+      releasePersonalTaskDebugger: async () => { events.push("retire"); held.clear(); return true; },
+      chrome: {
+        scripting: { executeScript: async () => [{ result: { x: 20, y: 25 } }] },
+        debugger: { sendCommand: async (_: unknown, _method: string, params: { type: string }) => {
+          events.push(params.type); started.resolve(); return move.promise;
+        } },
+      },
+    });
+    vm.runInContext(extractFunction(serviceWorker, "hover"), context);
+    const hover = vm.runInContext("hover", context) as (input: unknown, signal: AbortSignal) => Promise<unknown>;
+    const controller = new AbortController();
+    const result = hover({ tabId: "personal:7", ref: "target",
+      guard: { url: "https://example.com/", ref: "target" } }, controller.signal)
+      .catch((error: { code: string }) => error.code);
+    await started.promise;
+    controller.abort("deadline");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([result, new Promise(resolve => { timer = setTimeout(() => resolve("stuck"), 300); })]))
+        .resolves.toBe("EXECUTION_OUTCOME_UNKNOWN");
+      expect(events).toEqual(["mouseMoved", "retire"]);
+      expect(fences.size).toBe(0);
+    } finally {
+      if (timer) clearTimeout(timer);
+      move.resolve({});
+      await result;
+    }
+  });
+
   it("releases a stuck screenshot capture and permits the next queued operation", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const captureStarted = deferred<void>();
@@ -4551,7 +5283,8 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       setTimeout: (callback: () => void) => { timers.set(++nextTimer, callback); return nextTimer; },
       clearTimeout: (id: number) => timers.delete(id),
       __mcpV3PersonalTaskDebuggers: held,
-      releasePersonalTaskDebugger: async () => { events.push("release"); held.clear(); },
+      __mcpV3PersonalPendingInput: new Map(),
+      releasePersonalTaskDebugger: async () => { events.push("release"); held.clear(); return true; },
       chrome: { debugger: {
         sendCommand: async (_target: unknown, method: string) => {
           if (method === "Page.captureScreenshot") {
@@ -4680,7 +5413,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.18");
+    expect(parsedManifest.version).toBe("1.17.19");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -5401,6 +6134,36 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(snapshotPage("drag-a").refs[0]).toMatchObject({ role: "generic", name: "A" });
   });
 
+  it("exposes the actual zero-width Monaco EditContext only inside a visible editor", () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    const host = Object.assign(fakeElement({tagName:"DIV"}), {
+      isConnected: true, getBoundingClientRect: () => ({width:420,height:200}),
+    });
+    const input = (name: string, withContext: boolean, parent: typeof host | null) =>
+      Object.assign(fakeElement({tagName:"DIV",attributes:{role:"textbox","aria-label":name}}), {
+        isConnected:true, editContext:withContext?{text:"private model"}:null,
+        closest:(selector:string)=>selector===".monaco-editor"?parent:null,
+        getBoundingClientRect:()=>({width:0,height:19}),
+      });
+    const valid = input("Fixture Monaco",true,host);
+    const ordinary = input("Ordinary hidden input",false,host);
+    const orphan = input("No editor host",true,null);
+    const hiddenHost = Object.assign(fakeElement({tagName:"DIV"}), {
+      isConnected:true,getBoundingClientRect:()=>({width:0,height:0}),
+    });
+    const hidden = input("Hidden editor",true,hiddenHost);
+    const disconnected = input("Disconnected editor",true,host);
+    disconnected.isConnected=false;
+    const dom = createDom([valid,ordinary,orphan,hidden,disconnected]);
+    const snapshot = vm.runInContext(`(${extractFunction(serviceWorker, "snapshotPage")})`,dom.context) as
+      (generation:string)=>{refs:Array<{ref:string;role:string;name:string}>;content:string};
+    const result = snapshot("native-edit-context");
+    expect(result.refs).toHaveLength(1);
+    expect(result.refs[0]).toMatchObject({role:"textbox",name:"Fixture Monaco"});
+    expect(vm.runInContext("__mcpV3OwnedRefElements",dom.context).get(result.refs[0]!.ref)).toBe(valid);
+    expect(result.content).not.toContain("private model");
+  });
+
   it("emits richer safe DOM semantics without exposing input values", () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const checkbox = fakeElement({
@@ -6019,13 +6782,24 @@ function extractFunction(source: string, name: string): string {
       depth -= 1;
       if (depth === 0) {
         const body = source.slice(start, index + 1);
+        if (["attachGuardedDebugger", "detachPersonalDebugger"].includes(name)) {
+          return extractFunction(source, "waitPersonalDebuggerTransition") + "\n" + body;
+        }
+        if (["detachGuardedDebugger", "releasePersonalTaskDebugger"].includes(name)) {
+          return extractFunction(source, "detachPersonalDebugger") + "\n" + body;
+        }
         if (name === "readPersonalNetwork") {
           return ["safeNetworkUrl", "safeNetworkHeaders", "safeNetworkBody",
             "startPersonalNetworkCapture", "stopPersonalNetworkCapture"]
             .map((helper) => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
-        if (["click", "scroll"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
+        if (["click", "scroll", "hover", "screenshot", "press", "fill", "typeText", "drag"].includes(name) && body.includes("recoverInterruptedPersonalInput(")) {
           return ["recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
+            .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
+        }
+        if (["directFrameAction", "runPersonalLegacyMutation"].includes(name)) {
+          return ["borrowPersonalDebugger", "attachGuardedDebugger", "detachGuardedDebugger",
+            "recoverInterruptedPersonalInput", "waitPersonalInputAcknowledgement"]
             .map(helper => extractFunction(source, helper)).join("\n") + "\n" + body;
         }
         if (name !== "attachGuardedDebugger" && name !== "detachGuardedDebugger" &&

@@ -6,15 +6,24 @@
 // PERSONAL_SMOKE_CHROMIUM overrides the Chromium executable when needed.
 // PERSONAL_SMOKE_ROBUSTNESS_ONLY=1 runs the focused editor/scroll regression.
 // PERSONAL_SMOKE_CDP_RECOVERY_ONLY=1 injects lost acknowledgements in an isolated profile.
+// PERSONAL_SMOKE_FRAME_RECOVERY_ONLY=1 focuses on direct and nested frame input recovery.
 // PERSONAL_SMOKE_FOREGROUND_ONLY=1 checks explicit tab selection and exact redirected URLs.
+// PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY=1 checks exact screenshot identity without selecting the target.
+// PERSONAL_SMOKE_NATIVE_BACKGROUND=1 retains Chrome's normal background throttling for that test.
+// PERSONAL_SMOKE_RICH_FRAME_ONLY=1 checks editable and protected rich text in scriptable frames.
+// PERSONAL_SMOKE_REAL_EDITORS_ONLY=1 checks installed real editor fixtures (isolated lockfile required).
+// PERSONAL_SMOKE_PERFORMANCE_ONLY=1 measures paired verified actions and native bridge telemetry.
+// PERSONAL_SMOKE_OOPIF_FOCUS_ONLY=1 exercises independent nested navigation and focus samples.
 // PERSONAL_SMOKE_HEADFUL=1 uses a real window (e.g. under xvfb-run), which
 // shows Chrome's debugging infobar and the OS drag loop like a personal Chrome.
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { spawn, type ChildProcess } from "node:child_process";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { PersonalBrowserBridge } from "../../../services/mcp-gateway/src/companion/personal-browser-bridge.js";
+import { createEditorFixture, verifyRealEditors } from "./editor-fixtures/fixture.js";
 
 interface LegacyFixtureRouter {
   handle(request: http.IncomingMessage, response: http.ServerResponse, url: URL): boolean;
@@ -22,6 +31,16 @@ interface LegacyFixtureRouter {
 }
 const fixtureModulePath = "../../benchmarks/browser/legacy-private-site-fixture.mjs";
 
+function richEditorFixture(): string {
+  return `<!doctype html><title>Rich text fixture</title>
+    <style>[contenteditable="true"]{display:block;width:400px;height:50px;border:1px solid;margin:8px}</style>
+    <div id="plain" contenteditable="true" role="textbox" aria-label="Plain rich editor">original</div>
+    <div id="protected" contenteditable="true" role="textbox" aria-label="Token editor">prefix <span contenteditable="false" id="token">TOKEN</span> suffix</div>
+    <div id="readonly" contenteditable="true" role="textbox" aria-readonly="true" aria-label="Read only editor">locked</div>
+    <div id="late-token" contenteditable="true" role="textbox" aria-label="Token on focus" onfocus="if(!this.firstElementChild){const token=document.createElement('span');token.contentEditable='false';token.textContent='TOKEN';this.append(token)}">prefix </div>
+    <div id="late-readonly" contenteditable="true" role="textbox" aria-label="Read only on focus" onfocus="this.setAttribute('aria-readonly','true')">locked</div>
+    <input id="decoy" value="unchanged">`;
+}
 const submissions: string[] = [];
 const listHits: string[] = [];
 const consultationPosts: string[] = [];
@@ -29,8 +48,16 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "recovery-site.test/": () => `<!doctype html><title>CDP recovery fixture</title>
     <body style="margin:0;height:300vh"><div style="position:fixed;top:20px;left:20px">
       <button id="increase">Increase</button><p id="clicks">Count 0</p><p id="wheels">0</p>
-      <a href="/runs">Run history</a>
+      <a href="/runs">Run history</a><input aria-label="Key entry" id="key-entry"><p id="key-count">0</p><p id="insert-count">0</p>
     </div><script>
+      let insertCount = 0;
+      document.getElementById("key-entry").addEventListener("input", event => {
+        if (event.inputType === "insertText") document.getElementById("insert-count").textContent = String(++insertCount);
+      });
+      let keyCount = 0;
+      document.getElementById("key-entry").addEventListener("keydown", () => {
+        document.getElementById("key-count").textContent = String(++keyCount);
+      });
       let clicks = 0, wheels = 0;
       document.getElementById("increase").addEventListener("click", () => {
         document.getElementById("clicks").textContent = "Count " + (++clicks);
@@ -39,7 +66,24 @@ const pages: Record<string, (url: URL, port: number) => string> = {
         document.getElementById("wheels").textContent = String(++wheels);
       }, {passive:true});
     </script>`,
+  "capture-site.test/": url => `<!doctype html><title>Capture ${url.searchParams.has("other") ? "B" : "A"}</title>
+    <body style="margin:0;height:1800px;background:${url.searchParams.has("other") ? "#184a90" : "#b83224"}">
+      <div style="width:240px;height:160px;background:#eee">Capture ${url.searchParams.has("other") ? "B" : "A"}</div>
+      <div style="position:absolute;top:1500px;width:200px;height:100px;background:#222;color:#fff">Below viewport</div>
+    </body>`,
   "recovery-site.test/runs": () => "<!doctype html><title>Run history</title><p>Run history destination</p>",
+  "frame-recovery-site.test/": (url, port) => `<!doctype html><title>Frame recovery</title>
+    <iframe name="content" src="http://${url.searchParams.has("nested") ? "frame-recovery-mid.test" : "recovery-site.test"}:${port}/"
+      style="width:640px;height:480px;border:0"></iframe>`,
+  "frame-recovery-mid.test/": (_url, port) => `<!doctype html><title>Nested frame recovery</title>
+    <iframe name="leaf" src="http://recovery-site.test:${port}/" style="width:500px;height:400px;border:0"></iframe>`,
+  "rich-editor-site.test/": (url, port) => `<!doctype html><title>Rich editor host</title>
+    <iframe name="editor" src="http://${url.searchParams.has("nested") ? "rich-editor-mid.test" : url.searchParams.has("same") ? "rich-editor-site.test" : "rich-editor-frame.test"}:${port}/${url.searchParams.has("nested") ? "" : "rich"}"
+      style="width:640px;height:480px;border:0"></iframe>`,
+  "rich-editor-mid.test/": (_url, port) => `<!doctype html><title>Rich editor container</title>
+    <iframe name="leaf" src="http://rich-editor-frame.test:${port}/rich" style="width:500px;height:400px;border:0"></iframe>`,
+  "rich-editor-site.test/rich": () => richEditorFixture(),
+  "rich-editor-frame.test/rich": () => richEditorFixture(),
   "editor-site.test/": () => `<!doctype html><title>Editor geometry fixture</title>
     <body style="margin:0;width:300vw;height:100vh">
       <div class="monaco-editor" style="position:fixed;left:75vw;top:80px;width:160vw;height:80px;background:#ddd;overflow:hidden">
@@ -74,7 +118,18 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     submissions.push(url.search);
     return `<!doctype html><title>Done</title><body>
       <p id="ok">Salvo ${url.searchParams.get("nome")} ${url.searchParams.get("uf")}</p>
-      <input id="busca" onkeydown="if(event.key==='Enter'){document.getElementById('ok').textContent='Enter recebido: '+this.value}">`;
+      <input id="busca" onkeydown="if(event.key==='Enter'){document.getElementById('ok').textContent='Enter recebido: '+this.value}">
+      <script>
+        window.__focusTrace = [];
+        for (const type of ["pointerdown", "pointerup", "focusin", "focusout"]) {
+          document.addEventListener(type, event => {
+            if (window.__focusTrace.length < 20) window.__focusTrace.push({
+              type, id: event.target.id || "", tag: event.target.tagName, trusted: event.isTrusted,
+              x: event.clientX, y: event.clientY
+            });
+          }, true);
+        }
+      </script>`;
   },
   "menu-site.test/": (_url, port) => `<html><head><title>Legacy</title></head>
     <frameset cols="220,*"><frame name="menu" src="http://menu-site.test:${port}/menu">
@@ -122,15 +177,16 @@ const pages: Record<string, (url: URL, port: number) => string> = {
   "dnd-site.test/": () => `<!doctype html><title>Quadro</title><body>
     <div draggable="true" id="card" role="button" aria-label="Cartão A" style="width:120px;height:40px;background:#ddd">Cartão A</div>
     <div id="done" role="button" aria-label="Coluna Concluído" style="margin-top:120px;width:240px;height:120px;border:1px solid">Concluído</div>
-    <p id="status">pendente</p>
+    <p id="status">pendente</p><p id="drop-count">0</p>
     <div id="knob" role="slider" aria-label="Alça" aria-valuenow="0" style="position:absolute;left:300px;top:20px;width:30px;height:30px;background:#88f"></div>
-    <p id="pointer">parado</p>
+    <p id="pointer">parado</p><p id="release-count">0</p>
     <script>
-      let dragging = false;
+      let dragging = false, drops = 0, releases = 0;
       document.getElementById("knob").addEventListener("mousedown", () => { dragging = true; });
       document.addEventListener("mouseup", (event) => {
         if (!dragging) return;
         dragging = false;
+        document.getElementById("release-count").textContent = String(++releases);
         const zone = document.getElementById("done").getBoundingClientRect();
         const inside = event.clientX >= zone.left && event.clientX <= zone.right && event.clientY >= zone.top && event.clientY <= zone.bottom;
         document.getElementById("pointer").textContent = inside ? "solto na coluna" : "fora";
@@ -140,6 +196,7 @@ const pages: Record<string, (url: URL, port: number) => string> = {
       done.addEventListener("dragover", (event) => event.preventDefault());
       done.addEventListener("drop", (event) => {
         event.preventDefault();
+        document.getElementById("drop-count").textContent = String(++drops);
         document.getElementById("status").textContent = "movido:" + event.dataTransfer.getData("text/plain");
       });
     </script>`,
@@ -175,6 +232,15 @@ const pages: Record<string, (url: URL, port: number) => string> = {
     <body style="margin:0;height:100vh;background:#ffffff">
     <button onclick="document.body.style.background='#00c000'">Pintar</button>
     <button onclick="document.body.style.background='#ffffff'">Limpar</button>`,
+  "performance-site.test/": () => `<!doctype html><title>Personal performance</title><body>
+    <button id="run">Mostrar resultado</button><p id="result">pending</p><p id="clicks">0</p>
+    <script>
+      document.getElementById("run").onclick = () => {
+        const count = Number(document.getElementById("clicks").textContent) + 1;
+        document.getElementById("clicks").textContent = String(count);
+        setTimeout(() => { document.getElementById("result").textContent = "finished [" + count + "]"; }, 450);
+      };
+    </script>`,
   "quality-site.test/": () => `<!doctype html><title>Interaction quality</title><body>
     <button id="run">Mostrar resultado</button><button id="noop">Mostrar nada</button>
     <input id="entry" aria-label="Entry" value="abc def">
@@ -246,8 +312,10 @@ async function main(): Promise<void> {
   const legacyFixture = createLegacyLegacySiteFixtureRouter({ largeMenu: true });
   let slowHelpResponses = 0;
   let redirectHits = 0;
-  const server = http.createServer((req, res) => {
+  const editorFixture = process.env.PERSONAL_SMOKE_REAL_EDITORS_ONLY === "1" ? await createEditorFixture() : undefined;
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (editorFixture && await editorFixture.handle(req, res, url)) return;
     if (url.hostname === "recovery-site.test" && url.pathname === "/runs" && !url.search) {
       redirectHits++;
       res.writeHead(302, { location: "/runs?v3=false", "cache-control": "no-store" }).end();
@@ -272,8 +340,12 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const sitePort = (server.address() as { port: number }).port;
   const root = await mkdtemp(path.join(os.tmpdir(), "personal-frame-smoke-"));
+  const latencyEvents: Array<Record<string, unknown>> = [];
   const bridge = await PersonalBrowserBridge.start({
     stateRoot: root, port: 34_000 + Math.floor(Math.random() * 1_000),
+    log: (entry) => {
+      if (process.env.PERSONAL_SMOKE_PERFORMANCE_ONLY === "1" && entry.event === "browser_latency" && entry.layer === "bridge") latencyEvents.push(entry);
+    },
   });
   // Test-only instrumentation in a throwaway profile: expose the exact
   // registered Chrome notification-click listener so headless CI can emulate
@@ -286,10 +358,10 @@ async function main(): Promise<void> {
   }
   let smokeScript = originalScript.replace(listener,
     "chrome.notifications?.onButtonClicked?.addListener(globalThis.__mcpSmokeNotificationClick = (id, buttonIndex) => {");
-  if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
+  if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1" || process.env.PERSONAL_SMOKE_FRAME_RECOVERY_ONLY === "1") {
     // Lose only the acknowledgement after one real Chrome input command.
     // The fixture observes the actual effect; no production extension is patched.
-    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"]]) {
+    for (const [operation, expression] of [["scroll", "pending"], ["click", "released"], ["hover", "pending"], ["press", "down"]]) {
       const needle = "await waitPersonalInputAcknowledgement(" + expression + ", signal, \"" + operation + "\"";
       if (smokeScript.split(needle).length !== 2) throw new Error("Lost-ack smoke hook missing: " + operation);
       const drop = "(globalThis.__mcpSmokeDropAck === \"" + operation +
@@ -298,30 +370,119 @@ async function main(): Promise<void> {
       smokeScript = smokeScript.replace(needle,
         "await waitPersonalInputAcknowledgement(" + drop + ", signal, \"" + operation + "\"");
     }
+    for (const operation of ["fill", "type"]) {
+      const needle = 'chrome.debugger.sendCommand(target, method, params), signal, "' + operation + '"';
+      if (smokeScript.split(needle).length !== 2) throw new Error("Text lost-ack hook missing: " + operation);
+      const drop = 'chrome.debugger.sendCommand(target, method, params).then(value => ' +
+        'method === "Input.insertText" && globalThis.__mcpSmokeDropAck === "' + operation + '" ' +
+        '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value)';
+      smokeScript = smokeScript.replace(needle, drop + ', signal, "' + operation + '"');
+    }
+    const attachNeedle = 'const attaching = chrome.debugger.attach(target, "1.3").then(async () => {';
+    if (smokeScript.split(attachNeedle).length !== 2) throw new Error("Late-attach smoke hook missing.");
+    smokeScript = smokeScript.replace(attachNeedle, attachNeedle +
+      'if (globalThis.__mcpSmokeDelayAttach) { globalThis.__mcpSmokeDelayAttach = false; ' +
+      'globalThis.__mcpSmokeLateAttachTab = target.tabId; ' +
+      'await new Promise(resolve => setTimeout(resolve, 9000)); }');
+    const retireNeedle = 'await chrome.debugger.detach(target);\n      return false;';
+    if (smokeScript.split(retireNeedle).length !== 2) throw new Error("Late retirement smoke hook missing.");
+    smokeScript = smokeScript.replace(retireNeedle,
+      'await chrome.debugger.detach(target); if (globalThis.__mcpSmokeLateAttachTab === target.tabId) ' +
+      'globalThis.__mcpSmokeLateRetiredTab = target.tabId; return false;');
+    const detachNeedle = 'const detaching = chrome.debugger.detach(target).then(() => {';
+    if (smokeScript.split(detachNeedle).length !== 2) throw new Error("Late-detach smoke hook missing.");
+    smokeScript = smokeScript.replace(detachNeedle,
+      'const detaching = chrome.debugger.detach(target).then(async () => { ' +
+      'if (globalThis.__mcpSmokeDelayDetach) { globalThis.__mcpSmokeDelayDetach = false; ' +
+      'await new Promise(resolve => setTimeout(resolve, 9000)); globalThis.__mcpSmokeLateDetachTab = target.tabId; }');
+    const dragNeedle = 'chrome.debugger.sendCommand(target, method, params), signal, "drag"';
+    if (smokeScript.split(dragNeedle).length !== 2) throw new Error("Drag lost-ack hook missing.");
+    smokeScript = smokeScript.replace(dragNeedle,
+      'chrome.debugger.sendCommand(target, method, params).then(value => ' +
+      '(method === "Input.dispatchDragEvent" && params.type === "drop" && globalThis.__mcpSmokeDropAck === "drop" || ' +
+      'method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" && globalThis.__mcpSmokeDropAck === "release") ' +
+      '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value), signal, "drag"');
+    for (const [debuggee, operation] of [["target", "operation"], ["debuggee", '"frameSequence"']] as const) {
+      const call = 'chrome.debugger.sendCommand(' + debuggee + ', method, params)';
+      const needle = call + ', signal, ' + operation + ',';
+      if (smokeScript.split(needle).length !== 2) throw new Error("Frame lost-ack hook missing: " + operation);
+      const lost = call + '.then(value => (' +
+        'params.type === "mouseReleased" && globalThis.__mcpSmokeDropAck === "frame-click" || ' +
+        'method === "Input.insertText" && globalThis.__mcpSmokeDropAck === "frame-fill") ' +
+        '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value)';
+      smokeScript = smokeScript.replace(needle, lost + ', signal, ' + operation + ',');
+    }
+    const captureNeedle = 'const pending = chrome.debugger.sendCommand(target, method, params);';
+    if (smokeScript.split(captureNeedle).length !== 2) throw new Error("Screenshot lost-ack hook missing.");
+    smokeScript = smokeScript.replace(captureNeedle,
+      'const pending = chrome.debugger.sendCommand(target, method, params).then(value => ' +
+      'method === "Page.captureScreenshot" && globalThis.__mcpSmokeDropAck === "screenshot" ' +
+      '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value);');
   }
   await writeFile(extensionScript, smokeScript);
   let context: BrowserContext | undefined;
+  let nativeProcess: ChildProcess | undefined;
+  let nativeBrowser: Browser | undefined;
   try {
-    context = await chromium.launchPersistentContext(path.join(root, "profile"), {
-      channel: "chromium",
-      headless: process.env.PERSONAL_SMOKE_HEADFUL !== "1",
-      // No Playwright viewport emulation: page size follows the real window, as in a personal Chrome.
-      viewport: null,
-      ...(process.env.PERSONAL_SMOKE_CHROMIUM ? { executablePath: process.env.PERSONAL_SMOKE_CHROMIUM } : {}),
-      args: [
-        `--disable-extensions-except=${bridge.extensionDirectory}`,
-        `--load-extension=${bridge.extensionDirectory}`,
-        "--host-resolver-rules=MAP *.test 127.0.0.1",
-        "--no-proxy-server",
-        "--site-per-process",
-        "--window-size=1280,900",
-      ],
-    });
+    const profile = path.join(root, "profile");
+    const args = [
+      `--disable-extensions-except=${bridge.extensionDirectory}`,
+      `--load-extension=${bridge.extensionDirectory}`,
+      "--host-resolver-rules=MAP *.test 127.0.0.1",
+      "--no-proxy-server",
+      "--site-per-process",
+      "--window-size=1280,900",
+    ];
+    if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1") {
+      // Playwright's normal launch enables focus emulation on every page,
+      // masking the hidden compositor path of the real personal browser.
+      let launchError: Error | undefined;
+      const child = spawn(process.env.PERSONAL_SMOKE_CHROMIUM || chromium.executablePath(), [
+        ...args, "--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage",
+        "--disable-default-apps", "--disable-component-update", "--disable-background-networking", "--disable-sync",
+        // Match Playwright’s isolated Linux fixture launch, not the installed Chrome.
+        ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+        `--user-data-dir=${profile}`, "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=0",
+        ...(process.env.PERSONAL_SMOKE_HEADFUL === "1" ? [] : ["--headless=new"]),
+        "about:blank",
+      ], { stdio: ["ignore", "ignore", "pipe"] });
+      let startupLog = "";
+      child.stderr?.on("data", (chunk: Buffer) => { startupLog = (startupLog + chunk.toString()).slice(-3000); });
+      nativeProcess = child;
+      child.once("error", error => { launchError = error; });
+      let port = 0;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (launchError) throw launchError;
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error("Native Chromium exited before CDP startup: " + startupLog);
+        const raw = await readFile(path.join(profile, "DevToolsActivePort"), "utf8").catch(() => "");
+        port = Number(raw.split("\n")[0]);
+        if (Number.isInteger(port) && port > 0 && port <= 65535) break;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("Native Chromium CDP startup timed out: " + startupLog);
+      nativeBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true, timeout: 45_000 });
+      context = nativeBrowser.contexts()[0];
+      if (!context) throw new Error("Native Chromium did not expose its isolated profile.");
+    } else {
+      context = await chromium.launchPersistentContext(profile, {
+        channel: "chromium",
+        headless: process.env.PERSONAL_SMOKE_HEADFUL !== "1",
+        viewport: null,
+        ...(process.env.PERSONAL_SMOKE_CHROMIUM ? { executablePath: process.env.PERSONAL_SMOKE_CHROMIUM } : {}),
+        args,
+      });
+    }
     for (let attempt = 0; attempt < 100 && !bridge.isConnected(); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     if (!bridge.isConnected()) throw new Error("The generated extension did not connect to the bridge.");
     report("connection", { ...bridge.connectionInfo(), capabilities: undefined });
+
+    if (editorFixture) {
+      await verifyRealEditors(bridge, context, sitePort, waitForFixturePage);
+      return;
+    }
 
     if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY === "1") {
       const url = `http://recovery-site.test:${sitePort}/`;
@@ -354,10 +515,335 @@ async function main(): Promise<void> {
       if (result.unverified !== false || await page.locator("#clicks").textContent() !== "Count 2") {
         throw new Error("Subsequent guarded click did not recover.");
       }
-      report("CDP lost-ack recovery", { wheel, click, scrollY: await page.evaluate("window.scrollY"),
-        wheelEvents: 1, clickEvents: 2, screenshotBytes: shot.sizeBytes, nextClickVerified: true });
+      const hoverRef = (await bridge.snapshot({ tabId })).refs.find(ref => ref.name === "Run history");
+      if (!hoverRef) throw new Error("Missing recovery fixture hover target.");
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'hover'");
+      const hover = await bridge.hover({ tabId, ref: hoverRef.ref })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (hover !== "EXECUTION_OUTCOME_UNKNOWN" || !(await page.getByRole("link", { name: "Run history" }).evaluate(el => el.matches(":hover")))) {
+        throw new Error("Lost hover acknowledgement or actual hover effect was not verified: " + hover);
+      }
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'screenshot'");
+      const capture = await bridge.screenshot({ tabId })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (capture !== "BROWSER_WORKER_TIMEOUT") throw new Error("Lost capture acknowledgement was not reported: " + capture);
+      const recoveredShot = await bridge.screenshot({ tabId });
+      if (!recoveredShot.sizeBytes) throw new Error("Capture did not recover after the timeout.");
+      const entry = (await bridge.snapshot({ tabId })).refs.find(ref => ref.name === "Key entry");
+      if (!entry) throw new Error("Missing keyboard recovery fixture.");
+      await bridge.click({ tabId, ref: entry.ref });
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'press'");
+      const press = await bridge.press({ tabId, key: "a b" })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (press !== "EXECUTION_OUTCOME_UNKNOWN" ||
+          await page.locator("#key-entry").inputValue() !== "a" ||
+          await page.locator("#key-count").textContent() !== "1") {
+        throw new Error("Interrupted keyboard sequence replayed or dispatched a subsequent key: " + press);
+      }
+      const finalShot = await bridge.screenshot({ tabId });
+      if (!finalShot.sizeBytes) throw new Error("Screenshot did not recover after keyboard interruption.");
+      const fillRef = (await bridge.snapshot({ tabId })).refs.find(ref => ref.name === "Key entry");
+      if (!fillRef) throw new Error("Missing field after keyboard recovery.");
+      const beforeInsertions = Number(await page.locator("#insert-count").textContent());
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'fill'");
+      const fill = await bridge.fill({ tabId, ref: fillRef.ref, value: "replacement" })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (fill !== "EXECUTION_OUTCOME_UNKNOWN" ||
+          await page.locator("#key-entry").inputValue() !== "replacement" ||
+          Number(await page.locator("#insert-count").textContent()) !== beforeInsertions + 1) {
+        throw new Error("Fill acknowledgement or actual insertion was not verified: " + fill);
+      }
+      await bridge.snapshot({ tabId });
+      await worker.evaluate("globalThis.__mcpSmokeDropAck = 'type'");
+      const type = await bridge.type({ tabId, text: "!" })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (type !== "EXECUTION_OUTCOME_UNKNOWN" ||
+          await page.locator("#key-entry").inputValue() !== "replacement!" ||
+          Number(await page.locator("#insert-count").textContent()) !== beforeInsertions + 2) {
+        throw new Error("Type acknowledgement or actual insertion was not verified: " + type);
+      }
+      const finalTextShot = await bridge.screenshot({ tabId });
+      if (!finalTextShot.sizeBytes) throw new Error("Screenshot did not recover after text interruption.");
+      report("CDP lost-ack recovery", { wheel, click, hover, capture, press, fill, type, scrollY: await page.evaluate("window.scrollY"),
+        wheelEvents: 1, clickEvents: 2, keyEvents: 1, textInsertions: 2, screenshotBytes: shot.sizeBytes,
+        recoveredScreenshotBytes: recoveredShot.sizeBytes, finalScreenshotBytes: finalTextShot.sizeBytes, nextClickVerified: true });
+      const boardUrl = `http://dnd-site.test:${sitePort}/`;
+      const boardTab = (await bridge.open({ url: boardUrl, taskId })).tab.tabId;
+      const boardPage = await waitForFixturePage(context, boardUrl);
+      for (const [source, fault, counter, status, expected] of [
+        ["Cartão A", "drop", "#drop-count", "#status", "movido:card"],
+        ["Alça", "release", "#release-count", "#pointer", "solto na coluna"],
+      ] as const) {
+        const refs = (await bridge.snapshot({ tabId: boardTab })).refs;
+        const from = refs.find(ref => ref.name === source);
+        const to = refs.find(ref => ref.name === "Coluna Concluído");
+        if (!from || !to) throw new Error("Missing drag recovery refs.");
+        const input = { tabId: boardTab, from: { ref: from.ref }, to: { ref: to.ref } };
+        await worker.evaluate(`globalThis.__mcpSmokeDropAck = ${JSON.stringify(fault)}`);
+        const result = await bridge.drag(input).then(() => "completed", async (error: { code?: string }) => {
+          if (error.code !== "ACTION_REQUIRES_CONFIRMATION") return error.code;
+          return bridge.drag({ ...input, confirmationId: confirmationIdOf(error) })
+            .then(() => "completed", (next: { code?: string }) => next.code);
+        });
+        if (result !== "EXECUTION_OUTCOME_UNKNOWN" ||
+            await boardPage.locator(counter).textContent() !== "1" ||
+            await boardPage.locator(status).textContent() !== expected) {
+          throw new Error("Interrupted drag replayed or did not reach its intended target: " + fault + " " + result);
+        }
+        const recovered = await bridge.screenshot({ tabId: boardTab });
+        if (!recovered.sizeBytes) throw new Error("Drag recovery screenshot missing.");
+        report("drag acknowledgement recovery", { fault, result, events: 1, screenshotBytes: recovered.sizeBytes });
+        if (fault === "drop") await bridge.navigate({ tabId: boardTab, url: boardUrl + "?pointer=1" });
+      }
+      const lateUrl = url + "?late-attach=1";
+      const lateTask = "personal-debugger-transition-recovery";
+      const lateTab = (await bridge.open({ url: lateUrl, taskId: lateTask })).tab.tabId;
+      const latePage = await waitForFixturePage(context, lateUrl);
+      const lateChromeTab = Number(lateTab.split(":")[1]);
+      const attachedBefore = await worker.evaluate(`chrome.debugger.getTargets().then(targets =>
+        targets.some(t => t.tabId === ${lateChromeTab} && t.attached))`);
+      await worker.evaluate("globalThis.__mcpSmokeDelayAttach = true");
+      const late = await bridge.screenshot({ tabId: lateTab })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (late !== "BROWSER_WORKER_TIMEOUT") throw new Error("Late debugger attach was not bounded: " + late);
+      const retired = await worker.evaluate(`new Promise(resolve => {
+        const deadline = Date.now() + 6000;
+        const check = async () => {
+          const pending = globalThis.__mcpV3PersonalDebuggerTransitions.has("${lateChromeTab}");
+          const held = globalThis.__mcpV3PersonalTaskDebuggers.has("${lateChromeTab}");
+          const attached = (await chrome.debugger.getTargets()).some(t => t.tabId === ${lateChromeTab} && t.attached);
+          const detached = globalThis.__mcpSmokeLateRetiredTab === ${lateChromeTab};
+          if (!pending && !held && detached || Date.now() >= deadline) resolve({ pending, held, attached, detached });
+          else setTimeout(check, 100);
+        };
+        void check();
+      })`);
+      const observation = retired as { pending: boolean; held: boolean; attached: boolean; detached: boolean };
+      report("late debugger observation", { attachedBefore, ...observation });
+      if (observation.pending || observation.held || !observation.detached) throw new Error("Late debugger session was not retired.");
+      const lateShot = await bridge.screenshot({ tabId: lateTab });
+      if (!lateShot.sizeBytes) throw new Error("A new capture did not recover after late debugger attachment.");
+      report("late debugger attachment recovery", { late, retired, screenshotBytes: lateShot.sizeBytes });
+      await worker.evaluate("globalThis.__mcpSmokeDelayDetach = true");
+      const delayedFinish = await bridge.finishTask({ taskId: lateTask })
+        .then(() => "completed", (error: { code?: string }) => error.code);
+      if (delayedFinish !== "BROWSER_WORKER_TIMEOUT" || latePage.isClosed()) {
+        throw new Error("Task finished before debugger retirement was confirmed: " + delayedFinish);
+      }
+      const lateDetach = await worker.evaluate(`new Promise(resolve => {
+        const deadline = Date.now() + 6000;
+        const check = () => {
+          const pending = globalThis.__mcpV3PersonalDebuggerTransitions.has("${lateChromeTab}");
+          const held = globalThis.__mcpV3PersonalTaskDebuggers.has("${lateChromeTab}");
+          const detached = globalThis.__mcpSmokeLateDetachTab === ${lateChromeTab};
+          if (!pending && !held && detached || Date.now() >= deadline) resolve({ pending, held, detached });
+          else setTimeout(check, 100);
+        };
+        check();
+      })`) as { pending: boolean; held: boolean; detached: boolean };
+      if (lateDetach.pending || lateDetach.held || !lateDetach.detached) {
+        throw new Error("Delayed detach did not reconcile.");
+      }
+      const finished = await bridge.finishTask({ taskId: lateTask });
+      if (!finished.completed || !latePage.isClosed()) throw new Error("Task did not finish after confirmed detach.");
+      report("late debugger detach recovery", { delayedFinish, ...lateDetach, finished: finished.completed });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER CDP RECOVERY PASS");
+      return;
+    }
+
+    if (process.env.PERSONAL_SMOKE_FRAME_RECOVERY_ONLY === "1") {
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://"));
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      const frameTask = "personal-frame-input-recovery";
+      for (const nested of [false, true]) {
+        const hostUrl = `http://frame-recovery-site.test:${sitePort}/${nested ? "?nested=1" : ""}`;
+        const frameTab = (await bridge.open({ url: hostUrl, taskId: frameTask })).tab.tabId;
+        const host = await waitForFixturePage(context, hostUrl);
+        const leaf = nested ? host.frameLocator('iframe[name="content"]').frameLocator('iframe[name="leaf"]')
+          : host.frameLocator('iframe[name="content"]');
+        await leaf.locator("#key-entry").waitFor();
+        const framePath = ["content", "leaf"];
+        await bridge.snapshot({ tabId: frameTab });
+        await worker.evaluate("globalThis.__mcpSmokeDropAck = 'frame-click'");
+        const clickResult = await (nested
+          ? bridge.frameSequence({ tabId: frameTab, steps: [
+            { action: "extract", framePath, locator: { id: "clicks" } },
+            { action: "click", framePath, locator: { id: "increase" } },
+            { action: "fill", framePath, locator: { id: "key-entry" }, value: "unexpected" },
+          ] })
+          : bridge.frameClick({ tabId: frameTab, frame: "content", selector: "#increase" }))
+          .then(() => ({ code: "completed", message: "" }), (error: { code?: string; message: string }) => error);
+        if (clickResult.code !== "EXECUTION_OUTCOME_UNKNOWN" ||
+            nested && !clickResult.message.includes("Completed step indexes: [0]") ||
+            await leaf.locator("#clicks").textContent() !== "Count 1" ||
+            await leaf.locator("#key-entry").inputValue() !== "") {
+          throw new Error("Frame click recovery failed: " + JSON.stringify(clickResult));
+        }
+        const clickShot = await bridge.screenshot({ tabId: frameTab });
+        if (!clickShot.sizeBytes) throw new Error("Capture after frame click failed.");
+        await bridge.snapshot({ tabId: frameTab });
+        await worker.evaluate("globalThis.__mcpSmokeDropAck = 'frame-fill'");
+        const fillResult = await (nested
+          ? bridge.frameSequence({ tabId: frameTab, steps: [
+            { action: "extract", framePath, locator: { id: "clicks" } },
+            { action: "fill", framePath, locator: { id: "key-entry" }, value: "frame input" },
+            { action: "click", framePath, locator: { id: "increase" } },
+          ] })
+          : bridge.frameFill({ tabId: frameTab, frame: "content", selector: "#key-entry", value: "frame input" }))
+          .then(() => ({ code: "completed", message: "" }), (error: { code?: string; message: string }) => error);
+        if (fillResult.code !== "EXECUTION_OUTCOME_UNKNOWN" ||
+            nested && !fillResult.message.includes("Completed step indexes: [0]") ||
+            await leaf.locator("#key-entry").inputValue() !== "frame input" ||
+            await leaf.locator("#insert-count").textContent() !== "1" ||
+            await leaf.locator("#clicks").textContent() !== "Count 1") {
+          throw new Error("Frame fill recovery failed: " + JSON.stringify(fillResult));
+        }
+        const fillShot = await bridge.screenshot({ tabId: frameTab });
+        if (!fillShot.sizeBytes) throw new Error("Capture after frame fill failed.");
+        report("frame input recovery", { nested, click: clickResult.code, fill: fillResult.code,
+          clicks: 1, insertions: 1, clickScreenshotBytes: clickShot.sizeBytes, fillScreenshotBytes: fillShot.sizeBytes });
+      }
+      await bridge.finishTask({ taskId: frameTask });
+      console.log("\nPERSONAL BROWSER FRAME RECOVERY PASS");
+      return;
+    }
+
+    const verifyRichFrames = async (context: BrowserContext) => {
+      const taskId = "personal-rich-frame-compatibility";
+      const failures: string[] = [];
+      for (const variant of ["same", "cross", "nested"]) {
+        const url = `http://rich-editor-site.test:${sitePort}/?${variant}=1`;
+        const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+        const host = await waitForFixturePage(context, url);
+        const editor = host.frameLocator('iframe[name="editor"]');
+        const leaf = variant === "nested" ? editor.frameLocator('iframe[name="leaf"]') : editor;
+        await leaf.locator("#plain").waitFor();
+        await bridge.snapshot({ tabId });
+        const fill = (id: string, value: string) => variant === "nested"
+          ? bridge.frameSequence({ tabId, steps: [{ action: "fill", framePath: ["editor", "leaf"], locator: { id }, value }] })
+          : bridge.frameFill({ tabId, frame: "editor", selector: "#" + id, value });
+        const attempt = async (id: string, value: string) => fill(id, value)
+          .then(() => "completed", (error: { code?: string; message?: string }) => error.code ?? error.message ?? "unknown");
+        const plain = await attempt("plain", "replacement");
+        const actual = await leaf.locator("#plain").innerText();
+        const protectedResult = await attempt("protected", "replacement");
+        const protectedText = await leaf.locator("#protected").innerText();
+        const token = await leaf.locator("#token").count();
+        const readOnly = await attempt("readonly", "replacement");
+        const readOnlyText = await leaf.locator("#readonly").innerText();
+        const lateToken = await attempt("late-token", "replacement");
+        const lateTokenText = await leaf.locator("#late-token").innerText();
+        const lateReadOnly = await attempt("late-readonly", "replacement");
+        const lateReadOnlyText = await leaf.locator("#late-readonly").innerText();
+        const decoy = await leaf.locator("#decoy").inputValue();
+        const observation = { variant, plain, actual, protectedResult, protectedText, token, readOnly, readOnlyText,
+          lateToken, lateTokenText, lateReadOnly, lateReadOnlyText, decoy };
+        report("rich frame compatibility", observation);
+        if (plain !== "completed" || actual !== "replacement" ||
+            protectedResult !== "ACTION_BLOCKED_BY_POLICY" || token !== 1 || protectedText !== "prefix TOKEN suffix" ||
+            readOnly !== "LOCATOR_NOT_FOUND" || readOnlyText !== "locked" ||
+            lateToken !== "ACTION_BLOCKED_BY_POLICY" || lateTokenText !== "prefix TOKEN" ||
+            lateReadOnly !== "LOCATOR_NOT_FOUND" || lateReadOnlyText !== "locked" || decoy !== "unchanged") {
+          failures.push(JSON.stringify(observation));
+        }
+      }
+      await bridge.finishTask({ taskId });
+      if (failures.length) throw new Error("Rich frame compatibility failed: " + failures.join("; "));
+      console.log("\nPERSONAL BROWSER RICH FRAME COMPATIBILITY PASS");
+    };
+    if (process.env.PERSONAL_SMOKE_RICH_FRAME_ONLY === "1") {
+      await verifyRichFrames(context);
+      return;
+    }
+
+    const verifyBackgroundCapture = async (context: BrowserContext) => {
+      const url = `http://capture-site.test:${sitePort}/`;
+      const taskId = "personal-background-capture";
+      const target = (await bridge.open({ url, taskId })).tab.tabId;
+      const targetPage = await waitForFixturePage(context, url);
+      const other = (await bridge.open({ url: url + "?other=1", taskId })).tab.tabId;
+      const otherPage = await waitForFixturePage(context, url + "?other=1");
+      const worker = context.serviceWorkers().find(candidate => candidate.url().startsWith("chrome-extension://") && new URL(candidate.url()).pathname === "/service-worker.js");
+      if (!worker) throw new Error("Smoke extension worker unavailable.");
+      const targetChrome = Number(target.split(":")[1]);
+      const otherChrome = Number(other.split(":")[1]);
+      const selection = () => worker.evaluate(`Promise.all([chrome.tabs.get(${targetChrome}), chrome.tabs.get(${otherChrome})]).then(tabs => tabs.map(tab => tab.active))`) as Promise<boolean[]>;
+      const modes = [
+        ["viewport", {}],
+        ["region", { region: { x: 300, y: 100, width: 120, height: 80 }, scale: "css" }],
+        ["fullPage", { fullPage: true }],
+      ] as const;
+      const capture = async (tabId: string, options: (typeof modes)[number][1]) => {
+        const started = performance.now();
+        const shot = await bridge.screenshot({ tabId, ...options }).catch(async (error: unknown) => {
+          report("background capture failure", { target: tabId === target ? "A" : "B", options, selection: await selection(),
+            visibility: await (tabId === target ? targetPage : otherPage).evaluate("document.visibilityState") });
+          throw error;
+        });
+        const data = (shot as typeof shot & { contentBase64?: string }).contentBase64;
+        if (!data || !shot.sizeBytes) throw new Error("Missing screenshot bytes");
+        const elapsedMs = Math.round(performance.now() - started);
+        // Decode the actual JPEG returned by MCP; do not compare encoded bytes
+        // (Chrome can change rendering/encoding when a tab loses selection).
+        const pixels = await worker.evaluate(`(async () => {
+          const bytes = Uint8Array.from(atob(${JSON.stringify(data)}), char => char.charCodeAt(0));
+          const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+          const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(bitmap, 0, 0);
+          const rgb = [...ctx.getImageData(Math.floor(bitmap.width * .7), Math.floor(bitmap.height * .3), 1, 1).data].slice(0, 3);
+          bitmap.close();
+          return rgb;
+        })()`) as number[];
+        return { size: jpegSize(Buffer.from(data, "base64")), pixels, elapsedMs };
+      };
+      await bridge.selectTab({ tabId: target });
+      if ((await selection()).join(",") !== "true,false") throw new Error("Target selection not confirmed.");
+      const baselines = [];
+      for (const [name, options] of modes) {
+        const foreground = await capture(target, options);
+        baselines.push({ name, options, foreground });
+      }
+      await bridge.selectTab({ tabId: other });
+      const before = await selection();
+      if (before.join(",") !== "false,true") throw new Error("Target is not inactive.");
+      const initialVisibility = await targetPage.evaluate("document.visibilityState");
+      report("background capture visibility", { selection: before, visibility: initialVisibility });
+      if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1" && initialVisibility !== "hidden") {
+        throw new Error("Native background test requires a truly hidden document.");
+      }
+      for (const { name, options, foreground } of baselines) {
+        const otherImage = await capture(other, options);
+        const matches = (actual: number[], expected: number[]) => actual.length === 3 &&
+          actual.every((value, i) => Math.abs(value - (expected[i] ?? -999)) <= 12);
+        if (!matches(foreground.pixels, [184, 50, 36]) || !matches(otherImage.pixels, [24, 74, 144])) {
+          throw new Error("Distinct fixture identity not established: " + JSON.stringify({ foreground, otherImage }));
+        }
+        for (let sample = 0; sample < 2; sample++) {
+          const background = await capture(target, options);
+          const after = await selection();
+          const identityMatches = matches(background.pixels, [184, 50, 36]);
+          const wrongTab = matches(background.pixels, [24, 74, 144]);
+          const geometryMatches = name === "region" ? background.size.width === 120 && background.size.height === 80
+            : name === "fullPage" ? background.size.height >= 1800 : background.size.width === foreground.size.width;
+          if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1") {
+            await targetPage.waitForFunction('document.visibilityState === "hidden"', undefined, { timeout: 2000 });
+          }
+          report("background screenshot", { name, sample, foregroundMs: foreground.elapsedMs,
+            backgroundMs: background.elapsedMs, foregroundSize: foreground.size, size: background.size,
+            pixels: background.pixels, identityMatches, wrongTab, geometryMatches,
+            selection: after, visibility: await targetPage.evaluate("document.visibilityState") });
+          if (!identityMatches || wrongTab || !geometryMatches || after.join(",") !== "false,true") {
+            throw new Error("Inactive screenshot identity/selection mismatch: " + name);
+          }
+        }
+      }
+      await bridge.finishTask({ taskId });
+      console.log("\nPERSONAL BROWSER BACKGROUND CAPTURE PASS");
+    };
+    if (process.env.PERSONAL_SMOKE_BACKGROUND_CAPTURE_ONLY === "1") {
+      await verifyBackgroundCapture(context);
       return;
     }
 
@@ -422,6 +908,77 @@ async function main(): Promise<void> {
         screenshotBytes: shot.sizeBytes, incompleteVerified: false, exactVerified: true, redirectHits });
       await bridge.finishTask({ taskId });
       console.log("\nPERSONAL BROWSER FOREGROUND AND URL PASS");
+      return;
+    }
+
+    if (process.env.PERSONAL_SMOKE_PERFORMANCE_ONLY === "1") {
+      const modulePath = "../../benchmarks/browser/benchmark-browser-fast-path.mjs";
+      const { summarizeOperationBenchmark } = await import(modulePath) as {
+        summarizeOperationBenchmark: (runs: number[], bytes?: number[], warmups?: number) => unknown;
+      };
+      const url = `http://performance-site.test:${sitePort}/`;
+      const taskId = "personal-performance";
+      const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+      const page = await waitForFixturePage(context, url);
+      const warmups = 3;
+      const iterations = 20;
+      type Sample = { flowMs: number; snapshotMs: number; bridgeMs: number; actionMs: number; queueMs: number; responseBytes: number };
+      const samples: Record<"combined" | "separate", Sample[]> = { combined: [], separate: [] };
+      let clicks = 0;
+      for (let pair = 0; pair < warmups + iterations; pair += 1) {
+        const strategies = pair % 2 === 0 ? ["combined", "separate"] as const : ["separate", "combined"] as const;
+        for (const strategy of strategies) {
+          const started = performance.now();
+          const snapshot = await bridge.snapshot({ tabId });
+          const snapshotMs = performance.now() - started;
+          const ref = snapshot.refs.find((item) => item.name === "Mostrar resultado")?.ref;
+          if (!ref) throw new Error("Performance fixture action is missing.");
+          const expected = "finished [" + (++clicks) + "]";
+          const offset = latencyEvents.length;
+          const actionStarted = performance.now();
+          if (strategy === "combined") {
+            const result = await bridge.click({ tabId, ref, expect: { text: expected, timeoutMs: 4000 } });
+            if (result.unverified !== false) throw new Error("Combined postcondition was not verified.");
+          } else {
+            await bridge.click({ tabId, ref });
+            await bridge.wait({ tabId, text: expected, timeoutMs: 4000 });
+          }
+          const flowMs = performance.now() - actionStarted;
+          if (await page.locator("#result").textContent() !== expected ||
+              await page.locator("#clicks").textContent() !== String(clicks)) {
+            throw new Error("Performance fixture did not produce exactly one action.");
+          }
+          const events = latencyEvents.slice(offset);
+          const operations = strategy === "combined" ? ["browser_click"] : ["browser_click", "browser_wait"];
+          if (events.length !== operations.length ||
+              events.some((event, index) => event.operation !== operations[index] || event.outcome !== "success")) {
+            throw new Error("Unexpected bridge telemetry for " + strategy + ": " + JSON.stringify(events));
+          }
+          const sum = (key: string): number => events.reduce((total, event) => {
+            const value = event[key];
+            if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Missing telemetry: " + key);
+            return total + value;
+          }, 0);
+          const sample = { flowMs, snapshotMs, bridgeMs: sum("durationMs"),
+            actionMs: sum("extensionActionMs"), queueMs: sum("extensionQueueMs"), responseBytes: sum("responseBytes") };
+          if (pair === 0) report("first sample " + strategy, sample);
+          if (pair >= warmups) samples[strategy].push(sample);
+        }
+      }
+      for (const strategy of ["combined", "separate"] as const) {
+        const values = samples[strategy];
+        report("personal performance " + strategy, {
+          version: bridge.connectionInfo().extensionVersion, measuredScope: "isolated local bridge; excludes Edge and relay",
+          headful: process.env.PERSONAL_SMOKE_HEADFUL === "1", calls: strategy === "combined" ? 1 : 2,
+          flow: summarizeOperationBenchmark(values.map((item) => item.flowMs), values.map((item) => item.responseBytes), warmups),
+          snapshot: summarizeOperationBenchmark(values.map((item) => item.snapshotMs), [], warmups),
+          bridge: summarizeOperationBenchmark(values.map((item) => item.bridgeMs), [], warmups),
+          extensionAction: summarizeOperationBenchmark(values.map((item) => item.actionMs), [], warmups),
+          extensionQueue: summarizeOperationBenchmark(values.map((item) => item.queueMs), [], warmups),
+        });
+      }
+      await bridge.finishTask({ taskId });
+      console.log("\nPERSONAL BROWSER PERFORMANCE PASS");
       return;
     }
 
@@ -562,6 +1119,10 @@ async function main(): Promise<void> {
       return;
     }
 
+    // Include both regressions in the existing full headless/headful CI smoke.
+    await verifyRichFrames(context);
+    await verifyBackgroundCapture(context);
+
     // Every extension notification uses the embedded data: icon, which Chrome
     // only loads when the extension's CSP allows it.
     const extensionWorker = context.serviceWorkers()
@@ -597,51 +1158,79 @@ async function main(): Promise<void> {
       throw new Error("The expected Chrome notification was not created: " + prefix);
     };
 
-    const opened = await bridge.open({ url: `http://parent-site.test:${sitePort}/`, taskId: "personal-frame-smoke" });
-    const tabId = opened.tab.tabId;
-    await bridge.snapshot({ tabId });
-    report("frames", (await bridge.profilePage!({ tabId })).frames);
-    const steps = [
-      { action: "fill" as const, framePath: ["a", "b"], locator: { name: "nome" }, value: "Maria" },
-      { action: "select" as const, framePath: ["a", "b"], locator: { name: "uf" }, value: "Minas" },
-      { action: "click" as const, framePath: ["a", "b"], locator: { tag: "button", text: "Salvar" } },
-      { action: "waitFor" as const, framePath: ["a", "b"], text: "Salvo", timeoutMs: 10_000 },
-      { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
-    ];
-    let confirmationId = "";
-    try {
-      await bridge.frameSequence!({ tabId, steps, timeoutMs: 60_000 });
-      throw new Error("A dangerous legacy click ran without confirmation.");
-    } catch (error) {
-      confirmationId = confirmationIdOf(error);
-    }
-    if (submissions.length) throw new Error("The form was submitted before confirmation.");
-    const saved = await bridge.frameSequence!({ tabId, timeoutMs: 60_000,
-      steps: steps.map((step) => (step.action === "click" ? { ...step, confirmationId } : step)) });
-    report("nested OOPIF fill/select/click", saved);
-    if (submissions.length !== 1 || !submissions[0]!.includes("nome=Maria") || !submissions[0]!.includes("uf=mg")) {
-      throw new Error(`Unexpected submissions ${JSON.stringify(submissions)}`);
-    }
+    const verifyNestedOopif = async (context: BrowserContext, tabId: string, url: string) => {
+      const beforeSubmissions = submissions.length;
+      await bridge.snapshot({ tabId });
+      report("frames", (await bridge.profilePage!({ tabId })).frames);
+      const steps = [
+        { action: "fill" as const, framePath: ["a", "b"], locator: { name: "nome" }, value: "Maria" },
+        { action: "select" as const, framePath: ["a", "b"], locator: { name: "uf" }, value: "Minas" },
+        { action: "click" as const, framePath: ["a", "b"], locator: { tag: "button", text: "Salvar" } },
+        { action: "waitFor" as const, framePath: ["a", "b"], text: "Salvo", timeoutMs: 10_000 },
+        { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
+      ];
+      let confirmationId = "";
+      try {
+        await bridge.frameSequence!({ tabId, steps, timeoutMs: 60_000 });
+        throw new Error("A dangerous legacy click ran without confirmation.");
+      } catch (error) {
+        confirmationId = confirmationIdOf(error);
+      }
+      if (submissions.length !== beforeSubmissions) throw new Error("The form was submitted before confirmation.");
+      const saved = await bridge.frameSequence!({ tabId, timeoutMs: 60_000,
+        steps: steps.map((step) => (step.action === "click" ? { ...step, confirmationId } : step)) });
+      report("nested OOPIF fill/select/click", saved);
+      if (submissions.length !== beforeSubmissions + 1 || !submissions.at(-1)!.includes("nome=Maria") || !submissions.at(-1)!.includes("uf=mg")) {
+        throw new Error(`Unexpected submissions ${JSON.stringify(submissions)}`);
+      }
 
-    await bridge.snapshot({ tabId });
-    const enterSteps = [
-      { action: "fill" as const, framePath: ["a", "b"], locator: { id: "busca" }, value: "pedido 42" },
-      { action: "press" as const, framePath: ["a", "b"], locator: { id: "busca" }, key: "Enter" },
-      { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
-    ];
-    let enterId = "";
-    try {
-      await bridge.frameSequence!({ tabId, steps: enterSteps });
-      throw new Error("Enter ran without confirmation.");
-    } catch (error) {
-      enterId = confirmationIdOf(error);
+      await bridge.snapshot({ tabId });
+      const enterSteps = [
+        { action: "fill" as const, framePath: ["a", "b"], locator: { id: "busca" }, value: "pedido 42" },
+        { action: "press" as const, framePath: ["a", "b"], locator: { id: "busca" }, key: "Enter" },
+        { action: "extract" as const, framePath: ["a", "b"], locator: { id: "ok" } },
+      ];
+      let enterId = "";
+      try {
+        await bridge.frameSequence!({ tabId, steps: enterSteps });
+        throw new Error("Enter ran without confirmation.");
+      } catch (error) {
+        enterId = confirmationIdOf(error);
+      }
+      const entered = await bridge.frameSequence!({ tabId,
+        steps: enterSteps.map((step) => (step.action === "press" ? { ...step, confirmationId: enterId } : step)) }).catch(async (error: unknown) => {
+          const parent = context.pages().find((page) => page.url() === url);
+          const child = parent?.frames().find((frame) => frame.name() === "b");
+          const state = await child?.evaluate(`(() => {
+            const target = document.getElementById("busca");
+            const rect = target?.getBoundingClientRect();
+            return { activeId: document.activeElement?.id || "", activeTag: document.activeElement?.tagName || "",
+              hasFocus: document.hasFocus(), rect: rect?.toJSON(), events: window.__focusTrace || [] };
+          })()`).catch(() => null);
+          report("nested OOPIF focus diagnostic", state ?? null);
+          throw error;
+        });
+      report("nested OOPIF Enter", entered);
+      if (!JSON.stringify(entered.steps.at(-1)).includes("Enter recebido: pedido 42")) {
+        throw new Error("Enter did not reach the nested field.");
+      }
+    };
+    if (process.env.PERSONAL_SMOKE_OOPIF_FOCUS_ONLY === "1") {
+      for (let sample = 0; sample < 8; sample++) {
+        const url = `http://parent-site.test:${sitePort}/?focus-sample=${sample}`;
+        const taskId = "personal-oopif-focus-" + sample;
+        const tabId = (await bridge.open({ url, taskId })).tab.tabId;
+        try { await verifyNestedOopif(context, tabId, url); }
+        finally { await bridge.finishTask({ taskId }); }
+        report("nested OOPIF focus sample", { sample, completed: true });
+      }
+      console.log("\nPERSONAL BROWSER OOPIF FOCUS PASS");
+      return;
     }
-    const entered = await bridge.frameSequence!({ tabId,
-      steps: enterSteps.map((step) => (step.action === "press" ? { ...step, confirmationId: enterId } : step)) });
-    report("nested OOPIF Enter", entered);
-    if (!JSON.stringify(entered.steps.at(-1)).includes("Enter recebido: pedido 42")) {
-      throw new Error("Enter did not reach the nested field.");
-    }
+    const parentUrl = `http://parent-site.test:${sitePort}/`;
+    const opened = await bridge.open({ url: parentUrl, taskId: "personal-frame-smoke" });
+    const tabId = opened.tab.tabId;
+    await verifyNestedOopif(context, tabId, parentUrl);
 
     // Legacy frameset menu: expand a submenu, follow a link targeting another
     // (cross-site) frame, and do not collapse an already expanded level.
@@ -1245,7 +1834,17 @@ async function main(): Promise<void> {
 
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
-    await context?.close().catch(() => undefined);
+    if (nativeBrowser) {
+      await nativeBrowser.close().catch(() => undefined);
+    } else await context?.close().catch(() => undefined);
+    if (nativeProcess && nativeProcess.exitCode === null && nativeProcess.signalCode === null) {
+      const child = nativeProcess;
+      child.kill();
+      for (let attempt = 0; attempt < 25 && child.exitCode === null && child.signalCode === null; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
     await bridge.close().catch(() => undefined);
     server.close();
     await rm(root, { recursive: true, force: true }).catch(() => undefined);

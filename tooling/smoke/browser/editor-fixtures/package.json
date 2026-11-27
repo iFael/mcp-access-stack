@@ -1,0 +1,13 @@
+{
+  "name": "mcp-browser-editor-fixtures",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "tinymce": "8.11.0",
+    "ckeditor5": "49.1.0",
+    "monaco-editor": "0.58.0",
+    "codemirror": "6.0.2",
+    "esbuild": "0.28.1"
+  }
+}

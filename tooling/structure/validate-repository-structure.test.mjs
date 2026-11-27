@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import test from "node:test";
 import { validateServiceBoundaries } from "./validate-repository-structure.mjs";
@@ -112,11 +113,81 @@ test("keeps edge-gateway-only PRs on the edge-specific typecheck", async () => {
            needs.impact.outputs.mcpGateway == 'true' ||
            needs.impact.outputs.browserWorker == 'true' ||
            needs.impact.outputs.rootBroad == 'true')
+        env:
+          MCP_TYPECHECK_JOBS: "2"
         run: npm run typecheck`;
   assert.ok(
     workflow.replaceAll("\r\n", "\n").includes(expected),
     "global typecheck must skip edge-gateway-only changes so Check Edge Gateway owns that scope",
   );
+});
+
+test("segmented typecheck defaults to serial, bounds opted-in parallelism and fails closed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "mcp-typecheck-scheduler-"));
+  const script = new URL("../typescript/run-segmented-typecheck.mjs", import.meta.url);
+  const names = ["mcp-core", "edge-protocol", "browser-worker", "workspace-agent",
+    "oracle-release-orchestrator", "update-control", "mcp-gateway", "tooling"];
+  try {
+    await writeFile(path.join(root, "tsconfig.json"), JSON.stringify({include: names}));
+    for (const name of names) {
+      await writeFile(path.join(root, `tsconfig.typecheck.${name}.json`),
+        JSON.stringify({extends: "./tsconfig.json", include: [name]}));
+    }
+    const compiler = path.join(root, "node_modules", "typescript", "bin");
+    await mkdir(compiler, {recursive: true});
+    await writeFile(path.join(compiler, "tsc"), `
+      const fs = require("node:fs");
+      const name = process.argv.at(-1);
+      fs.appendFileSync("events.jsonl", JSON.stringify({kind:"start",name})+"\\n");
+      setTimeout(() => {
+        fs.appendFileSync("events.jsonl", JSON.stringify({kind:"finish",name})+"\\n");
+        if (process.env.FAIL_SEGMENT === name) process.exitCode = 1;
+      }, 100);
+    `);
+    async function run(jobs, failSegment) {
+      const eventsPath = path.join(root, "events.jsonl");
+      await writeFile(eventsPath, "");
+      const env = {...process.env};
+      delete env.MCP_TYPECHECK_JOBS;
+      delete env.FAIL_SEGMENT;
+      if (jobs !== undefined) env.MCP_TYPECHECK_JOBS = jobs;
+      if (failSegment !== undefined) env.FAIL_SEGMENT = failSegment;
+      const result = spawnSync(process.execPath, [fileURLToPath(script)], {
+        cwd: root, encoding: "utf8", env, timeout: 15000, windowsHide: true,
+      });
+      const raw = await readFile(eventsPath, "utf8");
+      const events = raw.trim() ? raw.trim().split("\n").map(JSON.parse) : [];
+      let active = 0;
+      let peak = 0;
+      for (const event of events) {
+        active += event.kind === "start" ? 1 : -1;
+        peak = Math.max(peak, active);
+      }
+      assert.equal(active, 0, "all started compilers must finish");
+      return {result, events, peak};
+    }
+    const serial = await run(undefined);
+    assert.equal(serial.result.status, 0, serial.result.stderr);
+    assert.equal(serial.peak, 1);
+    assert.equal(serial.events.length, names.length * 2);
+    const parallel = await run("2");
+    assert.equal(parallel.result.status, 0, parallel.result.stderr);
+    assert.ok(parallel.peak <= 2);
+    const firstBatchLog = parallel.result.stdout.split(/\r?\n/u).filter(line => line.startsWith("[typecheck]")).slice(0, 2);
+    assert.deepEqual(firstBatchLog, ["[typecheck] mcp-core", "[typecheck] edge-protocol"],
+      "both compilers are launched before waiting for a result");
+    assert.deepEqual(parallel.events.filter(e => e.kind === "start").map(e => e.name).sort(),
+      names.map(name => `tsconfig.typecheck.${name}.json`).sort());
+    const failed = await run("2", "tsconfig.typecheck.mcp-core.json");
+    assert.notEqual(failed.result.status, 0);
+    assert.equal(failed.events.length, 4, "only the failed batch may start");
+    assert.doesNotMatch(failed.result.stdout, /all segments passed/u);
+    const invalid = await run("3");
+    assert.notEqual(invalid.result.status, 0);
+    assert.equal(invalid.events.length, 0);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
 });
 
 test("fails closed without fan-out when the impact control plane is unavailable", async () => {
