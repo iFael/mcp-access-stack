@@ -1046,7 +1046,7 @@ function clearPersonalTabApprovals(chromeTabId) {
 
 async function releasePersonalSharedTab(chromeTabId) {
   await finalizePersonalDialog(chromeTabId, true);
-  await resetPersonalViewport(chromeTabId).catch(() => undefined);
+  await resetPersonalViewport(chromeTabId, undefined, false).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
   await clearPersonalHandoff(chromeTabId);
   await clearPersonalTabApprovals(chromeTabId);
@@ -1623,41 +1623,47 @@ async function observePersonalDialog(input, signal) {
   }
 }
 
-async function resetPersonalViewport(chromeTabId, tabId = "personal:" + chromeTabId) {
+async function resetPersonalViewport(chromeTabId, tabId = "personal:" + chromeTabId, measure = true) {
   const key = String(chromeTabId);
   const session = personalViewportSessions.get(key);
-  if (!session) {
-    const tab = await chrome.tabs.get(chromeTabId);
-    const baseline = await chrome.scripting.executeScript({
+  if (session) {
+    if (session.borrowers > 0) {
+      throw coded("EXECUTION_STATE_INVALID", "Viewport is still in use by another Chrome debugger operation.");
+    }
+    const target = { tabId: chromeTabId };
+    try {
+      await chrome.debugger.sendCommand(target, "Emulation.clearDeviceMetricsOverride");
+      await chrome.debugger.sendCommand(target, "Emulation.setTouchEmulationEnabled", { enabled: false });
+      await chrome.debugger.sendCommand(target, "Emulation.setEmulatedMedia", { media: "", features: [] });
+      await chrome.debugger.sendCommand(target, "Emulation.setUserAgentOverride", {
+        userAgent: session.original.userAgent, platform: session.original.platform,
+      });
+    } finally {
+      personalViewportSessions.delete(key);
+      await detachGuardedDebugger(target, session.attached).catch(() => undefined);
+    }
+  }
+  // Cleanup callers do not need a rendered page; explicit reset does.
+  if (!measure) return;
+  {
+    const [baseline] = await chrome.scripting.executeScript({
       target: { tabId: chromeTabId }, func: () => ({
-        userAgent: navigator.userAgent, dpr: window.devicePixelRatio || 1,
+        width: window.innerWidth, height: window.innerHeight,
+        userAgent: navigator.userAgent, dpr: window.devicePixelRatio,
         colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
       }),
-    }).catch(() => []);
-    return { tabId, width: tab.width || 1366, height: tab.height || 768,
-      deviceScaleFactor: baseline[0]?.result?.dpr || 1,
-      userAgent: String(baseline[0]?.result?.userAgent ?? "").slice(0, 512),
-      mobile: false, touch: false,
-      colorScheme: baseline[0]?.result?.colorScheme ?? "no-preference", emulated: false };
-  }
-  if (session.borrowers > 0) {
-    throw coded("EXECUTION_STATE_INVALID", "Viewport is still in use by another Chrome debugger operation.");
-  }
-  const target = { tabId: chromeTabId };
-  try {
-    await chrome.debugger.sendCommand(target, "Emulation.clearDeviceMetricsOverride");
-    await chrome.debugger.sendCommand(target, "Emulation.setTouchEmulationEnabled", { enabled: false });
-    await chrome.debugger.sendCommand(target, "Emulation.setEmulatedMedia", { media: "", features: [] });
-    await chrome.debugger.sendCommand(target, "Emulation.setUserAgentOverride", {
-      userAgent: session.original.userAgent, platform: session.original.platform,
     });
-  } finally {
-    personalViewportSessions.delete(key);
-    await detachGuardedDebugger(target, session.attached).catch(() => undefined);
+    const page = baseline?.result;
+    if (!Number.isFinite(page?.width) || !Number.isFinite(page?.height) ||
+        page.width < 1 || page.height < 1 || !Number.isFinite(page.dpr) || page.dpr <= 0) {
+      throw coded("STATE_NOT_REACHED", "Chrome viewport is not ready. For an MCP-owned tab, use browser_viewport preset=window to recover its surface.");
+    }
+    return { tabId, width: Math.floor(page.width), height: Math.floor(page.height),
+      deviceScaleFactor: page.dpr,
+      userAgent: String(page.userAgent ?? "").slice(0, 512),
+      mobile: false, touch: false,
+      colorScheme: page.colorScheme ?? "no-preference", emulated: false };
   }
-  const { width, height, deviceScaleFactor, userAgent, colorScheme } = session.original;
-  return { tabId, width, height, deviceScaleFactor, userAgent, mobile: false, touch: false,
-    colorScheme, emulated: false };
 }
 
 // A real window resize must never reshape the user's own browsing window, so an
@@ -1670,11 +1676,11 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
   }
   if (personalViewportSessions.has(String(chromeTabId))) {
     // Emulated metrics would hide the real window size from the page.
-    await resetPersonalViewport(chromeTabId, input.tabId);
+    await resetPersonalViewport(chromeTabId, input.tabId, false);
   }
   const readPage = async () => (await chrome.scripting.executeScript({
     target: { tabId: chromeTabId }, func: () => ({
-      width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio || 1,
+      width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio,
       userAgent: navigator.userAgent, touch: (navigator.maxTouchPoints || 0) > 0,
       colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
     }),
@@ -1707,14 +1713,17 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await delay(50, signal);
       const next = await readPage();
-      stable = next && page && next.width === page.width && next.height === page.height ? stable + 1 : 0;
+      const valid = Number.isFinite(next?.width) && Number.isFinite(next?.height) &&
+        next.width >= 1 && next.height >= 1 && Number.isFinite(next.dpr) && next.dpr > 0;
+      if (!valid) { page = undefined; stable = 0; continue; }
+      stable = page && next.width === page.width && next.height === page.height && next.dpr === page.dpr ? stable + 1 : 0;
       page = next;
-      const changed = before && page && (page.width !== before.width || page.height !== before.height);
+      const changed = before && (page.width !== before.width || page.height !== before.height);
       if ((changed && stable >= 1) || stable >= 4) break;
     }
-    if (!page) throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "The resized page could not be measured.");
-    return { tabId: input.tabId, width: Math.max(1, Math.round(page.width)),
-      height: Math.max(1, Math.round(page.height)), deviceScaleFactor: page.dpr,
+    if (!page || stable < 1) throw coded("STATE_NOT_REACHED", "Chrome window was resized, but its viewport is not ready. Observe the owned tab before retrying.");
+    return { tabId: input.tabId, width: Math.floor(page.width),
+      height: Math.floor(page.height), deviceScaleFactor: page.dpr,
       mobile: false, touch: page.touch === true, colorScheme: page.colorScheme,
       userAgent: String(page.userAgent ?? "").slice(0, 512), emulated: false,
       window: { width: Math.max(1, resized.width ?? width), height: Math.max(1, resized.height ?? height) } };
@@ -1774,18 +1783,12 @@ async function configurePersonalViewport(input, signal) {
   let attached = false;
   try {
     if (!session) {
-      const tab = await chrome.tabs.get(chromeTabId);
       attached = await attachGuardedDebugger(target);
-      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
       const evaluation = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
-        expression: "({ dpr: window.devicePixelRatio, dark: matchMedia('(prefers-color-scheme: dark)').matches, ua: navigator.userAgent, platform: navigator.platform })",
+        expression: "({ ua: navigator.userAgent, platform: navigator.platform })",
         returnByValue: true,
       });
       const original = {
-        width: Math.max(1, Math.round(metrics?.cssVisualViewport?.clientWidth ?? tab.width ?? 1366)),
-        height: Math.max(1, Math.round(metrics?.cssVisualViewport?.clientHeight ?? tab.height ?? 768)),
-        deviceScaleFactor: Math.max(0.1, Number(evaluation?.result?.value?.dpr) || 1),
-        colorScheme: evaluation?.result?.value?.dark ? "dark" : "light",
         userAgent: String(evaluation?.result?.value?.ua ?? "").slice(0, 512),
         platform: String(evaluation?.result?.value?.platform ?? "").slice(0, 100),
       };
@@ -1817,7 +1820,7 @@ async function configurePersonalViewport(input, signal) {
       colorScheme, userAgent, emulated: true };
   } catch (error) {
     if (created && session) {
-      await resetPersonalViewport(chromeTabId, input.tabId).catch(() => undefined);
+      await resetPersonalViewport(chromeTabId, input.tabId, false).catch(() => undefined);
     } else if (created && attached) {
       await chrome.debugger.detach(target).catch(() => undefined);
     }
@@ -2340,6 +2343,7 @@ async function click(input, signal, reportPhase) {
       args: [input.ref, input.guard, false, input.x ?? null, input.y ?? null],
     });
     point = injection?.result;
+    if (point?.error === "viewport_not_ready") throw coded("STATE_NOT_REACHED", "Chrome click viewport is not ready. For an MCP-owned tab, use browser_viewport preset=window to recover its surface. No click was dispatched.");
     if (!point || point.error) throw coded("BROWSER_CONFIRMATION_INVALID", "Target preflight: " + (["stale_page", "stale_ref", "target_changed", "not_editable", "not_visible", "point_outside_target", "obscured"].includes(point?.error) ? point.error : "unavailable") + ". No click was dispatched.");
   }
   const target = { tabId: chromeTabId };
@@ -2947,6 +2951,7 @@ async function fill(input, signal) {
       func: probeGuardedElement,
       args: [input.ref, input.guard, true],
     });
+    if (injection?.result?.error === "viewport_not_ready") throw coded("STATE_NOT_REACHED", "Chrome field viewport is not ready. For an MCP-owned tab, use browser_viewport preset=window to recover its surface. No input was dispatched.");
     if (!injection?.result || injection.result.error) {
       throw coded("BROWSER_CONFIRMATION_INVALID", "Field preflight: " + (["stale_page", "stale_ref", "target_changed", "not_editable", "not_visible", "point_outside_target", "obscured"].includes(injection?.result?.error) ? injection.result.error : "unavailable") + ". No input was dispatched.");
     }
@@ -6593,16 +6598,20 @@ async function screenshot(input, signal, reportPhase) {
     // CDP already applies devicePixelRatio to clip.scale. Normalize CSS output
     // and never multiply DPR twice for device output or the pixel budget.
     const outputScale = input.scale === "device" ? dpr : 1;
+    reportPhase?.("cdp-layout");
+    const metrics = await command("Page.getLayoutMetrics");
+    const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
+    if (!Number.isFinite(view?.clientWidth) || !Number.isFinite(view?.clientHeight) ||
+        view.clientWidth < 1 || view.clientHeight < 1) {
+      throw coded("STATE_NOT_REACHED", "Chrome screenshot viewport is not ready. For an MCP-owned tab, use browser_viewport preset=window to recover its surface.");
+    }
     let clip;
     if (input.region) {
       if (input.fullPage === true) {
         throw coded("INVALID_ARGUMENT", "Region screenshot cannot also be full page.");
       }
       const box = input.region;
-      reportPhase?.("cdp-layout");
-      const metrics = await command("Page.getLayoutMetrics");
       throwIfAborted(signal, "screenshot", false);
-      const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
       const { x, y, width, height } = box;
       if (![x, y, width, height].every(Number.isInteger) || x < 0 || y < 0 ||
           width <= 0 || height <= 0 || width * height > 12000000 ||
@@ -6626,8 +6635,6 @@ async function screenshot(input, signal, reportPhase) {
       };
     }
     if (input.fullPage === true) {
-      reportPhase?.("cdp-layout");
-      const metrics = await command("Page.getLayoutMetrics");
       throwIfAborted(signal, "screenshot", false);
       const contentSize = metrics?.cssContentSize ?? metrics?.contentSize;
       const width = Math.ceil(Number(contentSize?.width));
@@ -6640,9 +6647,6 @@ async function screenshot(input, signal, reportPhase) {
       }
       clip = { x: 0, y: 0, width, height, scale: outputScale / dpr };
     } else if (!clip && input.scale !== "device" && dpr !== 1) {
-      reportPhase?.("cdp-layout");
-      const metrics = await command("Page.getLayoutMetrics");
-      const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
       const width = Math.floor(Number(view?.clientWidth));
       const height = Math.floor(Number(view?.clientHeight));
       if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
@@ -6803,7 +6807,7 @@ async function closeTab(input) {
     throw coded("TAB_PROTECTED", "The personal browser tab is protected and cannot be closed directly.");
   }
   await finalizePersonalDialog(chromeTabId, true);
-  await resetPersonalViewport(chromeTabId).catch(() => undefined);
+  await resetPersonalViewport(chromeTabId, undefined, false).catch(() => undefined);
   await chrome.tabs.remove(chromeTabId).catch(() => undefined);
   await removeOwnedTab(chromeTabId);
   return { tabId: input.tabId, completed: true };
@@ -6825,7 +6829,7 @@ async function finishTask(input) {
   for (const target of targets) {
     axTargetsByTab.delete(target.chromeTabId);
     await finalizePersonalDialog(target.chromeTabId, true);
-    await resetPersonalViewport(target.chromeTabId).catch(() => undefined);
+    await resetPersonalViewport(target.chromeTabId, undefined, false).catch(() => undefined);
     if (await releasePersonalTaskDebugger(target.chromeTabId) === false) {
       throw coded("BROWSER_WORKER_TIMEOUT", "Chrome debugger retirement has not been confirmed; task not finished.");
     }
@@ -7072,7 +7076,7 @@ async function releasePersonalGroupTab(chromeTabId, metadata) {
   }
   axTargetsByTab.delete(chromeTabId);
   await finalizePersonalDialog(chromeTabId, true);
-  await resetPersonalViewport(chromeTabId).catch(() => undefined);
+  await resetPersonalViewport(chromeTabId, undefined, false).catch(() => undefined);
   await clearPersonalHandoff(chromeTabId);
   await removeOwnedTab(chromeTabId);
   await clearPersonalTabApprovals(chromeTabId);
@@ -7721,6 +7725,7 @@ function probeGuardedElement(ref, guard, focus, coordinateX, coordinateY, rechec
     (tag === "textarea" || element.isContentEditable || element.getAttribute("role") === "textbox")
     ? element.closest?.(".monaco-editor,.cm-editor") : null;
   const clickSurface = editorHost?.isConnected && editorHost.contains?.(element) ? editorHost : element;
+  if (!(innerWidth > 0 && innerHeight > 0)) return { error: "viewport_not_ready" };
   if (!recheckOnly) clickSurface.scrollIntoView({ block: "center", inline: "center" });
   if (focus) element.focus?.();
   const rect = clickSurface.getBoundingClientRect();
