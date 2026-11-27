@@ -20,6 +20,13 @@ describe("the next step of every tool", () => {
     }
   });
 
+  it("does not rely on an unverified automatic chat wake", () => {
+    expect(MCP_TOOL_NEXT_STEPS.mcp_update).toContain("same updateId");
+    expect(MCP_TOOL_NEXT_STEPS.github_start_commit_checks_watch).toContain("same watchId");
+    expect(MCP_TOOL_NEXT_STEPS.start_background_task).toContain("best-effort");
+    expect(Object.values(MCP_TOOL_NEXT_STEPS).join(" ")).not.toMatch(/you are woken|wait to be woken/u);
+  });
+
   it("tells agents that browser_click supports a bound destructive confirmation", () => {
     expect(MCP_TOOL_NEXT_STEPS.browser_click).toContain("ACTION_REQUIRES_CONFIRMATION");
     expect(MCP_TOOL_NEXT_STEPS.browser_click).toContain("confirmationId");

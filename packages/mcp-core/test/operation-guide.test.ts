@@ -56,6 +56,12 @@ describe("operation guide", () => {
     expect(release.rules.join(" ")).toMatch(/never run Update-McpAccessStack\.sh/iu);
   });
 
+  it("does not promise automatic resumption without verified conversation support", () => {
+    expect(getOperationGuide("release").rules.join(" ")).toContain("not guaranteed");
+    expect(getOperationGuide("background_tasks").steps.join(" ")).toContain("not supported in ordinary Chrome chat tabs");
+    expect(getOperationGuide("source_control").steps.join(" ")).toContain("same watchId");
+  });
+
   it("instructs reusing the mounted progress card without repeating browser_progress", () => {
     const guide = getOperationGuide("browser");
     const instructions = guide.steps.join(" ");

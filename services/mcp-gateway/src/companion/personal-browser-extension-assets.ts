@@ -6582,6 +6582,17 @@ async function screenshot(input, signal, reportPhase) {
     reportPhase?.("cdp-enable");
     await command("Page.enable");
     throwIfAborted(signal, "screenshot", false);
+    reportPhase?.("cdp-dpr");
+    const device = await command("Runtime.evaluate", {
+      expression: "window.devicePixelRatio", returnByValue: true,
+    });
+    const dpr = device?.result?.value;
+    if (typeof dpr !== "number" || !Number.isFinite(dpr) || dpr < 0.5 || dpr > 4) {
+      throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome returned an invalid device scale.");
+    }
+    // CDP already applies devicePixelRatio to clip.scale. Normalize CSS output
+    // and never multiply DPR twice for device output or the pixel budget.
+    const outputScale = input.scale === "device" ? dpr : 1;
     let clip;
     if (input.region) {
       if (input.fullPage === true) {
@@ -6603,20 +6614,9 @@ async function screenshot(input, signal, reportPhase) {
       if (!Number.isFinite(zoom) || zoom < 1 || zoom > 8) {
         throw coded("INVALID_ARGUMENT", "Screenshot zoom must be between 1 and 8.");
       }
-      let scale = 1;
-      if (input.scale === "device") {
-        reportPhase?.("cdp-dpr");
-        const dpr = await command("Runtime.evaluate", {
-          expression: "window.devicePixelRatio", returnByValue: true,
-        });
-        scale = Number(dpr?.result?.value);
-        if (!Number.isFinite(scale) || scale < 1 || scale > 4) {
-          throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome returned an invalid device scale.");
-        }
-      }
       // Zoom renders the clip at a higher resolution, not an upscaled bitmap.
-      scale *= zoom;
-      if (width * height * scale * scale > MAX_FULL_PAGE_PIXELS) {
+      const scale = outputScale * zoom / dpr;
+      if (width * height * (outputScale * zoom) ** 2 > MAX_FULL_PAGE_PIXELS) {
         throw coded("LIMIT_EXCEEDED", "Screenshot scaling exceeds the image pixel budget.");
       }
       clip = {
@@ -6635,10 +6635,23 @@ async function screenshot(input, signal, reportPhase) {
       if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome did not expose full-page layout metrics.");
       }
-      if (width * height > MAX_FULL_PAGE_PIXELS) {
+      if (width * height * outputScale ** 2 > MAX_FULL_PAGE_PIXELS) {
         throw coded("LIMIT_EXCEEDED", "The personal browser page is too large for a bounded full-page screenshot.");
       }
-      clip = { x: 0, y: 0, width, height, scale: 1 };
+      clip = { x: 0, y: 0, width, height, scale: outputScale / dpr };
+    } else if (!clip && input.scale !== "device" && dpr !== 1) {
+      reportPhase?.("cdp-layout");
+      const metrics = await command("Page.getLayoutMetrics");
+      const view = metrics?.cssVisualViewport ?? metrics?.visualViewport;
+      const width = Math.floor(Number(view?.clientWidth));
+      const height = Math.floor(Number(view?.clientHeight));
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw coded("BROWSER_CAPABILITY_UNSUPPORTED", "Chrome did not expose CSS viewport dimensions.");
+      }
+      if (width * height > MAX_FULL_PAGE_PIXELS) {
+        throw coded("LIMIT_EXCEEDED", "The personal browser viewport is too large for a bounded screenshot.");
+      }
+      clip = { x: Number(view.pageX) || 0, y: Number(view.pageY) || 0, width, height, scale: 1 / dpr };
     }
 
     // A genuinely hidden renderer may stop producing compositor surfaces.

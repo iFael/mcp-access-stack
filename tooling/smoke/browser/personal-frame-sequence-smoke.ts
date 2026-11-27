@@ -419,6 +419,15 @@ async function main(): Promise<void> {
       'method === "Page.captureScreenshot" && globalThis.__mcpSmokeDropAck === "screenshot" ' +
       '? (globalThis.__mcpSmokeDropAck = undefined, new Promise(() => undefined)) : value);');
   }
+  if (process.env.PERSONAL_SMOKE_CDP_RECOVERY_ONLY !== "1" && process.env.PERSONAL_SMOKE_FRAME_RECOVERY_ONLY !== "1") {
+    // Record the native layout returned to the isolated screenshot command.
+    // The debugging infobar can resize a real Windows viewport between captures.
+    const layoutNeedle = 'const pending = chrome.debugger.sendCommand(target, method, params);';
+    if (smokeScript.split(layoutNeedle).length !== 2) throw new Error("Screenshot layout smoke hook missing.");
+    smokeScript = smokeScript.replace(layoutNeedle,
+      'const pending = chrome.debugger.sendCommand(target, method, params).then(value => { ' +
+      'if (method === "Page.getLayoutMetrics") globalThis.__mcpSmokeCaptureLayout = { tabId: target.tabId, view: value.cssVisualViewport, content: value.cssContentSize }; return value; });');
+  }
   await writeFile(extensionScript, smokeScript);
   let context: BrowserContext | undefined;
   let nativeProcess: ChildProcess | undefined;
@@ -769,12 +778,21 @@ async function main(): Promise<void> {
       const targetChrome = Number(target.split(":")[1]);
       const otherChrome = Number(other.split(":")[1]);
       const selection = () => worker.evaluate(`Promise.all([chrome.tabs.get(${targetChrome}), chrome.tabs.get(${otherChrome})]).then(tabs => tabs.map(tab => tab.active))`) as Promise<boolean[]>;
+      const dpr = await targetPage.evaluate("window.devicePixelRatio") as number;
+      const region = { x: 300, y: 100, width: 120, height: 80 };
       const modes = [
-        ["viewport", {}],
-        ["region", { region: { x: 300, y: 100, width: 120, height: 80 }, scale: "css" }],
-        ["fullPage", { fullPage: true }],
+        ["viewport", { scale: "css" }],
+        ["region", { region, scale: "css" }],
+        ["region-device", { region, scale: "device" }],
+        ["region-zoom", { region, zoom: 2 }],
+        ["region-device-zoom", { region, scale: "device", zoom: 2 }],
+        ["fullPage", { fullPage: true, scale: "css" }],
+        ["fullPage-device", { fullPage: true, scale: "device" }],
       ] as const;
       const capture = async (tabId: string, options: (typeof modes)[number][1]) => {
+        const page = tabId === target ? targetPage : otherPage;
+        const viewport = await page.evaluate("({ width: window.innerWidth, height: window.innerHeight })") as { width: number; height: number };
+        await worker.evaluate("globalThis.__mcpSmokeCaptureLayout = undefined");
         const started = performance.now();
         const shot = await bridge.screenshot({ tabId, ...options }).catch(async (error: unknown) => {
           report("background capture failure", { target: tabId === target ? "A" : "B", options, selection: await selection(),
@@ -796,7 +814,9 @@ async function main(): Promise<void> {
           bitmap.close();
           return rgb;
         })()`) as number[];
-        return { size: jpegSize(Buffer.from(data, "base64")), pixels, elapsedMs };
+        const layout = await worker.evaluate("globalThis.__mcpSmokeCaptureLayout") as { tabId: number; view?: { clientWidth: number; clientHeight: number }; content?: { width: number; height: number } } | undefined;
+        if (layout && layout.tabId !== Number(tabId.split(":")[1])) throw new Error("Screenshot layout came from another tab.");
+        return { size: jpegSize(Buffer.from(data, "base64")), pixels, elapsedMs, viewport, layout };
       };
       await bridge.selectTab({ tabId: target });
       if ((await selection()).join(",") !== "true,false") throw new Error("Target selection not confirmed.");
@@ -825,14 +845,24 @@ async function main(): Promise<void> {
           const after = await selection();
           const identityMatches = matches(background.pixels, [184, 50, 36]);
           const wrongTab = matches(background.pixels, [24, 74, 144]);
-          const geometryMatches = name === "region" ? background.size.width === 120 && background.size.height === 80
-            : name === "fullPage" ? background.size.height >= 1800 : background.size.width === foreground.size.width;
+          const scale = (name.includes("device") ? dpr : 1) * (name.includes("zoom") ? 2 : 1);
+          const regionGeometry = (size: { width: number; height: number }) =>
+            size.width === Math.round(region.width * scale) && size.height === Math.round(region.height * scale);
+          const geometry = (shot: typeof foreground) => {
+            if (name.startsWith("region")) return regionGeometry(shot.size);
+            if (name.startsWith("fullPage")) return shot.size.height === Math.round(1800 * scale);
+            if (dpr === 1) return shot.size.width === shot.viewport.width && shot.size.height === shot.viewport.height;
+            const view = shot.layout?.view;
+            return !!view && shot.size.width === Math.floor(view.clientWidth) && shot.size.height === Math.floor(view.clientHeight);
+          };
+          const geometryMatches = geometry(background) && geometry(foreground) && geometry(otherImage);
           if (process.env.PERSONAL_SMOKE_NATIVE_BACKGROUND === "1") {
             await targetPage.waitForFunction('document.visibilityState === "hidden"', undefined, { timeout: 2000 });
           }
-          report("background screenshot", { name, sample, foregroundMs: foreground.elapsedMs,
+          report("background screenshot", { name, dpr, sample, foregroundMs: foreground.elapsedMs,
             backgroundMs: background.elapsedMs, foregroundSize: foreground.size, size: background.size,
             pixels: background.pixels, identityMatches, wrongTab, geometryMatches,
+            viewport: background.viewport, layout: background.layout,
             selection: after, visibility: await targetPage.evaluate("document.visibilityState") });
           if (!identityMatches || wrongTab || !geometryMatches || after.join(",") !== "false,true") {
             throw new Error("Inactive screenshot identity/selection mismatch: " + name);
