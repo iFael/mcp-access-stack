@@ -12858,7 +12858,7 @@ export const EDGE_MCP_TOOL_MANIFEST = [
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Removes a registered worktree with exact source/target SHA checks. Opt-in pruneGeneratedArtifacts removes only known ignored build caches before non-forced removal; preserves other ignored files, local changes and branches. Next: inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
+    "description": "Removes a registered worktree with exact source/target SHA checks and no force. Opt-in pruneGeneratedArtifacts removes known build caches; pruneIgnoredFiles requires exact SHA-256 approval for every remaining ignored regular file and protects runtime and nested worktrees. pruneMissingRegistration removes only an explicitly absent, unlocked, prunable checkout registration. Preserves local changes and branches. Stop external writers before use. Next: inspect_workspace_git and the Git worktree inventory; the source branch is preserved.",
     "execution": {
       "taskSupport": "forbidden"
     },
@@ -12879,6 +12879,33 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "type": "string"
         },
         "pruneGeneratedArtifacts": {
+          "type": "boolean"
+        },
+        "pruneIgnoredFiles": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expectedSha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "path": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "expectedSha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        },
+        "pruneMissingRegistration": {
           "type": "boolean"
         },
         "root": {
@@ -12909,6 +12936,10 @@ export const EDGE_MCP_TOOL_MANIFEST = [
           "type": "string"
         },
         "removed": {
+          "const": true,
+          "type": "boolean"
+        },
+        "removedMissingRegistration": {
           "const": true,
           "type": "boolean"
         },
@@ -31894,15 +31925,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "69fee080066dc451be47fca9f2a2e7de0e017b9a3d4201e80d78e6ddc255c0c4",
-  "serverVersion": "0.4.0-catalog.c69fee080066d.se843887b199f",
+  "contractRevision": "92fbc6f69386387d62c7379fbbe6328f0009c81bd674e618746c0543539dfc45",
+  "serverVersion": "0.4.0-catalog.c92fbc6f69386.se843887b199f",
   "toolCount": 137,
   "toolSetRevision": "e843887b199fab26c5a89f4f7faefd3795615e935bb0d8e4a7bf301e21eed04b"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c69fee080066d.se843887b199f"
+  "version": "0.4.0-catalog.c92fbc6f69386.se843887b199f"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

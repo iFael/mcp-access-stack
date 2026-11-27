@@ -289,7 +289,16 @@ export const gitRemoveWorktreeInputSchema = z.object({
   expectedSourceHeadSha: gitShaSchema,
   expectedWorktreeHeadSha: gitShaSchema,
   pruneGeneratedArtifacts: z.boolean().optional(),
-}).strict();
+  pruneMissingRegistration: z.boolean().optional(),
+  pruneIgnoredFiles: z.array(z.object({
+    path: gitPathSchema,
+    expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).strict()).min(1).max(200).optional(),
+}).strict().refine((input) => !input.pruneMissingRegistration || (!input.pruneGeneratedArtifacts && !input.pruneIgnoredFiles),
+  "A missing-registration removal cannot prune existing files.")
+  .refine((input) => !input.pruneIgnoredFiles ||
+    new Set(input.pruneIgnoredFiles.map((file) => file.path)).size === input.pruneIgnoredFiles.length,
+  "Ignored file paths must be unique.");
 export type GitRemoveWorktreeInput = z.input<typeof gitRemoveWorktreeInputSchema>;
 
 export const gitRemoveWorktreeResultSchema = z.object({
@@ -298,6 +307,7 @@ export const gitRemoveWorktreeResultSchema = z.object({
   sourceHeadSha: gitShaSchema,
   removedWorktreeHeadSha: gitShaSchema,
   removed: z.literal(true),
+  removedMissingRegistration: z.literal(true).optional(),
 }).strict();
 export type GitRemoveWorktreeResult = z.infer<typeof gitRemoveWorktreeResultSchema>;
 

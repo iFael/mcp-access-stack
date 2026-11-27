@@ -162,6 +162,13 @@ describe("opt-in generated worktree cleanup contract", () => {
     expect(gitRemoveWorktreeInputSchema.safeParse(input).success).toBe(true);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneGeneratedArtifacts: true }).success).toBe(true);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneGeneratedArtifacts: "all" }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneMissingRegistration: true }).success).toBe(true);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneMissingRegistration: true, pruneGeneratedArtifacts: true }).success).toBe(false);
+    const files = [{ path: ".codex/HANDOFF.md", expectedSha256: "a".repeat(64) }];
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneIgnoredFiles: files }).success).toBe(true);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneIgnoredFiles: [...files, ...files] }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneMissingRegistration: true, pruneIgnoredFiles: files }).success).toBe(false);
+    expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, pruneIgnoredFiles: [{ ...files[0], path: "../escape" }] }).success).toBe(false);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, force: true }).success).toBe(false);
     expect(gitRemoveWorktreeInputSchema.safeParse({ ...input, destination: ".worktrees/../../outside",
       pruneGeneratedArtifacts: true }).success).toBe(false);

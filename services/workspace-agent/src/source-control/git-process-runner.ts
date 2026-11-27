@@ -39,6 +39,7 @@ export interface GitWorktreeRecord {
   path: string;
   headSha: string;
   prunable: boolean;
+  locked: boolean;
 }
 
 export interface GitProcessExecutor {
@@ -155,15 +156,19 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
   }
 
   async listWorktrees(cwd: string, signal?: AbortSignal): Promise<GitWorktreeRecord[]> {
-    const output = await this.invokeSuccess(cwd, ["worktree", "list", "--porcelain"], signal);
-    return output.trim().split(/\r?\n\r?\n/u).filter(Boolean).map((block) => {
-      const lines = block.split(/\r?\n/u);
+    const output = await this.invokeSuccess(cwd, ["worktree", "list", "--porcelain", "-z"], signal);
+    this.completeStashRecords(output);
+    if (!output.endsWith("\0\0")) throw new AppError("GIT_ERROR", "Git worktree inventory is incomplete.");
+    return output.split("\0\0").filter(Boolean).map((block) => {
+      const lines = block.split("\0");
       const worktree = lines.find((line) => line.startsWith("worktree "))?.slice(9);
       const sha = lines.find((line) => line.startsWith("HEAD "))?.slice(5);
       if (!worktree || !sha) {
         throw new AppError("GIT_ERROR", "Git worktree inventory is incomplete.");
       }
-      return { path: worktree, headSha: parseSha(sha), prunable: lines.some((line) => line.startsWith("prunable ")) };
+      return { path: worktree, headSha: parseSha(sha),
+        prunable: lines.some((line) => line === "prunable" || line.startsWith("prunable ")),
+        locked: lines.some((line) => line === "locked" || line.startsWith("locked ")) };
     });
   }
 
@@ -172,15 +177,16 @@ export class HardenedGitProcessRunner implements GitProcessExecutor {
   }
 
   async listIgnoredPaths(cwd: string, signal?: AbortSignal): Promise<string[]> {
-    const output = await this.invokeSuccess(cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], signal);
-    const entries = output.split("\0").filter(Boolean);
-    // Git also reports intermediate untracked directories (e.g. packages/ before packages/pkg/dist/).
-    // Keep only the deepest ignored entries; never remove ancestor directories.
-    return entries.filter((entry) => !entries.some((other) => other !== entry && other.startsWith(entry.endsWith("/") ? entry : `${entry}/`)));
+    const output = await this.invokeSuccess(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--no-renames"], signal);
+    const entries = this.completeStashRecords(output);
+    if (entries.some((entry) => !entry.startsWith("!! "))) {
+      throw new AppError("GIT_INDEX_CHANGED", "Worktree has non-ignored changes during artifact inventory.");
+    }
+    return entries.map((entry) => entry.slice(3));
   }
 
   async hasTrackedPaths(cwd: string, relativePath: string, signal?: AbortSignal): Promise<boolean> {
-    return (await this.invokeSuccess(cwd, ["ls-files", "--cached", "-z", "--", relativePath], signal)).length > 0;
+    return (await this.invokeSuccess(cwd, ["--literal-pathspecs", "ls-files", "--cached", "-z", "--", relativePath], signal)).length > 0;
   }
 
   async removeWorktree(cwd: string, destination: string, signal?: AbortSignal): Promise<void> {

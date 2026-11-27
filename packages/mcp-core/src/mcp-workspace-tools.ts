@@ -2931,6 +2931,8 @@ const sourceControlMcpSchemas = {
       expectedSourceHeadSha: mcpSourceControlSha,
       expectedWorktreeHeadSha: mcpSourceControlSha,
       pruneGeneratedArtifacts: z.boolean().optional(),
+      pruneMissingRegistration: z.boolean().optional(),
+      pruneIgnoredFiles: z.array(z.object({ path: mcpSourceControlPath, expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict()).min(1).max(200).optional(),
     }).strict(),
     output: z.object({
       root: mcpSourceControlRoot,
@@ -2938,6 +2940,7 @@ const sourceControlMcpSchemas = {
       sourceHeadSha: mcpSourceControlSha,
       removedWorktreeHeadSha: mcpSourceControlSha,
       removed: z.literal(true),
+      removedMissingRegistration: z.literal(true).optional(),
     }).strict(),
   },
   git_detach_worktree: {
@@ -3422,7 +3425,7 @@ export function registerSourceControlTools(
       "git_remove_worktree",
       {
         title: "Remove clean Git worktree",
-        description: "Removes a registered worktree with exact source/target SHA checks. Opt-in pruneGeneratedArtifacts removes only known ignored build caches before non-forced removal; preserves other ignored files, local changes and branches.",
+        description: "Removes a registered worktree with exact source/target SHA checks and no force. Opt-in pruneGeneratedArtifacts removes known build caches; pruneIgnoredFiles requires exact SHA-256 approval for every remaining ignored regular file and protects runtime and nested worktrees. pruneMissingRegistration removes only an explicitly absent, unlocked, prunable checkout registration. Preserves local changes and branches. Stop external writers before use.",
         inputSchema: sourceControlMcpSchemas.git_remove_worktree.input,
         outputSchema: sourceControlMcpSchemas.git_remove_worktree.output,
         annotations: sourceControlAnnotations.git_remove_worktree,

@@ -1270,7 +1270,12 @@ export class LocalAgent {
           context: activeContext,
           metadata,
           resultSchema: gitRemoveWorktreeResultSchema,
-          backend: async () => (await this.getGitRepositoryExecutor()).removeWorktree(parsed, activeContext),
+          backend: async () => {
+            if (await this.backgroundTaskManager.hasActiveTasksForWorkspace(workspace.id)) {
+              throw new AppError("GIT_INDEX_CHANGED", "Worktree removal requires no active workspace background tasks.");
+            }
+            return (await this.getGitRepositoryExecutor()).removeWorktree(parsed, activeContext);
+          },
           resultSha: (result) => result.removedWorktreeHeadSha,
         });
       },

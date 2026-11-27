@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, rmdir, symlink, unlink } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, rmdir, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
@@ -293,6 +293,65 @@ describe("GitRepositoryService isolated worktrees", () => {
       pruneGeneratedArtifacts: true,
     });
     expect(removed.removed).toBe(true);
+    await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes only an explicitly approved missing worktree registration and preserves its branch", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/missing-checkout";
+    const target = path.join(source, destination);
+    git(source, ["worktree", "add", "-b", "feature/missing", target, headSha]);
+    await rm(target, { recursive: true });
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha };
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    await expect(service.removeWorktree({ ...input, expectedWorktreeHeadSha: "f".repeat(40), pruneMissingRegistration: true }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    const removed = await service.removeWorktree({ ...input, pruneMissingRegistration: true });
+    expect(removed).toMatchObject({ removed: true, removedMissingRegistration: true, removedWorktreeHeadSha: headSha });
+    expect(git(source, ["worktree", "list", "--porcelain"])).not.toContain(target);
+    expect(git(source, ["rev-parse", "refs/heads/feature/missing"]).trim()).toBe(headSha);
+  });
+
+  it("refuses a missing-registration request when the checkout still exists", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/still-present";
+    await service.createWorktree({ workspaceId: "test", destination, expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha, pruneMissingRegistration: true }))
+      .rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    expect(await readFile(path.join(source, destination, "base.txt"), "utf8")).toContain("base");
+  });
+
+  it("prunes exactly approved ignored historical files together with known caches", async () => {
+    if (process.platform !== "linux") return;
+    const { headSha, source } = await setupRemote();
+    await writePolicy(fixture!.policyPath, [{ ...makeWorkspacePolicy(source, { profile: "full-repo-write" }), allowWrites: ["."] }]);
+    const service = await GitRepositoryService.create(await WorkspaceRegistry.load(fixture!.policyPath));
+    const destination = ".worktrees/historical";
+    await service.createWorktree({ workspaceId: "test", destination, expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, ".git/info/exclude", "node_modules/\n.codex/\nruntime/\n");
+    await writeWorkspaceFile(target, "node_modules/cache.txt", "generated\n");
+    await writeWorkspaceFile(target, ".codex/HANDOFF.md", "historical\n");
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+      pruneGeneratedArtifacts: true, pruneIgnoredFiles: [{ path: ".codex/HANDOFF.md",
+        expectedSha256: createHash("sha256").update("historical\n").digest("hex") }] };
+    await writeWorkspaceFile(target, ".codex/UNKNOWN.md", "not approved\n");
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    await unlink(path.join(target, ".codex/UNKNOWN.md"));
+    await writeWorkspaceFile(target, "runtime/keep.txt", "runtime\n");
+    await expect(service.removeWorktree({ ...input, pruneIgnoredFiles: [...input.pruneIgnoredFiles,
+      { path: "runtime/keep.txt", expectedSha256: createHash("sha256").update("runtime\n").digest("hex") }] })).rejects.toThrow();
+    expect(await readFile(path.join(target, "runtime/keep.txt"), "utf8")).toBe("runtime\n");
+    await unlink(path.join(target, "runtime/keep.txt"));
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    expect((await lstat(path.join(target, "runtime"))).isDirectory()).toBe(true);
+    await rmdir(path.join(target, "runtime"));
+    await expect(service.removeWorktree({ ...input, pruneIgnoredFiles: [{ ...input.pruneIgnoredFiles[0], expectedSha256: "f".repeat(64) }] }))
+      .rejects.toThrow();
+    expect(await readFile(path.join(target, "node_modules/cache.txt"), "utf8")).toBe("generated\n");
+    expect(await readFile(path.join(target, ".codex/HANDOFF.md"), "utf8")).toBe("historical\n");
+    await expect(service.removeWorktree(input)).resolves.toMatchObject({ removed: true });
     await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
