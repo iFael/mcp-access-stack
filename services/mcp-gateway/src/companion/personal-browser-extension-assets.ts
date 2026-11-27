@@ -392,7 +392,7 @@ async function reloadPersonalExtensionWhenIdle(expectedVersion) {
         personalRecordings.size > 0 || personalNetworkCaptures.size > 0 ||
         personalDialogArms.size > 0 || personalViewportSessions.size > 0 ||
         personalDebuggerTransitions.size > 0 ||
-        pendingPersonalOneUseConfirmations.size > 0 || userTurn;
+        userTurn;
     };
     while (await busy()) {
       if (Date.now() >= deadline) {
@@ -506,12 +506,9 @@ async function handleMessage(raw) {
     return;
   }
   if (message?.type === "one-use-confirmation-request") {
-    void requestPersonalOneUseConfirmation(message).catch(() => {
-      if (typeof message?.id === "string") {
-        send({ type: "one-use-confirmation-result", id: message.id,
-          tabId: message.tabId, approved: false });
-      }
-    });
+    // A legacy bridge must not hold an operation waiting for Chrome UI.
+    if (typeof message.id === "string") send({ type: "one-use-confirmation-result",
+      id: message.id, tabId: message.tabId, approved: false });
     return;
   }
   if (message?.type === "task-messages-delivered") {
@@ -978,16 +975,7 @@ function recordPersonalApprovalRequest(message) {
     await chrome.storage.session.set({ [PERSONAL_APPROVAL_REQUEST_PREFIX + chromeTabId]: {
       origin, category: message.category, ...(taskId ? { taskId } : {}), requestedAt: Date.now(),
     } });
-    await Promise.resolve(chrome.notifications?.create?.("mcp-approval:" + chromeTabId, {
-      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP pede permissão em " + new URL(origin).host,
-      message: message.category === "execute-script"
-        ? "JavaScript pode ler e alterar esta página. Permita somente nesta tarefa ou lembre a escolha para esta origem HTTPS."
-        : PERSONAL_APPROVAL_LABELS[message.category] + ". Permitir libera isso neste site " +
-          (taskId ? "até o fim da tarefa." : "enquanto esta aba estiver com o MCP."),
-      buttons: message.category === "execute-script"
-        ? [{ title: "Permitir nesta tarefa" }, { title: "Lembrar neste site" }]
-        : [{ title: "Permitir neste site" }], requireInteraction: true, priority: 1,
-    })).catch(() => undefined);
+    // Legacy request metadata is retained without raising a notification.
   });
 }
 
@@ -1113,10 +1101,7 @@ async function waitForUser(input, signal) {
     await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId: chromeTabId, color: "#d97706" }))
       .catch(() => undefined);
     await Promise.resolve(chrome.action?.setBadgeText?.({ tabId: chromeTabId, text: "VOCÊ" })).catch(() => undefined);
-    await Promise.resolve(chrome.notifications?.create?.("mcp-handoff:" + chromeTabId, {
-      type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP precisa de você",
-      message: handoff.reason, buttons: [{ title: "Pronto, pode continuar" }], requireInteraction: true, priority: 2,
-    })).catch(() => undefined);
+    // Explicit human handoff is reported through the tool and badge, never an execution popup.
   }
   const timeoutMs = Number.isFinite(input.timeoutMs) ? Math.max(1, Math.min(120000, input.timeoutMs)) : 50000;
   const deadline = Date.now() + timeoutMs;
@@ -1230,10 +1215,7 @@ async function recordPersonalTaskQuestion(message) {
   await chrome.storage.session.set({ [PERSONAL_TASK_QUESTIONS_KEY]: questions });
   await Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ color: "#2563eb" })).catch(() => undefined);
   await Promise.resolve(chrome.action?.setBadgeText?.({ text: "?" })).catch(() => undefined);
-  await Promise.resolve(chrome.notifications?.create?.("mcp-question:" + Date.now(), {
-    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON, title: "O MCP tem uma pergunta",
-    message: question + " Responda no ChatGPT.", requireInteraction: true, priority: 2,
-  })).catch(() => undefined);
+  // The question stays in the task conversation and extension state, without a popup.
 }
 
 async function clearPersonalTaskQuestion(taskId) {
@@ -1430,54 +1412,7 @@ const RETIRED_REQUIRE_PLAN_KEY = "mcpV3RequirePlan";
 const RETIRED_PLAN_RULE_BASE = 7000;
 const RETIRED_PLAN_RULE_LIMIT = 1000;
 
-const pendingPersonalOneUseConfirmations = new Map();
-const PERSONAL_ONE_USE_LABELS = {
-  "purchase-or-payment": "Pagar ou contratar", "delete-or-cancel": "Excluir ou cancelar",
-  "send-message": "Enviar mensagem", "publish-content": "Publicar conteúdo",
-  "change-credentials": "Alterar credenciais", "accept-terms-or-contract": "Aceitar contrato ou termos",
-  "unverified-pointer-action": "Arrastar entre pontos sem alvo semântico confiável",
-};
 
-async function requestPersonalOneUseConfirmation(message) {
-  if (typeof message.id !== "string" || !/^[a-f0-9-]{36}$/u.test(message.id) ||
-      typeof message.tabId !== "string" || typeof message.url !== "string" ||
-      !Object.hasOwn(PERSONAL_ONE_USE_LABELS, message.category)) return;
-  const chromeTabId = chromeTabIdFrom(message.tabId);
-  const tab = await chrome.tabs.get(chromeTabId).catch(() => null);
-  const metadata = (await readOwnedTabs())[String(chromeTabId)];
-  if (!tab || !metadata || tab.url !== message.url || !chrome.notifications?.create) {
-    send({ type: "one-use-confirmation-result", id: message.id, tabId: message.tabId, approved: false });
-    return;
-  }
-  const id = "mcp-action:" + message.id;
-  let finished = false;
-  const done = async (approved) => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timer);
-    pendingPersonalOneUseConfirmations.delete(id);
-    void Promise.resolve(chrome.notifications?.clear?.(id)).catch(() => undefined);
-    const current = await chrome.tabs.get(chromeTabId).catch(() => null);
-    const owned = (await readOwnedTabs())[String(chromeTabId)];
-    send({ type: "one-use-confirmation-result", id: message.id, tabId: message.tabId,
-      approved: approved === true && current?.url === message.url &&
-        owned?.taskId === metadata.taskId && owned?.ownership === metadata.ownership });
-  };
-  const timer = setTimeout(() => void done(false), 48000);
-  pendingPersonalOneUseConfirmations.set(id, done);
-  let host = "";
-  try { host = new URL(message.url).hostname; } catch { void done(false); return; }
-  const label = PERSONAL_ONE_USE_LABELS[message.category];
-  const target = typeof message.target === "string" ? message.target.slice(0, 90) : "";
-  void chrome.notifications.create(id, {
-    type: "basic", iconUrl: PERSONAL_NOTIFICATION_ICON,
-    title: "MCP V3 · Confirmar uma ação sensível",
-    message: label + " em " + host + (target ? " · " + target : "") +
-      ". A permissão vale uma única vez.",
-    buttons: [{ title: "Confirmar uma vez" }, { title: "Recusar" }],
-    requireInteraction: true, priority: 2,
-  }).catch(() => void done(false));
-}
 // Clear obsolete Chrome restrictions from earlier extension versions.
 async function clearRetiredBrowserPlans() {
   await chrome.storage.session.remove?.(RETIRED_PLANS_KEY)?.catch(() => undefined);
@@ -1675,7 +1610,13 @@ async function resizePersonalWindow(chromeTabId, input, signal) {
     throw coded("INVALID_ARGUMENT", "A window resize requires width and height.");
   }
   if (personalViewportSessions.has(String(chromeTabId))) {
-    // Emulated metrics would hide the real window size from the page.
+    // A hidden metrics reset can also stop the compositor.
+    const [page] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: () => ({ visibility: document.visibilityState }),
+    });
+    if (page?.result?.visibility !== "visible") {
+      throw coded("STATE_NOT_REACHED", "Select the owned tab before resetting its emulation for a window resize. No emulation was dispatched.");
+    }
     await resetPersonalViewport(chromeTabId, input.tabId, false);
   }
   const readPage = async () => (await chrome.scripting.executeScript({
@@ -1759,6 +1700,17 @@ async function configurePersonalViewport(input, signal) {
   const chromeTabId = chromeTabIdFrom(input.tabId);
   await requireOwnedMetadata(chromeTabId);
   throwIfAborted(signal, "viewport", false);
+  // Chrome can stop producing compositor frames if metrics are changed
+  // while hidden. Refuse before modifying the existing debugger session.
+  if (input.preset !== "window" &&
+      (input.preset !== "reset" || personalViewportSessions.has(String(chromeTabId)))) {
+    const [page] = await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId }, func: () => ({ visibility: document.visibilityState }),
+    });
+    if (page?.result?.visibility !== "visible") {
+      throw coded("STATE_NOT_REACHED", "Viewport emulation requires a visible owned tab. Select it explicitly with browser_select_tab before changing or resetting metrics. No emulation was dispatched.");
+    }
+  }
   if (input.preset === "reset") return resetPersonalViewport(chromeTabId, input.tabId);
   if (input.preset === "window") return resizePersonalWindow(chromeTabId, input, signal);
   const profiles = {
@@ -8051,17 +8003,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 // A notification button is Chrome UI: only the user can press it.
 chrome.notifications?.onButtonClicked?.addListener((id, buttonIndex) => {
-  if (id.startsWith("mcp-action:")) {
-    void pendingPersonalOneUseConfirmations.get(id)?.(buttonIndex === 0);
-    return;
-  }
   const match = /^mcp-handoff:(\\d+)$/u.exec(id);
   if (match) void resumePersonalHandoff(Number(match[1]));
   const approval = /^mcp-approval:(\\d+)$/u.exec(id);
   if (approval) void grantPersonalSiteApproval(Number(approval[1]), buttonIndex === 1);
-});
-chrome.notifications?.onClosed?.addListener((id) => {
-  if (id.startsWith("mcp-action:")) void pendingPersonalOneUseConfirmations.get(id)?.(false);
 });
 chrome.notifications?.onClicked?.addListener((id) => {
   if (id.startsWith("mcp-question:")) {

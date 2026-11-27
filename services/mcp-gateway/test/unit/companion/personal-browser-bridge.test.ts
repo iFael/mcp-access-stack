@@ -279,7 +279,7 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
-  it("asks Chrome once for an unverified pixel drag and blocks dispatch on refusal", async () => {
+  it("returns an exact pixel drag confirmation to the agent without Chrome UI", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge(undefined, PERSONAL_BROWSER_CAPABILITIES);
     const tabId = "personal:7";
     const prompts: WireMessage[] = [];
@@ -308,13 +308,12 @@ describe("PersonalBrowserBridge", () => {
       const input = { tabId, from: { x: 110, y: 120 }, to: { x: 240, y: 260 } };
       await bridge.snapshot({ tabId });
       await bridge.screenshot({ tabId });
-      await expect(bridge.drag(input)).resolves.toMatchObject({ completed: true });
-      expect(prompts).toHaveLength(1);
-      expect(prompts[0]).toMatchObject({ tabId, category: "unverified-pointer-action", action: "pixel-drag" });
-      expect(dispatched).toHaveLength(1);
-      approve = false;
-      await expect(bridge.drag(input)).rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
-      expect(prompts).toHaveLength(2);
+      const error = await bridge.drag(input).catch((error: Error) => error);
+      expect(error).toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      const { confirmationId } = JSON.parse((error as Error).message.slice("Confirmation required: ".length));
+      expect(prompts).toHaveLength(0);
+      expect(dispatched).toHaveLength(0);
+      await expect(bridge.drag({ ...input, confirmationId })).resolves.toMatchObject({ completed: true });
       expect(dispatched).toHaveLength(1);
     } finally {
       extension.off("message", handler);
@@ -644,7 +643,7 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
-  it("asks Chrome for a site approval and honors only approvals the extension reports", async () => {
+  it("returns script confirmations without Chrome UI and honors existing scoped grants", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge();
     const tabId = "personal:7";
     const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
@@ -656,11 +655,14 @@ describe("PersonalBrowserBridge", () => {
     try {
       await primeReference(bridge, extension, tabId);
       const script = { tabId, function: "() => document.title" };
-      const asked = nextWireMessage(extension, (message) => message.type === "site-approval-request");
-      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
-      await expect(asked).resolves.toEqual({
-        type: "site-approval-request", tabId, origin: "https://example.com", category: "execute-script",
+      const prompts: WireMessage[] = [];
+      extension.on("message", (data) => {
+        const message = JSON.parse(data.toString()) as WireMessage;
+        if (message.type === "site-approval-request") prompts.push(message);
       });
+      await expect(bridge.evaluate(script)).rejects.toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      await settle();
+      expect(prompts).toEqual([]);
       extension.on("message", respond);
       // A report granting a category that is never approvable per site, or a grant bound to
       // no task and no tab (or to both), is ignored as a whole.
@@ -1259,7 +1261,7 @@ describe("PersonalBrowserBridge", () => {
     }
   });
 
-  it("waits for one Chrome approval in the same sensitive click and refuses without dispatch", async () => {
+  it("returns a sensitive click confirmation without dispatch or Chrome UI", async () => {
     const { bridge, extension, close } = await startAuthenticatedBridge(undefined, PERSONAL_BROWSER_CAPABILITIES);
     const tabId = "personal:7";
     const prompts: WireMessage[] = [];
@@ -1290,15 +1292,15 @@ describe("PersonalBrowserBridge", () => {
     extension.on("message", respond);
     try {
       await bridge.snapshot({ tabId });
-      await expect(bridge.click({ tabId, ref: "p-pay" })).resolves.toMatchObject({ completed: true });
-      expect(prompts).toHaveLength(1);
-      expect(prompts[0]).toMatchObject({ category: "purchase-or-payment", tabId });
-      expect(clicks).toHaveLength(1);
-      approve = false;
-      await expect(bridge.click({ tabId, ref: "p-pay" })).rejects.toMatchObject({
-        code: "ACTION_BLOCKED_BY_POLICY",
-      });
-      expect(prompts).toHaveLength(2);
+      const input = { tabId, ref: "p-pay" };
+      const error = await bridge.click(input).catch((error: Error) => error);
+      expect(error).toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      const { confirmationId } = JSON.parse((error as Error).message.slice("Confirmation required: ".length));
+      expect(prompts).toHaveLength(0);
+      expect(clicks).toHaveLength(0);
+      await expect(bridge.click({ ...input, confirmationId })).resolves.toMatchObject({ completed: true });
+      await expect(bridge.click({ ...input, confirmationId })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      expect(prompts).toHaveLength(0);
       expect(clicks).toHaveLength(1);
     } finally {
       extension.off("message", respond);
@@ -1343,15 +1345,29 @@ describe("PersonalBrowserBridge", () => {
       await bridge.snapshot({ tabId });
       const steps = [{ action: "click" as const, ref: "p-pay" },
         { action: "click" as const, ref: "p-delete" }];
-      await expect(bridge.sequence({ tabId, steps })).resolves.toMatchObject({ completed: true });
-      expect(prompts.map((p) => p.category)).toEqual(["purchase-or-payment", "delete-or-cancel"]);
+      const first = await bridge.sequence({ tabId, steps }).catch((error: Error) => error);
+      expect(first).toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      const firstReceipt = JSON.parse((first as Error).message.slice("Confirmation required: ".length));
+      expect(firstReceipt.category).toBe("purchase-or-payment");
+      const partial = [{ ...steps[0]!, confirmationId: firstReceipt.confirmationId }, steps[1]!];
+      const second = await bridge.sequence({ tabId, steps: partial }).catch((error: Error) => error);
+      expect(second).toMatchObject({ code: "ACTION_REQUIRES_CONFIRMATION" });
+      const secondReceipt = JSON.parse((second as Error).message.slice("Confirmation required: ".length));
+      expect(secondReceipt.category).toBe("delete-or-cancel");
+      expect(batches).toHaveLength(0);
+      expect(prompts).toHaveLength(0);
+      const confirmed = [partial[0]!, { ...partial[1]!, confirmationId: secondReceipt.confirmationId }];
+      await expect(bridge.sequence({ tabId, steps: [confirmed[0]!, { ...confirmed[1]!, confirmationId: firstReceipt.confirmationId }] }))
+        .rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
+      expect(batches).toHaveLength(0);
+      await expect(bridge.sequence({ tabId, steps: confirmed })).resolves.toMatchObject({ completed: true });
+      expect(prompts).toHaveLength(0);
       expect(batches).toHaveLength(1);
       expect((batches[0]?.input as Record<string, unknown>).steps).toEqual([
         expect.objectContaining({ action: "click", guard: expect.objectContaining({ ref: "p-pay" }) }),
         expect.objectContaining({ action: "click", guard: expect.objectContaining({ ref: "p-delete" }) }),
       ]);
-      allowBoth = false;
-      await expect(bridge.sequence({ tabId, steps })).rejects.toMatchObject({ code: "ACTION_BLOCKED_BY_POLICY" });
+      await expect(bridge.sequence({ tabId, steps: confirmed })).rejects.toMatchObject({ code: "BROWSER_CONFIRMATION_INVALID" });
       expect(batches).toHaveLength(1);
     } finally {
       extension.off("message", respond);

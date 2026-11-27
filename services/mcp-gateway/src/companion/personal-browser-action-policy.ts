@@ -84,8 +84,7 @@ export class PersonalBrowserActionPolicy {
   private readonly interactions = new BrowserInteractionContextService();
   private readonly pages = new Map<string, { url: string; title?: string; refs: Set<string>; taskId?: string }>();
   private siteApprovals: PersonalSiteApprovals | undefined;
-
-  constructor(private readonly requestSiteApproval?: (request: PersonalSiteApprovalRequest) => void) {}
+  private sequenceConfirmations: Array<{ confirmationId: string; binding: BrowserConfirmationBinding }> | undefined;
 
   setSiteApprovals(approvals: PersonalSiteApprovals | undefined): void {
     this.siteApprovals = approvals;
@@ -375,38 +374,46 @@ export class PersonalBrowserActionPolicy {
   }
 
   guardSequence(input: BrowserSequenceInput): Array<Record<string, unknown>> {
-    const guarded: Array<Record<string, unknown>> = [];
-    let hasNavigated = false;
-    for (const step of input.steps) {
-      if (step.action === "navigate") {
-        hasNavigated = true;
-        guarded.push(step);
-        continue;
+    // Synchronous preflight: consume no receipt until every step is bound.
+    const confirmations: Array<{ confirmationId: string; binding: BrowserConfirmationBinding }> = [];
+    this.sequenceConfirmations = confirmations;
+    try {
+      const guarded: Array<Record<string, unknown>> = [];
+      let hasNavigated = false;
+      for (const step of input.steps) {
+        if (step.action === "navigate") {
+          hasNavigated = true;
+          guarded.push(step);
+          continue;
+        }
+        if (hasNavigated && ["click", "fill", "press", "hover", "scroll", "drag", "formInput", "type"].includes(step.action)) {
+          throw new AppError(
+            "BROWSER_CAPABILITY_UNSUPPORTED",
+            "Personal browser sequences require a fresh snapshot after navigation before interacting.",
+          );
+        }
+        if (step.action === "click") guarded.push({ ...step, guard: this.guardClick({ ...step, tabId: input.tabId }) });
+        else if (step.action === "fill") guarded.push({ ...step, guard: this.guardFill({ ...step, tabId: input.tabId }) });
+        else if (step.action === "press") guarded.push({ ...step, guard: this.guardPress({ ...step, tabId: input.tabId }) });
+        else if (step.action === "hover") {
+          guarded.push({ ...step, guard: step.ref
+            ? this.guardReference(input.tabId, step.ref)
+            : this.guardPixelHover({ ...step, tabId: input.tabId }, this.requirePage(input.tabId).url) });
+        }
+        else if (step.action === "scroll") guarded.push({ ...step, guard: step.ref
+          ? this.guardReference(input.tabId, step.ref) : this.guardPage(input.tabId) });
+        else if (step.action === "drag") guarded.push({ ...step,
+          ...this.guardDrag({ ...step, tabId: input.tabId }) });
+        else if (step.action === "formInput") guarded.push({ ...step,
+          guard: this.guardFormInput({ ...step, tabId: input.tabId }) });
+        else if (step.action === "type") guarded.push({ ...step, guard: this.guardType({ ...step, tabId: input.tabId }) });
+        else guarded.push(step);
       }
-      if (hasNavigated && ["click", "fill", "press", "hover", "scroll", "drag", "formInput", "type"].includes(step.action)) {
-        throw new AppError(
-          "BROWSER_CAPABILITY_UNSUPPORTED",
-          "Personal browser sequences require a fresh snapshot after navigation before interacting.",
-        );
-      }
-      if (step.action === "click") guarded.push({ ...step, guard: this.guardClick({ ...step, tabId: input.tabId }) });
-      else if (step.action === "fill") guarded.push({ ...step, guard: this.guardFill({ ...step, tabId: input.tabId }) });
-      else if (step.action === "press") guarded.push({ ...step, guard: this.guardPress({ ...step, tabId: input.tabId }) });
-      else if (step.action === "hover") {
-        guarded.push({ ...step, guard: step.ref
-          ? this.guardReference(input.tabId, step.ref)
-          : this.guardPixelHover({ ...step, tabId: input.tabId }, this.requirePage(input.tabId).url) });
-      }
-      else if (step.action === "scroll") guarded.push({ ...step, guard: step.ref
-        ? this.guardReference(input.tabId, step.ref) : this.guardPage(input.tabId) });
-      else if (step.action === "drag") guarded.push({ ...step,
-        ...this.guardDrag({ ...step, tabId: input.tabId }) });
-      else if (step.action === "formInput") guarded.push({ ...step,
-        guard: this.guardFormInput({ ...step, tabId: input.tabId }) });
-      else if (step.action === "type") guarded.push({ ...step, guard: this.guardType({ ...step, tabId: input.tabId }) });
-      else guarded.push(step);
+      this.confirmations.consumeAll(confirmations);
+      return guarded;
+    } finally {
+      this.sequenceConfirmations = undefined;
     }
-    return guarded;
   }
 
   /**
@@ -561,24 +568,17 @@ export class PersonalBrowserActionPolicy {
 
   private authorize(confirmationId: string | undefined, binding: BrowserConfirmationBinding): void {
     if (confirmationId) {
-      this.confirmations.consume(confirmationId, binding);
+      if (this.sequenceConfirmations) this.sequenceConfirmations.push({ confirmationId, binding });
+      else this.confirmations.consume(confirmationId, binding);
       return;
     }
     if (this.approvedBySite(binding)) return;
     const confirmation = this.confirmations.create(binding);
-    const siteApprovable = this.siteApprovable(binding);
-    if (siteApprovable) {
-      this.requestSiteApproval?.({ tabId: binding.tabId, origin: binding.origin, category: binding.category });
-    }
     throw new AppError(
       "ACTION_REQUIRES_CONFIRMATION",
       `Confirmation required: ${JSON.stringify({
         ...confirmation, tabId: binding.tabId,
         category: binding.category, action: binding.action, target: binding.target,
-        ...(siteApprovable ? {
-          siteApproval: `Alternatively the user can allow ${binding.category} on ${binding.origin} until the task ` +
-            "ends from the MCP V3 Chrome notification; then retry without confirmationId.",
-        } : {}),
       })}`,
     );
   }

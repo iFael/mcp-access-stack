@@ -351,8 +351,7 @@ describe("personal browser authorization", () => {
   });
 
   it("skips one-use confirmations only where the user approved the site in Chrome, never for destructive actions", () => {
-    const requests: unknown[] = [];
-    const policy = new PersonalBrowserActionPolicy((request) => requests.push(request));
+    const policy = new PersonalBrowserActionPolicy();
     policy.observeTab({ tabId: sample.tabId, url: sample.url, taskId: "task-1" });
     policy.observeSnapshot({ ...sample, refs: [...sample.refs, { ref: "p-3", role: "button", name: "Save draft" }] });
     const outcome = (action: () => unknown) => {
@@ -375,10 +374,9 @@ describe("personal browser authorization", () => {
     const script = { tabId: sample.tabId, function: "() => document.title" };
     const grant = { origin: "https://example.com", category: "upload-file", taskId: "task-1" };
 
-    // Without an approval, Chrome is asked to offer one and the caller learns how it works.
-    expect(message(() => policy.guardUpload(upload)))
-      .toContain('"siteApproval":"Alternatively the user can allow upload-file on https://example.com until the task ends');
-    expect(requests).toEqual([{ tabId: sample.tabId, origin: "https://example.com", category: "upload-file" }]);
+    // Return an exact bound confirmation to the agent, not a Chrome prompt.
+    expect(message(() => policy.guardUpload(upload))).toContain('"category":"upload-file"');
+    expect(message(() => policy.guardUpload(upload))).not.toContain("siteApproval");
 
     // A grant covers its origin, category and task, or its one tab when it has no task. It has no time limit.
     policy.setSiteApprovals({ grants: [grant], autoSites: [] });
@@ -394,7 +392,6 @@ describe("personal browser authorization", () => {
     expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
 
     // Automatic approval covers the listed host for forms, uploads and scripts only.
-    requests.length = 0;
     policy.setSiteApprovals({ grants: [], autoSites: ["example.com"] });
     expect(outcome(() => policy.guardUpload(upload))).toBe("allowed");
     expect(outcome(() => policy.guardEvaluate(script))).toBe("allowed");
@@ -409,7 +406,6 @@ describe("personal browser authorization", () => {
       { tabId: sample.tabId, action: "respond", response: "accept", expectedMessage: "Save?", promptText: "x" },
       { tabId: sample.tabId, state: "open", dialogType: "prompt", message: "Save?" },
     ))).toBe("ACTION_REQUIRES_CONFIRMATION");
-    expect(requests).toEqual([]);
 
     // Approvals end with the extension connection.
     policy.clear();

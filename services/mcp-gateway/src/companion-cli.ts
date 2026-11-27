@@ -17,7 +17,6 @@ import { PersonalBrowserBridge } from "./companion/personal-browser-bridge.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { ChatWake } from "./companion/chat-wake.js";
 import { createDesktopChatAppTarget } from "./companion/desktop-chat-app.js";
-import { createDesktopNotifier } from "./companion/desktop-notifier.js";
 import { ConversationBook } from "./companion/conversation-book.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
 import { loadGatewayConfig } from "./config.js";
@@ -68,10 +67,8 @@ async function main(): Promise<void> {
   }
   let personalBrowser: PersonalBrowserBridge | undefined;
   // Wakes the ChatGPT conversation each notice belongs to, in the app for
-  // Windows and only while it shows that conversation. Otherwise the notice
-  // waits and a Windows notification tells the user.
+  // Windows and only while it shows that conversation. Otherwise it remains pending.
   const desktopChatApp = createDesktopChatAppTarget({ scriptDirectory: path.join(runtime.stateRoot, "browser") });
-  const notifier = createDesktopNotifier({ scriptDirectory: path.join(runtime.stateRoot, "browser"), log: writeLog });
   const conversations = new ConversationBook({
     openConversations: async () => (await desktopChatApp?.openConversations?.()) ?? [],
     file: path.join(runtime.stateRoot, "state", "conversation-book.json"),
@@ -84,7 +81,6 @@ async function main(): Promise<void> {
     // A message that went with the result of one of the agent's calls was delivered: it is not written again.
     isOpen: (event) => event.kind !== "message" || (personalBrowser?.hasUserMessage(event.messageId) ?? false),
     onStatus: (status) => personalBrowser?.showChatWakeStatus(status),
-    ...(notifier === undefined ? {} : { notify: notifier }),
     onSent: (events) => personalBrowser?.deliverWokenMessages(
       events.flatMap((event) => (event.kind === "message" ? [event.messageId] : []))),
     log: writeLog,
@@ -171,7 +167,6 @@ async function main(): Promise<void> {
         log: writeLog,
         onUserMessagesPending: (pending) => connector?.announceUserMessages(pending),
         chatWake,
-        ...(notifier === undefined ? {} : { notify: notifier }),
         onCardMessage: (messageId) => conversations.noteCardMessage(messageId),
       });
     } catch (error) {

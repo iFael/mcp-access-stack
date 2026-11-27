@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.21");
+    expect(manifest.version).toBe("1.17.22");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -4763,6 +4763,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
   it("persists mobile viewport, shares network CDP, and resets only the owned tab", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const methods: string[] = [];
+    let visibility = "visible";
     let attached = 0;
     let detached = 0;
     const listeners = new Set<Function>();
@@ -4779,7 +4780,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
           return { url: "https://example.com/", width: 1280, height: 720 };
         } },
         scripting: { executeScript: async () => [{ result: {
-          width: 1536, height: 730, dpr: 1.25, colorScheme: "dark",
+          visibility, width: 1536, height: 730, dpr: 1.25, colorScheme: "dark",
           userAgent: "Mozilla/5.0 Chrome/155.0.0.0 Safari/537.36",
         } }] },
         debugger: {
@@ -4818,6 +4819,12 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       (tabId: number, input: Record<string, unknown>) => Promise<void>;
     const stopNetwork = vm.runInContext("stopPersonalNetworkCapture", ctx) as
       (tabId: number) => Promise<void>;
+    visibility = "hidden";
+    await expect(setViewport({ tabId: "personal:7", preset: "mobile" }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    expect(attached).toBe(0);
+    expect(methods).toHaveLength(0);
+    visibility = "visible";
     await expect(setViewport({ tabId: "personal:7", preset: "mobile", colorScheme: "dark" }))
       .resolves.toMatchObject({ width: 375, height: 812, deviceScaleFactor: 3,
         touch: true, mobile: true, colorScheme: "dark", emulated: true });
@@ -4909,7 +4916,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
         },
         scripting: {
           executeScript: async () => [{ result: {
-            width: unsized ? 0 : pageWidth, height: unsized ? 0 : 600, dpr: 1.5, userAgent: "Mozilla/5.0 Chrome/155.0.0.0",
+            visibility: "visible", width: unsized ? 0 : pageWidth, height: unsized ? 0 : 600, dpr: 1.5, userAgent: "Mozilla/5.0 Chrome/155.0.0.0",
             touch: false, colorScheme: "light",
           } }],
         },
@@ -5486,7 +5493,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.21");
+    expect(parsedManifest.version).toBe("1.17.22");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
@@ -5774,10 +5781,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     // Nobody answers: the call times out, the turn stays with the user and MCP is refused there.
     await expect(waitForUser({ tabId: "personal:7", forUser: "Faça login no banco", timeoutMs: 1 }))
       .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
-    expect(notifications).toEqual([["create", "mcp-handoff:7", expect.objectContaining({
-      title: "O MCP precisa de você", message: "Faça login no banco", requireInteraction: true,
-      buttons: [{ title: "Pronto, pode continuar" }],
-    })]]);
+    expect(notifications).toEqual([]);
     expect(badges).toEqual(["VOCÊ"]);
     await expect(refuse("snapshot", { tabId: "personal:7" })).rejects.toMatchObject({ code: "EXECUTION_STATE_INVALID" });
     await expect(refuse("click", { tabId: "personal:8" })).resolves.toBeUndefined();
@@ -5794,7 +5798,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     };
     await expect(waitForUser({ tabId: "personal:7", forUser: "outro motivo", timeoutMs: 60_000 }))
       .resolves.toEqual({ tabId: "personal:7", completed: true });
-    expect(notifications.filter(([kind]) => kind === "create")).toHaveLength(1);
+    expect(notifications.filter(([kind]) => kind === "create")).toHaveLength(0);
     expect(notifications.at(-1)).toEqual(["clear", "mcp-handoff:7"]);
     expect(badges.at(-1)).toBe("");
     // The companion may wake the conversation with the tab that came back.
@@ -6024,10 +6028,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     await ask("personal:7", "https://shop.example", "purchase-or-payment");
     expect(notifications).toEqual([]);
     await ask("personal:7", "https://shop.example");
-    expect(notifications).toEqual([["create", "mcp-approval:7", expect.objectContaining({
-      title: "O MCP pede permissão em shop.example", buttons: [{ title: "Permitir neste site" }], requireInteraction: true,
-      message: "Enviar arquivos. Permitir libera isso neste site até o fim da tarefa.",
-    })]]);
+    expect(notifications).toEqual([]);
     await expect(dispatch({ type: "mcp-tab-status", tabId: 7 })).resolves.toMatchObject({
       approval: "upload-file", grants: [], auto: false, autoEligible: true });
 
@@ -6052,8 +6053,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
 
     // A shared tab has no task: its grant is bound to that tab, granted from Chrome.
     await ask("personal:8", "https://docs.example", "execute-script");
-    expect(notifications.at(-1)).toEqual(["create", "mcp-approval:8", expect.objectContaining({
-      message: "JavaScript pode ler e alterar esta página. Permita somente nesta tarefa ou lembre a escolha para esta origem HTTPS." })]);
+    expect(notifications.some(([kind]) => kind === "create")).toBe(false);
     await expect(dispatch({ type: "mcp-tab-approve", tabId: 8 })).resolves.toMatchObject({
       grants: [{ category: "execute-script", until: "tab" }] });
     expect(session.has("mcpV3ApprovalRequest:8")).toBe(false);
@@ -6110,9 +6110,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
 
     // Remembering JavaScript requires the explicit second button on a Chrome notification.
     await ask("personal:7", "https://shop.example", "execute-script");
-    expect(notifications.at(-1)).toEqual(["create", "mcp-approval:7", expect.objectContaining({
-      buttons: [{ title: "Permitir nesta tarefa" }, { title: "Lembrar neste site" }],
-    })]);
+    expect(notifications.some(([kind]) => kind === "create")).toBe(false);
     await expect(grant(7, true)).resolves.toBe(true);
     expect(local.get("mcpV3RememberedJavaScriptOrigins")).toEqual(["https://shop.example"]);
     await clearTask("t1", [7]);
@@ -7203,9 +7201,7 @@ describe("popup messages to a running task", () => {
   it("answers the latest question when the current tab has no task, and clears it", async () => {
     const harness = inboxHarness(owned);
     await harness.ask({ taskId: "task-1", question: "A barra piscou?" });
-    expect(harness.notifications).toEqual([[expect.stringMatching(/^mcp-question:/u), expect.objectContaining({
-      title: "O MCP tem uma pergunta", message: expect.stringContaining("A barra piscou?"),
-    })]]);
+    expect(harness.notifications).toEqual([]);
     expect(harness.badges).toEqual(["?"]);
     await expect(harness.status(42)).resolves.toMatchObject({ task: "Testar a barra", question: "A barra piscou?" });
 
@@ -7219,7 +7215,7 @@ describe("popup messages to a running task", () => {
   it("shows a reply written in the ChatGPT card like its own, and it answers the open question", async () => {
     const harness = inboxHarness(owned);
     await harness.ask({ taskId: "task-1", question: "A barra piscou?" });
-    expect(harness.notifications[0]?.[1]).toMatchObject({ message: expect.stringContaining("Responda no ChatGPT") });
+    expect(harness.notifications).toEqual([]);
     const reply = { id: "msg_0000000a-0000-4000-8000-000000000000", text: "Não piscou.", sentAt: "2026-10-28T15:00:00.000Z", taskId: "task-1" };
     await harness.fromChat(reply);
     await harness.fromChat(reply);

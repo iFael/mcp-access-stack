@@ -62,22 +62,26 @@ export class BrowserConfirmationRegistry {
   }
 
   consume(confirmationId: string, binding: BrowserConfirmationBinding): void {
+    this.consumeAll([{ confirmationId, binding }]);
+  }
+
+  consumeAll(entries: readonly { confirmationId: string; binding: BrowserConfirmationBinding }[]): void {
     this.pruneExpired();
-    const pending = this.pending.get(confirmationId);
-    if (!pending || pending.expiresAtMs <= Date.now()) {
-      this.pending.delete(confirmationId);
-      throw new AppError(
-        "BROWSER_CONFIRMATION_INVALID",
-        "Browser confirmation is missing or expired.",
-      );
+    const seen = new Set<string>();
+    for (const { confirmationId, binding } of entries) {
+      const pending = this.pending.get(confirmationId);
+      if (!pending || pending.expiresAtMs <= Date.now()) {
+        throw new AppError("BROWSER_CONFIRMATION_INVALID", "Browser confirmation is missing or expired.");
+      }
+      if (seen.has(confirmationId)) {
+        throw new AppError("BROWSER_CONFIRMATION_INVALID", "Browser confirmation cannot be used twice in a batch.");
+      }
+      if (!sameBinding(pending.binding, binding)) {
+        throw new AppError("BROWSER_CONFIRMATION_INVALID", "Browser confirmation does not match this action.");
+      }
+      seen.add(confirmationId);
     }
-    if (!sameBinding(pending.binding, binding)) {
-      throw new AppError(
-        "BROWSER_CONFIRMATION_INVALID",
-        "Browser confirmation does not match this action.",
-      );
-    }
-    this.pending.delete(confirmationId);
+    for (const id of seen) this.pending.delete(id);
   }
 
   private pruneExpired(): void {

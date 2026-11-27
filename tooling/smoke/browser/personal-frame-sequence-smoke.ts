@@ -946,31 +946,44 @@ async function main(): Promise<void> {
         traces.push(observation);
         console.log("COMPOSITOR " + JSON.stringify(observation));
         await worker.evaluate("globalThis.__mcpSmokeCompositorTrace.length = 0");
+        if (process.env.PERSONAL_SMOKE_COMPOSITOR_RAW !== "1") {
+          const expected = { width: Math.round(120 * before.page.dpr), height: Math.round(80 * before.page.dpr) };
+          const captured = result as { ok: boolean; size?: { width: number; height: number } };
+          if (!captured.ok || captured.size?.width !== expected.width || captured.size?.height !== expected.height) {
+            throw new Error("Compositor regression: " + label + " " + JSON.stringify(result));
+          }
+        }
       };
       try {
         await bridge.selectTab({ tabId: target });
         await probe("natural-selected");
         await bridge.selectTab({ tabId: other });
         await probe("natural-hidden");
-        await bridge.viewport({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 2 });
-        await probe("emulated-hidden");
-        await bridge.viewport({ tabId: target, preset: "reset" });
-        await probe("reset-hidden");
+        const expectHiddenRefusal = async (input: Parameters<typeof bridge.viewport>[0]) => {
+          const error = await bridge.viewport(input).then(() => undefined, (error: { code?: string }) => error);
+          if (error?.code !== "STATE_NOT_REACHED") throw new Error("Hidden geometry change was not refused.");
+          const trace = await worker.evaluate("globalThis.__mcpSmokeCompositorTrace.slice()") as Array<{ method?: string }>;
+          if (trace.some(event => event.method === "Emulation.setDeviceMetricsOverride" ||
+              event.method === "Emulation.clearDeviceMetricsOverride")) {
+            throw new Error("A refused geometry change dispatched CDP emulation.");
+          }
+        };
+        await expectHiddenRefusal({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 2 });
+        await probe("hidden-emulation-refused");
         await bridge.selectTab({ tabId: target });
-        await probe("reset-selected");
-        // Discriminate geometry override from DPR and from applying while hidden.
         await bridge.viewport({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 2 });
         await probe("emulated-visible");
         await bridge.selectTab({ tabId: other });
         await probe("emulated-then-hidden");
+        await expectHiddenRefusal({ tabId: target, preset: "reset" });
+        await probe("hidden-reset-refused");
         await bridge.selectTab({ tabId: target });
         await bridge.viewport({ tabId: target, preset: "reset" });
         await probe("visible-reset");
         await bridge.selectTab({ tabId: other });
-        await bridge.viewport({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 1 });
-        await probe("dpr-one-hidden");
+        await expectHiddenRefusal({ tabId: target, preset: "custom", width: 1000, height: 700, deviceScaleFactor: 1 });
+        await probe("hidden-dpr-one-refused");
         await bridge.selectTab({ tabId: target });
-        await bridge.viewport({ tabId: target, preset: "reset" });
         await probe("recovered-visible");
         await bridge.selectTab({ tabId: other });
         await probe("recovered-hidden");
@@ -1304,29 +1317,13 @@ async function main(): Promise<void> {
     report("notification", notification);
     if (notification.error || !notification.id) throw new Error("The extension could not show a notification.");
 
-    // Chrome's headless runner has no human to press notification buttons.
-    // Observe a real pending notification and invoke the same listener Chrome
-    // calls on a user click, from this isolated smoke profile only.
-    const decideChromeNotification = async (prefix: string, buttonIndex: 0 | 1): Promise<string> => {
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const id = await extensionWorker.evaluate(`(async () => {
-          const notifications = await chrome.notifications.getAll();
-          return Object.keys(notifications).find((candidate) =>
-            candidate.startsWith(${JSON.stringify(prefix)}) &&
-            (!candidate.startsWith("mcp-action:") || pendingPersonalOneUseConfirmations.has(candidate)));
-        })()`) as string | undefined;
-        if (id) {
-          const dispatched = await extensionWorker.evaluate(`(() => {
-            if (typeof globalThis.__mcpSmokeNotificationClick !== "function") return false;
-            globalThis.__mcpSmokeNotificationClick(${JSON.stringify(id)}, ${buttonIndex});
-            return true;
-          })()`) as boolean;
-          if (!dispatched) throw new Error("The smoke listener did not receive the Chrome notification click.");
-          return id;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      throw new Error("The expected Chrome notification was not created: " + prefix);
+    // Authorization is conveyed by the exact, one-use receipt returned to the
+    // agent. The isolated fixture authorizes only its own test operations.
+    const receipt = async (attempt: Promise<unknown>): Promise<string> => {
+      const error = await attempt.then(() => undefined, (error: Error & { code?: string }) => error);
+      if (error?.code !== "ACTION_REQUIRES_CONFIRMATION" ||
+          !error.message.startsWith("Confirmation required: ")) throw new Error("Expected a bound confirmation.");
+      return JSON.parse(error.message.slice("Confirmation required: ".length)).confirmationId as string;
     };
 
     const verifyNestedOopif = async (context: BrowserContext, tabId: string, url: string) => {
@@ -1416,16 +1413,9 @@ async function main(): Promise<void> {
     if (again.resolved[0]?.strategy !== "already-expanded") throw new Error("An expanded menu level was clicked again.");
     const danger = { tabId: legacy.tab.tabId, path: ["Excluir registros"], sourceFramePath: ["menu"],
       checkpoint: { action: "extract" as const, framePath: ["menu"], locator: { id: "log" } } };
-    const deniedPath = bridge.navigatePath!(danger).then(() => "allowed",
-      (error: { code?: string }) => error.code);
-    await decideChromeNotification("mcp-action:", 1);
-    if (await deniedPath !== "ACTION_BLOCKED_BY_POLICY") {
-      throw new Error("Chrome denial did not block the dangerous menu path.");
-    }
-    const approvedPath = bridge.navigatePath!(danger);
-    await decideChromeNotification("mcp-action:", 0);
-    const deleted = await approvedPath;
-    report("one-use Chrome-approved dangerous menu path", deleted.checkpoint);
+    const confirmationId = await receipt(bridge.navigatePath!(danger));
+    const deleted = await bridge.navigatePath!({ ...danger, confirmationId });
+    report("one-use agent-authorized dangerous menu path", deleted.checkpoint);
     if (deleted.checkpoint?.step.value !== "apagado") throw new Error("Confirmed menu path did not run.");
 
     // Real same-origin frameset matching the large MisterT legacy fixture.
@@ -1496,8 +1486,7 @@ async function main(): Promise<void> {
     const deletePoint = await pointFor("#legacy-delete");
     const deniedFixtureDelete = bridge.click({ tabId: fixtureId, ...deletePoint })
       .then(() => "allowed", (error: { code?: string }) => error.code);
-    await decideChromeNotification("mcp-action:", 1);
-    if (await deniedFixtureDelete !== "ACTION_BLOCKED_BY_POLICY" ||
+    if (await deniedFixtureDelete !== "ACTION_REQUIRES_CONFIRMATION" ||
         await menuFrame.locator("body").getAttribute("data-deleted") !== null) {
       throw new Error("Destructive coordinate click was not blocked.");
     }
@@ -1535,8 +1524,7 @@ async function main(): Promise<void> {
     const deniedFractional = bridge.click({ tabId: pixelTab,
       x: Math.round(dangerBox.x + dangerBox.width / 2), y: Math.round(dangerBox.y + dangerBox.height / 2) })
       .then(() => "allowed", (error: { code?: string }) => error.code);
-    await decideChromeNotification("mcp-action:", 1);
-    if (await deniedFractional !== "ACTION_BLOCKED_BY_POLICY" ||
+    if (await deniedFractional !== "ACTION_REQUIRES_CONFIRMATION" ||
         await pixelPage.frameLocator("iframe").locator("body").getAttribute("data-deleted") !== null) {
       throw new Error("Fractional geometry must not authorize destructive clicks.");
     }
@@ -1847,6 +1835,7 @@ async function main(): Promise<void> {
     const userWindowBefore = await outerSize();
     const firstSize = await bridge.viewport({ tabId: plain.tab.tabId, preset: "window", width: 900, height: 700 });
     const secondSize = await bridge.viewport({ tabId: plain.tab.tabId, preset: "window", width: 1100, height: 760 });
+    await bridge.selectTab({ tabId: typing.tab.tabId });
     const sharedWindowTab = await bridge.viewport({ tabId: typing.tab.tabId, preset: "desktop" });
     await bridge.viewport({ tabId: typing.tab.tabId, preset: "reset" });
     const userWindowAfter = await outerSize();
@@ -1936,73 +1925,33 @@ async function main(): Promise<void> {
     await bridge.finishTask({ taskId: autonomousTask });
 
     const errorCode = (error: { code?: string }) => error.code;
-    // A refused script asks Chrome for site approval. Native notification
-    // buttons grant only scoped use; retired global auto-site grants stay off.
+    // An unapproved script returns a receipt, never a Chrome permission popup.
     const popupTab = (type: string, chromeTabId: number, extra: Record<string, unknown> = {}) => popup.evaluate(
       `chrome.runtime.sendMessage(${JSON.stringify({ type, tabId: chromeTabId, ...extra })})`) as Promise<Record<string, unknown>>;
-    const until = async <T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
-      for (let attempt = 0; ; attempt += 1) {
-        const value = await read();
-        if (done(value) || attempt >= 40) return value;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    };
     const approvalTask = "personal-approval-smoke";
     const siteTab = (await bridge.open({ url: `http://share-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
     const siteChromeId = Number(siteTab.slice("personal:".length));
     await bridge.snapshot({ tabId: siteTab });
     const title = { tabId: siteTab, function: "() => document.title" };
-    const firstScript = await bridge.evaluate(title).then(() => "allowed", (error: Error & { code?: string }) =>
-      error.code + (error.message.includes("siteApproval") ? "+siteApproval" : ""));
-    const asked = await until(() => popupTab("mcp-tab-status", siteChromeId), (state) => state.approval === "execute-script");
-    await decideChromeNotification("mcp-approval:" + siteChromeId, 0);
-    const approvedState = await popupTab("mcp-tab-status", siteChromeId);
-    const granted = await until(() => bridge.evaluate(title).then((result) => result.value, errorCode),
-      (value) => value === "Minha aba");
-    const autoTab = (await bridge.open({ url: `http://plain-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
-    const autoChromeId = Number(autoTab.slice("personal:".length));
-    await bridge.snapshot({ tabId: autoTab });
-    const autoTitle = { tabId: autoTab, function: "() => document.title" };
-    const beforeAuto = await bridge.evaluate(autoTitle).then(() => "allowed", errorCode);
-    const autoState = await popupTab("mcp-tab-auto", autoChromeId, { enabled: true });
-    const automatic = await bridge.evaluate(autoTitle).then((result) => result.value, errorCode);
-    const noAutoSites = (await popupTab("mcp-tab-status", autoChromeId)).autoSites;
+    const scriptReceipt = await receipt(bridge.evaluate(title));
+    const granted = (await bridge.evaluate({ ...title, confirmationId: scriptReceipt })).value;
+    const replay = await bridge.evaluate({ ...title, confirmationId: scriptReceipt }).then(() => "allowed", errorCode);
+    const state = await popupTab("mcp-tab-status", siteChromeId);
+    const notifications = await extensionWorker.evaluate("chrome.notifications.getAll()") as Record<string, unknown>;
+    const autoState = await popupTab("mcp-tab-auto", siteChromeId, { enabled: true });
     await bridge.finishTask({ taskId: approvalTask });
     const nextTab = (await bridge.open({ url: `http://share-site.test:${sitePort}/`, taskId: approvalTask })).tab.tabId;
     await bridge.snapshot({ tabId: nextTab });
     const afterTask = await bridge.evaluate({ ...title, tabId: nextTab }).then(() => "allowed", errorCode);
     await bridge.finishTask({ taskId: approvalTask });
-    const userChromeId = Number(shared.tabId.slice("personal:".length));
-    await popupTab("mcp-tab-share", userChromeId);
-    await bridge.snapshot({ tabId: shared.tabId });
-    const sharedTitle = { tabId: shared.tabId, function: "() => document.title" };
-    const sharedFirst = await bridge.evaluate(sharedTitle).then(() => "allowed", errorCode);
-    await until(() => popupTab("mcp-tab-status", userChromeId), (state) => state.approval === "execute-script");
-    await decideChromeNotification("mcp-approval:" + userChromeId, 0);
-    const sharedApproved = await popupTab("mcp-tab-status", userChromeId);
-    const sharedGranted = await until(() => bridge.evaluate(sharedTitle).then((result) => result.value, errorCode),
-      (value) => value === "Minha aba");
-    await popupTab("mcp-tab-unshare", userChromeId);
-    await popupTab("mcp-tab-share", userChromeId);
-    await bridge.snapshot({ tabId: shared.tabId });
-    const reshared = await until(() => bridge.evaluate(sharedTitle).then(() => "allowed", errorCode),
-      (value) => value === "ACTION_REQUIRES_CONFIRMATION");
-    await popupTab("mcp-tab-unshare", userChromeId);
-    report("site approvals", { firstScript, asked: asked.approval, approvedState: approvedState.grants, granted,
-      beforeAuto, autoSites: noAutoSites, autoState, automatic, afterTask,
-      sharedFirst, sharedApproved: sharedApproved.grants, sharedGranted, reshared });
-    if (firstScript !== "ACTION_REQUIRES_CONFIRMATION+siteApproval" || asked.approval !== "execute-script" ||
-        JSON.stringify(approvedState.grants) !== '[{"category":"execute-script","until":"task"}]' ||
-        granted !== "Minha aba" ||
-        beforeAuto !== "ACTION_REQUIRES_CONFIRMATION" || autoState.ok !== false ||
-        JSON.stringify(noAutoSites) !== "[]" || automatic !== "ACTION_REQUIRES_CONFIRMATION" ||
-        afterTask !== "ACTION_REQUIRES_CONFIRMATION" ||
-        sharedFirst !== "ACTION_REQUIRES_CONFIRMATION" ||
-        JSON.stringify(sharedApproved.grants) !== '[{"category":"execute-script","until":"tab"}]' ||
-        sharedGranted !== "Minha aba" || reshared !== "ACTION_REQUIRES_CONFIRMATION") {
-      throw new Error("Site approvals did not follow what the user allowed in Chrome.");
+    report("agent authorization", { granted, replay, afterTask, autoState, grants: state.grants,
+      popupCount: Object.keys(notifications).filter(id => id.startsWith("mcp-action:") || id.startsWith("mcp-approval:")).length });
+    if (granted !== "Minha aba" || replay !== "BROWSER_CONFIRMATION_INVALID" ||
+        afterTask !== "ACTION_REQUIRES_CONFIRMATION" || autoState.ok !== false ||
+        state.approval !== undefined || JSON.stringify(state.grants) !== "[]" ||
+        Object.keys(notifications).some(id => id.startsWith("mcp-action:") || id.startsWith("mcp-approval:"))) {
+      throw new Error("Agent receipts must remain exact and one-use without approval popups.");
     }
-
     console.log("\nPERSONAL FRAME SMOKE PASS");
   } finally {
     if (nativeBrowser) {
