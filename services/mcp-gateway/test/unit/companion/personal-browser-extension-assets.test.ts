@@ -80,7 +80,7 @@ describe("personal browser extension assets", () => {
       action: { default_popup?: string; default_title: string };
       options_page: string; version: string; permissions: string[];
     };
-    expect(manifest.version).toBe("1.17.20");
+    expect(manifest.version).toBe("1.17.21");
     expect(manifest.action).not.toHaveProperty("default_popup");
     expect(manifest.action.default_title).toContain("compartilhar");
     expect(manifest.permissions).toContain("contextMenus");
@@ -2666,6 +2666,9 @@ describe("personal browser extension assets", () => {
       .toMatchObject({ x: 50, y: 50 });
     expect(probe(ref.ref, { ...ref, name: "different control", url: "https://example.test/" }, false))
       .toMatchObject({ error: "target_changed" });
+    Object.assign(dom.context, { innerWidth: 0, innerHeight: 0 });
+    expect(probe(ref.ref, { ...ref, url: "https://example.test/" }, false))
+      .toMatchObject({ error: "viewport_not_ready" });
   });
 
   it("does not hide changing action names on contenteditable buttons", () => {
@@ -4775,6 +4778,10 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
           if (id !== 7) throw new Error("not owned");
           return { url: "https://example.com/", width: 1280, height: 720 };
         } },
+        scripting: { executeScript: async () => [{ result: {
+          width: 1536, height: 730, dpr: 1.25, colorScheme: "dark",
+          userAgent: "Mozilla/5.0 Chrome/155.0.0.0 Safari/537.36",
+        } }] },
         debugger: {
           attach: async () => { attached++; },
           detach: async () => { detached++; },
@@ -4825,7 +4832,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(methods).toContain("Network.enable");
     // The reset result must satisfy the strict viewport result contract.
     await expect(setViewport({ tabId: "personal:7", preset: "reset" }))
-      .resolves.toEqual({ tabId: "personal:7", width: 1280, height: 720,
+      .resolves.toEqual({ tabId: "personal:7", width: 1536, height: 730,
         deviceScaleFactor: 1.25, colorScheme: "dark", emulated: false, mobile: false, touch: false,
         userAgent: "Mozilla/5.0 Chrome/155.0.0.0 Safari/537.36" });
     expect(methods).toContain("Emulation.clearDeviceMetricsOverride");
@@ -4834,12 +4841,35 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(vm.runInContext("personalViewportSessions.size", ctx)).toBe(0);
   });
 
+  it("reports the measured CSS viewport on reset and refuses an unsized page", async () => {
+    const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
+    let width = 0;
+    const context = vm.createContext({
+      coded: (code: string, message: string) => Object.assign(new Error(message), { code }),
+      chrome: {
+        tabs: { get: async () => ({ width: 1366, height: 768 }) },
+        scripting: { executeScript: async () => [{ result: {
+          width, height: width ? 730 : 0, dpr: 1.25, userAgent: "Chrome", colorScheme: "dark",
+        } }] },
+      },
+    });
+    vm.runInContext("const personalViewportSessions = new Map();", context);
+    vm.runInContext(extractFunction(serviceWorker, "resetPersonalViewport"), context);
+    const reset = vm.runInContext("resetPersonalViewport", context) as (id: number) => Promise<unknown>;
+    await expect(reset(7)).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+    width = 1536;
+    await expect(reset(7)).resolves.toMatchObject({ width: 1536, height: 730, deviceScaleFactor: 1.25, emulated: false });
+    width = 0;
+    await expect((reset as (id: number, tabId?: string, measure?: boolean) => Promise<unknown>)(7, undefined, false)).resolves.toBeUndefined();
+  });
+
   it("resizes a real window only after moving a shared owned tab into its own window", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const calls: Array<[string, unknown]> = [];
     let windowId = 1;
     let tabCount = 3;
     let pageWidth = 1280;
+    let unsized = false;
     const resets: number[] = [];
     const regrouped: unknown[][] = [];
     const pendingMcpTabs = new Set<number>();
@@ -4879,7 +4909,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
         },
         scripting: {
           executeScript: async () => [{ result: {
-            width: pageWidth, height: 600, dpr: 1.5, userAgent: "Mozilla/5.0 Chrome/155.0.0.0",
+            width: unsized ? 0 : pageWidth, height: unsized ? 0 : 600, dpr: 1.5, userAgent: "Mozilla/5.0 Chrome/155.0.0.0",
             touch: false, colorScheme: "light",
           } }],
         },
@@ -4913,6 +4943,9 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       .resolves.toMatchObject({ width: 1008, window: { width: 1024, height: 768 } });
     expect(calls.map(([kind]) => kind)).toEqual(["get", "update"]);
     expect(resets).toEqual([7]);
+    unsized = true;
+    await expect(setViewport({ tabId: "personal:7", preset: "window", width: 1024, height: 768 }))
+      .rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
   });
 
   it("observes, inspects and responds to Chrome JavaScript dialogs without blind acceptance", async () => {
@@ -5138,6 +5171,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
           sendCommand: async (_target: unknown, method: string, params?: {sessionId: number; expression?: string}) => {
             calls.push(method);
             if (method === "Runtime.evaluate") return { result: { value: params?.expression === "window.devicePixelRatio" ? 1 : "hidden" } };
+            if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
             if (method === "Page.startScreencast") {
               if (scenario === "start rejection") throw new Error("already active");
               for (const listener of listeners) {
@@ -5198,6 +5232,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
       releasePersonalTaskDebugger: async () => { detachStarted.resolve(); return detach.promise; },
       chrome: { debugger: { sendCommand: async (_: unknown, method: string) => {
         if (method === "Page.captureScreenshot") { captureStarted.resolve(); return capture.promise; }
+        if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
         if (method === "Runtime.evaluate") return { result: { value: 1 } };
         return {};
       } } },
@@ -5293,6 +5328,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
             captureStarted.resolve();
             return capture.promise;
           }
+          if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
           if (method === "Runtime.evaluate") return { result: { value: 1 } };
           return {};
         },
@@ -5326,6 +5362,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
   it("captures bounded regions at the requested CSS or device resolution without double scaling DPR", async () => {
     const { serviceWorker } = buildPersonalBrowserExtensionAssets("x".repeat(43), 3361);
     const commands: Array<{ name: string; params: Record<string, unknown> }> = [];
+    let viewportWidth = 800;
     const context = vm.createContext({
       MAX_FULL_PAGE_PIXELS: 40_000_000,
       MAX_SCREENSHOT_BASE64_CHARS: 3_000_000,
@@ -5341,7 +5378,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
         sendCommand: async (_target: unknown, name: string, params: Record<string, unknown>) => {
           commands.push({ name, params });
           if (name === "Page.getLayoutMetrics") return {
-            cssVisualViewport: { clientWidth: 800, clientHeight: 600, pageX: 32, pageY: 80 },
+            cssVisualViewport: { clientWidth: viewportWidth, clientHeight: 600, pageX: 32, pageY: 80 },
             cssContentSize: { width: 800, height: 1800 },
           };
           if (name === "Runtime.evaluate") return { result: { value: 2 } };
@@ -5405,6 +5442,12 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     expect(commands.find((c) => c.name === "Page.captureScreenshot")?.params).toMatchObject({
       clip: { x: 0, y: 0, width: 800, height: 1800, scale: 1 },
     });
+    viewportWidth = 0;
+    for (const options of [{}, { scale: "device" }, { fullPage: true }, { region: { x: 10, y: 20, width: 120, height: 80 } }]) {
+      commands.length = 0;
+      await expect(screenshot({ tabId: "personal:7", ...options })).rejects.toMatchObject({ code: "STATE_NOT_REACHED" });
+      expect(commands.some(c => c.name === "Page.captureScreenshot" || c.name === "Page.startScreencast")).toBe(false);
+    }
   });
 
   it("activates only a verified MCP-owned tab and does not adopt another user's tab", async () => {
@@ -5443,7 +5486,7 @@ const PERSONAL_DEBUGGER_IDLE_MS = 600000;`, ctx);
     );
     const parsedManifest = JSON.parse(manifest) as { version: string; permissions: string[];
       content_security_policy: { extension_pages: string } };
-    expect(parsedManifest.version).toBe("1.17.20");
+    expect(parsedManifest.version).toBe("1.17.21");
     // Notification icons are data: URLs that Chrome fetches under this policy.
     expect(parsedManifest.content_security_policy.extension_pages)
       .toBe("script-src 'self'; object-src 'self'; connect-src 'self' data: ws://127.0.0.1:3361");
