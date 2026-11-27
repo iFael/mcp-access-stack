@@ -17,6 +17,7 @@ import { PersonalBrowserBridge } from "./companion/personal-browser-bridge.js";
 import { ReloadableLocalAgent } from "./companion/reloadable-local-agent.js";
 import { ChatWake } from "./companion/chat-wake.js";
 import { createDesktopChatAppTarget } from "./companion/desktop-chat-app.js";
+import { createDesktopNotifier } from "./companion/desktop-notifier.js";
 import { ConversationBook } from "./companion/conversation-book.js";
 import { createPlatformOAuthCredentialStore } from "./companion/platform-oauth-credential-store.js";
 import { loadGatewayConfig } from "./config.js";
@@ -85,6 +86,8 @@ async function main(): Promise<void> {
       events.flatMap((event) => (event.kind === "message" ? [event.messageId] : []))),
     log: writeLog,
   });
+  // Keep nonblocking audit-loss warnings, not task approval or completion popups.
+  const notifier = createDesktopNotifier({ scriptDirectory: path.join(runtime.stateRoot, "browser"), log: writeLog });
   const cloudAudit = new CloudAuditQueue((status) => {
     writeLog({
       event: "mcp_v3_cloud_audit_status",
