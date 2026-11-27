@@ -14,11 +14,28 @@ const segments = [
   ["tooling", "tsconfig.typecheck.tooling.json"],
 ];
 
+// Keep constrained local execution serial. Hosted CI may explicitly opt in
+// to two independent noEmit compiler processes, never an unbounded worker pool.
+const jobs = process.env.MCP_TYPECHECK_JOBS ?? "1";
+if (jobs !== "1" && jobs !== "2") {
+  throw new Error("MCP_TYPECHECK_JOBS must be 1 or 2.");
+}
+const concurrency = Number(jobs);
 await verifyCoverage();
 
-for (const [name, configPath] of segments) {
-  process.stdout.write(`[typecheck] ${name}\n`);
-  await runTypeScript(configPath);
+for (let offset = 0; offset < segments.length; offset += concurrency) {
+  const outcomes = await Promise.allSettled(
+    segments.slice(offset, offset + concurrency).map(async ([name, configPath]) => {
+      process.stdout.write(`[typecheck] ${name}\n`);
+      const started = performance.now();
+      await runTypeScript(configPath);
+      process.stdout.write(`[typecheck] ${name} passed (${Math.round(performance.now() - started)} ms)\n`);
+    }),
+  );
+  // Drain the entire bounded batch before failing; never leave a sibling
+  // compiler process running after a failed segment.
+  const failed = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 process.stdout.write("[typecheck] all segments passed\n");
