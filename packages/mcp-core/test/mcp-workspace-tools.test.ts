@@ -398,6 +398,11 @@ class MockWorkspaceExecutor implements WorkspaceExecutor {
     };
   }
 
+  async workspaceInstallDependencies(input: import("@vs-code-gpt/shared").WorkspaceDependencyInstallInput): Promise<StartBackgroundTaskResult> {
+    this.calls.push("workspaceInstallDependencies");
+    return { status: "background_task_started", task: { ...backgroundTask, id: input.operationId, workspaceId: input.workspaceId, cwd: input.root } };
+  }
+
   async startBackgroundTask(
     input: StartBackgroundTaskInput,
     context: OperationContext = {},
@@ -686,6 +691,18 @@ describe("registerWorkspaceTools", () => {
       status: "bootstrap_required", bootstrapPresent: false,
     });
     expect(executor.calls).toEqual(["oracleDiskAuditProvision"]);
+  });
+
+  it("routes only strict dependency capability inputs to the typed executor", async () => {
+    const executor = new MockWorkspaceExecutor();
+    const server = new McpServer({ name: "test", version: "0.0.0" }, { capabilities: { tools: {} } });
+    registerWorkspaceTools(server, executor, { includeTools: ["workspace_install_dependencies"], securitySchemes: [{ type: "noauth" }] });
+    const tool = registeredTools(server).workspace_install_dependencies!;
+    const input = { workspaceId: "ws", root: "fixtures/editors", operationId: backgroundTask.id, action: "resolve", expectedManifestSha256: "a".repeat(64), expectedLockSha256: null };
+    const extra = { signal: new AbortController().signal };
+    expect((await tool.handler(input, extra)).structuredContent).toMatchObject({ status: "background_task_started", task: { id: input.operationId, cwd: input.root } });
+    expect((await tool.handler({ ...input, command: "arbitrary" }, extra)).isError).toBe(true);
+    expect(executor.calls).toEqual(["workspaceInstallDependencies"]);
   });
 
   it("exposes APT maintenance as a typed, explicit privileged operation", async () => {
@@ -2140,9 +2157,10 @@ describe("registerSourceControlTools", () => {
       "github_issue_write",
     ]);
     expect(SOURCE_CONTROL_TOOL_NAMES).toHaveLength(28);
-    expect(WORKSPACE_TOOL_NAMES).toHaveLength(72);
-    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(72);
+    expect(WORKSPACE_TOOL_NAMES).toHaveLength(73);
+    expect(new Set(WORKSPACE_TOOL_NAMES).size).toBe(73);
     expect(WORKSPACE_TOOL_NAMES).toContain("oracle_apt_maintenance");
+    expect(WORKSPACE_TOOL_NAMES).toContain("workspace_install_dependencies");
   });
 
   it("exposes one typed workflow control tool for dispatch and reconciliation without a generic API",async()=>{

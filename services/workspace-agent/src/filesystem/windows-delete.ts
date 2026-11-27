@@ -138,7 +138,7 @@ export async function deleteWindowsFile(target: string, expectedSha256: string, 
     "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const request = Buffer.from(JSON.stringify({ target, hash: expectedSha256, limit }), "utf8").toString("base64");
   const code = await new Promise<number | undefined>((resolve) => {
-    execFile(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_DELETE_SCRIPT], {
+    execFile(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_DELETE_SCRIPT, "utf16le").toString("base64")], {
       windowsHide: true, timeout: 25_000, maxBuffer: 4096,
       env: { ...process.env, MCP_HANDLE_DELETE_REQUEST: request },
     }, (error) => resolve(error === null ? 0 : typeof error.code === "number" ? error.code : undefined));

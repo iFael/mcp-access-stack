@@ -4,8 +4,8 @@
   "origin": "https://mcp-access-stack.rafaeldamasio77.workers.dev",
   "previousRevision": "214cb5ddf906f322744e1b436f9c47f7c855100b283e7757f938d66423690414",
   "previousToolCount": 135,
-  "targetRevision": "92fbc6f69386387d62c7379fbbe6328f0009c81bd674e618746c0543539dfc45",
-  "targetToolCount": 137,
+  "targetRevision": "1e33a644e47fee8e59fd245f613ff9bd376ae2382b15fb8bd6e09a1780626a4e",
+  "targetToolCount": 138,
   "requiredTools": [
     "memory_context",
     "memory_update",
@@ -29,6 +29,7 @@
     "oracle_disk_audit",
     "oracle_disk_audit_provision",
     "oracle_apt_maintenance",
+    "workspace_install_dependencies",
     "relocate_repository_materialization",
     "git_create_worktree",
     "git_remove_worktree",

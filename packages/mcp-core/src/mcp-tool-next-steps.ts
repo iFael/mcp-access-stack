@@ -38,6 +38,8 @@ export const MCP_TOOL_NEXT_STEPS: Record<McpToolName, string> = {
   oracle_grant_github_ready_permission: "inspect first, then grant once with the observed SHA-256 and operationId; inspect again to confirm effective policy before using github_mark_pull_request_ready.",
   oracle_grant_worktree_permission: "inspect first, grant only git.worktree.write with the observed policy SHA-256 and operationId, then inspect again before using git_remove_worktree.",
 
+  workspace_install_dependencies: "wait_background_task with the returned task ID; verify the lock SHA from the result before starting install. Never repeat an uncertain operation with a new ID.",
+
   // Commands and background tasks
   run_command: "when it answers confirmation_required, show the reasons and call again with its confirmationId; when it became a background task, wait_background_task with its taskId.",
   start_background_task: "end your answer and wait to be woken when it ends, or wait_background_task with its taskId; read_background_task_output for its output.",

@@ -10,6 +10,8 @@ import {
   readBackgroundTaskLogsInputSchema,
   readBackgroundTaskOutputInputSchema,
   startBackgroundTaskInputSchema,
+  workspaceDependencyInstallInputSchema,
+  type WorkspaceDependencyInstallInput,
   writeBackgroundTaskStdinInputSchema,
   inspectGitInputSchema,
   getWorkspaceContextInputSchema,
@@ -234,6 +236,7 @@ import { OracleInstanceInventoryService } from "./oracle/oracle-instance-invento
 import { OracleDiskAuditService } from "./oracle/oracle-disk-audit.js";
 import { OracleDiskAuditProvisionService } from "./oracle/oracle-disk-audit-provision.js";
 import { OracleAptMaintenanceService } from "./oracle/oracle-apt-maintenance.js";
+import { authorizeDependencyRoot, createDependencyInstallRunner } from "./tasks/dependency-install.js";
 import { terminateProcessTreeByPid } from "./shell/process-runner.js";
 import {
   BackgroundTaskManager,
@@ -895,6 +898,45 @@ export class LocalAgent {
       (_workspace, parsed, activeContext) =>
         this.serviceControlService.start(parsed, activeContext.signal),
     );
+  }
+
+  async workspaceInstallDependencies(input: WorkspaceDependencyInstallInput,
+    context: OperationContext = {}): Promise<StartBackgroundTaskResult> {
+    return this.runValidatedAudited("workspaceInstallDependencies", "shell", workspaceDependencyInstallInputSchema,
+      input, context, (parsed) => ({ path: parsed.root, query: parsed.action, targetResource: parsed.operationId }),
+      async (workspace, parsed, activeContext) => {
+        await authorizeDependencyRoot(workspace, parsed);
+        const taskInput: StartBackgroundTaskInput = {
+          workspaceId: workspace.id,
+          operation: "workspace_install_dependencies:" + parsed.action,
+          command: "typed npm " + parsed.action + " " + parsed.expectedManifestSha256 + " " + (parsed.expectedLockSha256 ?? "absent"),
+          cwd: parsed.root, shell: "bash", timeoutMs: 300_000,
+        };
+        const access = backgroundTaskAccess(activeContext);
+        const store = this.mutationReceiptStoreFor(workspace);
+        const identity = {
+          workspaceId: workspace.id, operation: "workspace_install_dependencies" as const,
+          targetResource: parsed.root,
+          canonicalArgumentsDigest: canonicalSourceControlArgumentsDigest(parsed),
+          idempotencyKey: createHash("sha256").update("workspace_install_dependencies:" + parsed.operationId).digest("hex"),
+        };
+        const reservation = await store.reserve(identity);
+        if (reservation.disposition !== "execute") {
+          const task = await this.backgroundTaskManager.getTypedTask(taskInput, parsed.operationId, access);
+          if (!task) throw new AppError("EXECUTION_OUTCOME_UNKNOWN", "Dependency operation receipt exists without a retained task; inspect before retrying.");
+          return { status: "background_task_started" as const, task };
+        }
+        await store.markExecuting(identity);
+        try {
+          const task = await this.backgroundTaskManager.startTypedTask(taskInput, parsed.operationId,
+            createDependencyInstallRunner(workspace, parsed), access);
+          await store.markCompleted(identity, { taskId: task.id });
+          return { status: "background_task_started" as const, task };
+        } catch (error) {
+          await store.markReconciliationRequired(identity);
+          throw error;
+        }
+      });
   }
 
   async startBackgroundTask(

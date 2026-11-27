@@ -91,6 +91,7 @@ import { pruneReleasesInputSchema, pruneReleasesResultSchema } from "./release-p
 import { oracleListInstancesInputSchema, oracleListInstancesResultSchema } from "./oracle-instance-contracts.js";
 import { oracleDiskAuditInputSchema, oracleDiskAuditResultSchema, oracleDiskAuditProvisionInputSchema, oracleDiskAuditProvisionResultSchema } from "./oracle-disk-contracts.js";
 import { oracleAptMaintenanceInputSchema, oracleAptMaintenanceResultSchema } from "./oracle-apt-contracts.js";
+import { workspaceDependencyInstallInputSchema } from "./dependency-install-contracts.js";
 import { mcpUpdateInputSchema, mcpUpdatePublishedInputSchema, mcpUpdateResultSchema, mcpFluxoInputSchema, mcpFluxoResultSchema } from "./mcp-update-contracts.js";
 import { PROGRESS_CARD_URI } from "./mcp-browser-tools.js";
 import {releaseOrchestratorInputSchema,releaseOrchestratorResultSchema,releaseOrchestratorPublishedInputSchema,releaseOrchestratorPublishedOutputSchema,oracleReleaseAdvanceInputSchema} from "./release-orchestrator-contracts.js";
@@ -279,6 +280,7 @@ const BASE_WORKSPACE_TOOL_NAMES = [
   "oracle_disk_audit",
   "oracle_disk_audit_provision",
   "oracle_apt_maintenance",
+  "workspace_install_dependencies",
   "service_start",
   "run_workspace_validation",
   "run_workspace_validations",
@@ -1662,6 +1664,27 @@ export function registerWorkspaceTools(
         }
       },
     );
+  }
+
+  if (shouldInclude("workspace_install_dependencies", include)) {
+    server.registerTool("workspace_install_dependencies", {
+      title: "Resolve or install isolated workspace npm dependencies",
+      description: "Linux trusted-workspace only; requires an exact dependencyInstallRoots policy opt-in, private isolated manifest with exact versions, and SHA-256 CAS. Resolve creates only a new lock; install requires the exact lock and absent node_modules. Uses fixed public npm registry, disables scripts and non-registry dependencies, never overwrites existing dependencies. Starts one persisted task with the caller's operationId; reconcile the same ID with wait_background_task. No arbitrary commands or package arguments.",
+      inputSchema: workspaceDependencyInstallInputSchema,
+      outputSchema: startBackgroundTaskMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      _meta: meta,
+    }, async (input, extra) => {
+      const authError = validateAuthentication(options, extra.authInfo);
+      if (authError) return authError;
+      try {
+        if (!executor.workspaceInstallDependencies) throw new AppErrorClass("CAPABILITY_UNSUPPORTED", "Typed dependency installation is unavailable.");
+        const structuredContent = startBackgroundTaskResultSchema.parse(
+          await withToolOperationContext(options.operationContextFactory, extra, QUICK_OPERATION_TIMEOUT_MS,
+            (context) => executor.workspaceInstallDependencies!(workspaceDependencyInstallInputSchema.parse(input), context)));
+        return { content: [{ type: "text", text: "Bounded dependency task accepted; reconcile its task ID." }], structuredContent };
+      } catch (error) { return toolError(error); }
+    });
   }
 
   if (shouldInclude("oracle_apt_maintenance", include)) {
@@ -4235,6 +4258,7 @@ export const relayOperationToToolName: Record<RelayOperation, WorkspaceToolName>
   oracleDiskAudit: "oracle_disk_audit",
   oracleDiskAuditProvision: "oracle_disk_audit_provision",
   oracleAptMaintenance: "oracle_apt_maintenance",
+  workspaceInstallDependencies: "workspace_install_dependencies",
   oracleReleaseAdvance:"release_orchestrator",
   mcpUpdate:"mcp_update",
   prepareRelease: "prepare_release",

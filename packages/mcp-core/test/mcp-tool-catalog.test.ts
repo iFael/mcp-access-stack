@@ -10,8 +10,8 @@ import {
 
 describe("MCP tool catalog identity", () => {
   it("keeps the public tool-name set complete and unique", () => {
-    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(137);
-    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(137);
+    expect(MCP_FULL_TOOL_CATALOG_NAMES).toHaveLength(138);
+    expect(new Set(MCP_FULL_TOOL_CATALOG_NAMES).size).toBe(138);
     expect(MCP_FULL_TOOL_CATALOG_NAMES).not.toContain("browser_plan");
     expect(MCP_FULL_TOOL_CATALOG_NAMES).toEqual(
       expect.arrayContaining([
@@ -24,6 +24,7 @@ describe("MCP tool catalog identity", () => {
         "oracle_disk_audit",
         "oracle_disk_audit_provision",
         "oracle_apt_maintenance",
+        "workspace_install_dependencies",
         "service_get_status",
         "service_start",
         "prune_releases",

@@ -167,6 +167,9 @@ async function resolveWorkspaces(
       limits: workspace.limits,
       allowWrites,
       allowShell,
+      ...(workspace.dependencyInstallRoots === undefined ? {} : {
+        dependencyInstallRoots: workspace.dependencyInstallRoots.map((entry) => normalizeRelativePath(entry)),
+      }),
       allowedShells,
       ...(workspace.sourceControl === undefined ? {} : { sourceControl: workspace.sourceControl }),
     });

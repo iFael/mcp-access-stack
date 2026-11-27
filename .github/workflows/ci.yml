@@ -892,6 +892,10 @@ jobs:
           pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpV3LocalLifecycle.ps1
           pwsh -NoLogo -NoProfile -File deploy/windows/Test-McpWindowsExecutionNodeStaging.ps1
 
+      - name: Test native Windows file deletion
+        if: runner.os == 'Windows'
+        run: node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/integration/filesystem/delete-file.test.ts
+
       - name: Test real Windows native launcher through Task Scheduler
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1004,6 +1008,18 @@ jobs:
           git --version
           sudo apt-get remove -y mcp-v3-local
           test ! -e /usr/bin/mcp-v3
+
+      - name: Set up verified npm runtime for dependency capability
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '26.10.0'
+
+      - name: Test isolated dependency resolution and installation
+        if: runner.os == 'Linux'
+        env:
+          MCP_TEST_REAL_NPM: '1'
+        run: node tooling/testing/run-jest.mjs --config services/workspace-agent/jest.config.ts --runInBand --runTestsByPath services/workspace-agent/test/unit/dependency-install.test.ts
 
       - name: Build macOS native package
         if: runner.os == 'macOS'

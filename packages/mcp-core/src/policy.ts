@@ -62,6 +62,8 @@ export const workspacePolicySchema = z
     limits: workspaceLimitsSchema,
     allowWrites: z.array(z.string().trim().min(1)).default([]),
     allowShell: z.array(z.string().trim().min(1)).default([]),
+    // Exact opt-in subdirectories for typed isolated npm installation.
+    dependencyInstallRoots: z.array(z.string().trim().min(1).max(512)).max(32).optional(),
     allowedShells: z.array(shellNameSchema).default(["powershell"]),
     sourceControl: sourceControlPolicySchema.optional(),
   })

@@ -127,8 +127,38 @@ export class BackgroundTaskManager {
     input: StartBackgroundTaskInput,
     access: BackgroundTaskAccessContext = {},
   ): Promise<BackgroundTaskRecord> {
+    return this.startTask(input, access);
+  }
+
+  // Only in-process typed capabilities may supply a runner. Raw shell input
+  // never selects this path. The caller's operation ID is also the task ID.
+  async startTypedTask(input: StartBackgroundTaskInput, operationId: string,
+    runner: BackgroundTaskRunner, access: BackgroundTaskAccessContext = {}): Promise<BackgroundTaskRecord> {
+    return this.startTask(input, access, { operationId, runner });
+  }
+
+  async getTypedTask(input: StartBackgroundTaskInput, operationId: string,
+    access: BackgroundTaskAccessContext = {}): Promise<BackgroundTaskRecord | null> {
+    const task = await this.get_background_task(operationId, access);
+    if (!task) return null;
+    if (task.commandHash !== typedTaskHash(normalizeStartInput(input))) {
+      throw new AppError("IDEMPOTENCY_KEY_CONFLICT", "Typed task operation identity differs.");
+    }
+    return task;
+  }
+
+  private async startTask(
+    input: StartBackgroundTaskInput,
+    access: BackgroundTaskAccessContext,
+    typed?: { operationId: string; runner: BackgroundTaskRunner },
+  ): Promise<BackgroundTaskRecord> {
     await this.ensureInitialized();
     const normalized = normalizeStartInput(input);
+    if (typed) {
+      assertTaskId(typed.operationId);
+      if (normalized.interactive) throw new AppError("INVALID_ARGUMENT", "Typed tasks cannot be interactive.");
+      normalized.commandHash = typedTaskHash(normalized);
+    }
     const ownerScopeHash = hashOwnerScope(access.ownerScope);
     let releaseQueue!: () => void;
     const previousStart = this.startQueue;
@@ -138,6 +168,18 @@ export class BackgroundTaskManager {
     await previousStart;
 
     try {
+      if (typed) {
+        const previous = this.records.get(typed.operationId);
+        if (previous) {
+          if (!canAccessRecord(previous, access) || previous.commandHash !== normalized.commandHash) {
+            throw new AppError("IDEMPOTENCY_KEY_CONFLICT", "Typed task operation identity differs.");
+          }
+          return toPublicRecord(await this.refreshRecoveredTask(previous));
+        }
+        if (await this.hasActiveTasksForWorkspace(normalized.workspaceId)) {
+          throw new AppError("AGENT_BUSY", "Typed dependency installation requires no active workspace tasks.");
+        }
+      }
       const existing = await this.list_background_tasks(
         { workspaceId: normalized.workspaceId },
         access,
@@ -153,7 +195,7 @@ export class BackgroundTaskManager {
 
       const record: PersistedBackgroundTaskRecord = {
         version: 1,
-        id: randomUUID(),
+        id: typed?.operationId ?? randomUUID(),
         workspaceId: normalized.workspaceId,
         operation: normalized.operation,
         commandHash: normalized.commandHash,
@@ -171,7 +213,7 @@ export class BackgroundTaskManager {
 
       const controller = new AbortController();
       this.controllers.set(record.id, controller);
-      const execution = this.execute(record, controller, normalized.command);
+      const execution = this.execute(record, controller, normalized.command, typed?.runner);
       this.executions.set(record.id, execution);
       void execution
         .finally(() => {
@@ -412,6 +454,7 @@ export class BackgroundTaskManager {
     initial: PersistedBackgroundTaskRecord,
     controller: AbortController,
     command: string,
+    runner: BackgroundTaskRunner = this.options.runner,
   ): Promise<void> {
     let current: PersistedBackgroundTaskRecord = {
       ...initial,
@@ -421,7 +464,7 @@ export class BackgroundTaskManager {
     await this.persist(current);
 
     try {
-      const rawResult = await this.options.runner.start(
+      const rawResult = await runner.start(
         {
           workspaceId: current.workspaceId,
           command,
@@ -685,16 +728,14 @@ export class BackgroundTaskManager {
   }
 
   private async initializeTaskFiles(id: string): Promise<void> {
+    const created: string[] = [];
     try {
-      await Promise.all([
-        writeFile(this.stdoutPath(id), "", { flag: "wx" }),
-        writeFile(this.stderrPath(id), "", { flag: "wx" }),
-      ]);
+      for (const file of [this.stdoutPath(id), this.stderrPath(id)]) {
+        await writeFile(file, "", { flag: "wx" });
+        created.push(file);
+      }
     } catch (error) {
-      await Promise.all([
-        rm(this.stdoutPath(id), { force: true }),
-        rm(this.stderrPath(id), { force: true }),
-      ]);
+      await Promise.all(created.map((file) => rm(file, { force: true })));
       throw error;
     }
   }
@@ -782,6 +823,11 @@ function normalizeStartInput(input: StartBackgroundTaskInput): {
     interactive: parsed.interactive,
     commandHash,
   };
+}
+
+function typedTaskHash(input: ReturnType<typeof normalizeStartInput>): string {
+  return createHash("sha256").update("typed-task-v1\0").update(input.commandHash)
+    .update("\0").update(input.operation).update("\0").update(String(input.timeoutMs)).digest("hex");
 }
 
 function parsePersistedRecord(raw: string): PersistedBackgroundTaskRecord {

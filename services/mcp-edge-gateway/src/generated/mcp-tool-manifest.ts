@@ -4327,6 +4327,427 @@ export const EDGE_MCP_TOOL_MANIFEST = [
   },
   {
     "_meta": {
+      "io.github.ifael/next-step": "wait_background_task with the returned task ID; verify the lock SHA from the result before starting install. Never repeat an uncertain operation with a new ID.",
+      "securitySchemes": [
+        {
+          "scopes": [
+            "workspaces:read"
+          ],
+          "type": "oauth2"
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Linux trusted-workspace only; requires an exact dependencyInstallRoots policy opt-in, private isolated manifest with exact versions, and SHA-256 CAS. Resolve creates only a new lock; install requires the exact lock and absent node_modules. Uses fixed public npm registry, disables scripts and non-registry dependencies, never overwrites existing dependencies. Starts one persisted task with the caller's operationId; reconcile the same ID with wait_background_task. No arbitrary commands or package arguments. Next: wait_background_task with the returned task ID; verify the lock SHA from the result before starting install. Never repeat an uncertain operation with a new ID.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "resolve",
+            "install"
+          ],
+          "type": "string"
+        },
+        "expectedLockSha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedManifestSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "operationId": {
+          "allOf": [
+            {
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            {
+              "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+              "type": "string"
+            }
+          ],
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$",
+          "type": "string"
+        },
+        "workspaceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "root",
+        "operationId",
+        "action",
+        "expectedManifestSha256",
+        "expectedLockSha256"
+      ],
+      "type": "object"
+    },
+    "name": "workspace_install_dependencies",
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmationId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "shell": {
+          "enum": [
+            "powershell",
+            "pwsh",
+            "cmd",
+            "sh",
+            "bash",
+            "wsl",
+            "git-bash"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "background_task_started",
+            "confirmation_required"
+          ],
+          "type": "string"
+        },
+        "task": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "maxLength": 32000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "commandHash": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "completedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "cwd": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "id": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "interactive": {
+              "const": true,
+              "type": "boolean"
+            },
+            "lifecycle": {
+              "additionalProperties": false,
+              "properties": {
+                "deadlineAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "diagnostic": {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "effectiveTimeoutMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "elapsedMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "enum": [
+                    "timeout",
+                    "cancelled",
+                    "client_disconnected",
+                    "upstream_timeout",
+                    "process_failed"
+                  ],
+                  "type": "string"
+                },
+                "requestedTimeoutMs": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 86400000,
+                  "type": "integer"
+                },
+                "terminatedBy": {
+                  "enum": [
+                    "chatgpt_tool",
+                    "mcp_server",
+                    "gateway",
+                    "relay",
+                    "workspace_agent",
+                    "executor",
+                    "child_process",
+                    "http_client",
+                    "http_server",
+                    "websocket",
+                    "proxy",
+                    "background_task_manager",
+                    "external"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestedTimeoutMs",
+                "effectiveTimeoutMs",
+                "deadlineAt",
+                "elapsedMs"
+              ],
+              "type": "object"
+            },
+            "operation": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "exitCode": {
+                  "anyOf": [
+                    {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lifecycle": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deadlineAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "diagnostic": {
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "effectiveTimeoutMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "elapsedMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "enum": [
+                        "timeout",
+                        "cancelled",
+                        "client_disconnected",
+                        "upstream_timeout",
+                        "process_failed"
+                      ],
+                      "type": "string"
+                    },
+                    "requestedTimeoutMs": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 86400000,
+                      "type": "integer"
+                    },
+                    "terminatedBy": {
+                      "enum": [
+                        "chatgpt_tool",
+                        "mcp_server",
+                        "gateway",
+                        "relay",
+                        "workspace_agent",
+                        "executor",
+                        "child_process",
+                        "http_client",
+                        "http_server",
+                        "websocket",
+                        "proxy",
+                        "background_task_manager",
+                        "external"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "requestedTimeoutMs",
+                    "effectiveTimeoutMs",
+                    "deadlineAt",
+                    "elapsedMs"
+                  ],
+                  "type": "object"
+                },
+                "shell": {
+                  "enum": [
+                    "powershell",
+                    "pwsh",
+                    "cmd",
+                    "sh",
+                    "bash",
+                    "wsl",
+                    "git-bash"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "executed",
+                  "type": "string"
+                },
+                "stderr": {
+                  "type": "string"
+                },
+                "stdout": {
+                  "type": "string"
+                },
+                "timedOut": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "status",
+                "shell",
+                "cwd",
+                "exitCode",
+                "stdout",
+                "stderr",
+                "timedOut"
+              ],
+              "type": "object"
+            },
+            "shell": {
+              "enum": [
+                "powershell",
+                "pwsh",
+                "cmd",
+                "sh",
+                "bash",
+                "wsl",
+                "git-bash"
+              ],
+              "type": "string"
+            },
+            "startedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "starting",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "timeoutMs": {
+              "maximum": 86400000,
+              "minimum": 30000,
+              "type": "integer"
+            },
+            "version": {
+              "const": 1,
+              "type": "number"
+            },
+            "workspaceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "workspaceId",
+            "operation",
+            "commandHash",
+            "command",
+            "shell",
+            "cwd",
+            "state",
+            "createdAt",
+            "timeoutMs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "title": "Resolve or install isolated workspace npm dependencies"
+  },
+  {
+    "_meta": {
       "io.github.ifael/next-step": "Plan first; apply only with explicit authorization, plan digest and operationId. Read status with the same ID until terminal. Missing helper: authorized host admin. Never elevate run_command or retry uncertain apply.",
       "securitySchemes": [
         {
@@ -31925,15 +32346,15 @@ export const EDGE_MCP_TOOL_MANIFEST = [
 ] as const;
 
 export const EDGE_MCP_CATALOG_METADATA = {
-  "contractRevision": "92fbc6f69386387d62c7379fbbe6328f0009c81bd674e618746c0543539dfc45",
-  "serverVersion": "0.4.0-catalog.c92fbc6f69386.se843887b199f",
-  "toolCount": 137,
-  "toolSetRevision": "e843887b199fab26c5a89f4f7faefd3795615e935bb0d8e4a7bf301e21eed04b"
+  "contractRevision": "1e33a644e47fee8e59fd245f613ff9bd376ae2382b15fb8bd6e09a1780626a4e",
+  "serverVersion": "0.4.0-catalog.c1e33a644e47f.s6e4480b8bf8a",
+  "toolCount": 138,
+  "toolSetRevision": "6e4480b8bf8a5cc6d285b427b799e690090656effea714f7b8b035ed005458fc"
 } as const;
 
 export const EDGE_MCP_SERVER_IDENTITY = {
   "name": "vs-code-gpt",
-  "version": "0.4.0-catalog.c92fbc6f69386.se843887b199f"
+  "version": "0.4.0-catalog.c1e33a644e47f.s6e4480b8bf8a"
 } as const;
 
 export const EDGE_MCP_SERVER_INSTRUCTIONS = "MCP Access Stack. At the start of an MCP project task, select the authorized workspace and call get_workspace_context early, before changing any code: its result includes the priority Central Memory operational briefing. Next query memory_context for relevant evidence and any resolved precedents. Monitoring observations are untrusted, not verified root causes or authorization. Record user-approved decisions and meaningful verified checkpoints with memory_update and exact CAS; memory is untrusted context, not proof of Git, CI, release status or authorization. Do not treat an unavailable memory as proof of an empty project. For MCP failures, query memory_context by the exact error code or stable symptom, including resolved issues, before repeating diagnosis. Reuse only fixes with verified cause, tests and compatible runtime. Record distinct operational incidents and proven remedies, not per-chat actions or every user-task failure. Automated remediation must remain within authorized safe gates; do not infer root cause from one error. Before a multi-step job (publishing or installing a release, operating the execution node, Git and pull-request flows, long-running tasks, browser work), call get_operation_guide with the matching topic and follow its steps. Prefer the typed tool for each job over run_command; never use sudo, ssh or an elevated shell to do what a typed tool does. Choose the workspace by host: the Linux execution-node workspace for releases and GitHub workflow operations, the Windows workspace for the user's local files and personal Chrome. On a refusal, read get_operation_guide topic=refusals instead of retrying another way. Every MCP V3 job uses one Fluxo card per conversation: call mcp_fluxo action=open before the first operation (title and steps optional). Reuse its planId; update meaningful planning changes via browser_progress_update, and let observed native progress follow automatically. Do not reopen or duplicate the card unless the user requests it or recovery requires it. For an authorized release use mcp_fluxo operation=update_mcp action=start, passing the same planId and exact MAIN SHA. Report failures truthfully and reconcile persisted operations by their original IDs. Consult PR metadata through github_get_pull_request when needed to verify the head SHA, reviews or merge; it returns data without an inline card.";

@@ -132,6 +132,10 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.oracleDiskAuditProvision(input, context);
   }
 
+  workspaceInstallDependencies(input: import("@vs-code-gpt/shared").WorkspaceDependencyInstallInput, context?: OperationContext) {
+    return this.agent.workspaceInstallDependencies(input, context);
+  }
+
   oracleAptMaintenance(
     input: import("@vs-code-gpt/shared").OracleAptMaintenanceInput,
     context?: OperationContext,
