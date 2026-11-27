@@ -1,7 +1,8 @@
-import { lstat, mkdir, readFile, readdir, rmdir, symlink, unlink } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, rmdir, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
-import { AppError } from "@vs-code-gpt/shared";
+import { AppError, type GitStashPathsInput } from "@vs-code-gpt/shared";
 import { GitRepositoryService } from "../../../src/source-control/git-repository-service.js";
 import type { GitProcessExecutor } from "../../../src/source-control/git-process-runner.js";
 import { WorkspaceRegistry } from "../../../src/workspace-registry.js";
@@ -31,6 +32,8 @@ async function setupRepository(options: { branch?: string } = {}): Promise<{
 }> {
   fixture = await createFixture({ profile: "full-repo-write" });
   initializeGitRepository(fixture.workspacePath);
+  // These fixtures assert exact LF bytes, independent of the runner's global Git config.
+  git(fixture.workspacePath, ["config", "core.autocrlf", "false"]);
   git(fixture.workspacePath, ["checkout", "-b", options.branch ?? "main"]);
   await writeWorkspaceFile(fixture.workspacePath, "base.txt", "base\n");
   git(fixture.workspacePath, ["add", "base.txt"]);
@@ -178,6 +181,55 @@ describe("GitRepositoryService isolated worktrees", () => {
     })).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
     expect(await readdir(external)).toEqual([]);
   });
+  it("detaches a clean registered worktree at the same SHA, preserving its branch and ignored runtime", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/old-main";
+    const target = path.join(source, destination);
+    git(source, ["switch", "-c", "feature/current"]);
+    git(source, ["worktree", "add", target, "main"]);
+    await writeWorkspaceFile(source, ".git/info/exclude", ".worktrees/\nruntime/\n");
+    await writeWorkspaceFile(target, "runtime/keep.txt", "preserve\n");
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha,
+      expectedWorktreeHeadSha: headSha, expectedBranch: "main" };
+
+    await expect(service.detachWorktree(input)).resolves.toEqual({
+      root: ".", destination, sourceHeadSha: headSha, headSha,
+      previousBranch: "main", detached: true,
+    });
+    expect(git(target, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("HEAD");
+    expect(git(target, ["rev-parse", "HEAD"]).trim()).toBe(headSha);
+    expect(git(source, ["rev-parse", "refs/heads/main"]).trim()).toBe(headSha);
+    expect(currentBranch()).toBe("feature/current");
+    expect(await readFile(path.join(target, "runtime/keep.txt"), "utf8")).toBe("preserve\n");
+    expect(await readFile(path.join(target, "base.txt"), "utf8")).toBe("base\n");
+    git(source, ["switch", "main"]);
+    expect(currentBranch()).toBe("main");
+  });
+
+  it("refuses detach for stale source, target or branch identity and for dirty worktrees", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/old-feature";
+    const target = path.join(source, destination);
+    git(source, ["worktree", "add", "-b", "feature/old", target, headSha]);
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha,
+      expectedWorktreeHeadSha: headSha, expectedBranch: "feature/old" };
+
+    await expect(service.detachWorktree({ ...input, expectedSourceHeadSha: "f".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await expect(service.detachWorktree({ ...input, expectedWorktreeHeadSha: "e".repeat(40) }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    await expect(service.detachWorktree({ ...input, expectedBranch: "feature/wrong" }))
+      .rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    await writeWorkspaceFile(target, "base.txt", "local change\n");
+    await expect(service.detachWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(await readFile(path.join(target, "base.txt"), "utf8")).toBe("local change\n");
+    await writeWorkspaceFile(target, "base.txt", "base\n");
+    await writeWorkspaceFile(target, "untracked.txt", "local file\n");
+    await expect(service.detachWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    expect(git(target, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/old");
+    expect(await readFile(path.join(target, "untracked.txt"), "utf8")).toBe("local file\n");
+  });
+
   it("removes only a registered clean worktree without changing a dirty source checkout", async () => {
     const { service, headSha, source } = await setupRemote();
     const destination = ".worktrees/clean-main";
@@ -243,6 +295,65 @@ describe("GitRepositoryService isolated worktrees", () => {
       pruneGeneratedArtifacts: true,
     });
     expect(removed.removed).toBe(true);
+    await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes only an explicitly approved missing worktree registration and preserves its branch", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/missing-checkout";
+    const target = path.join(source, destination);
+    git(source, ["worktree", "add", "-b", "feature/missing", target, headSha]);
+    await rm(target, { recursive: true });
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha };
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    await expect(service.removeWorktree({ ...input, expectedWorktreeHeadSha: "f".repeat(40), pruneMissingRegistration: true }))
+      .rejects.toMatchObject({ code: "GIT_HEAD_MISMATCH" });
+    const removed = await service.removeWorktree({ ...input, pruneMissingRegistration: true });
+    expect(removed).toMatchObject({ removed: true, removedMissingRegistration: true, removedWorktreeHeadSha: headSha });
+    expect(git(source, ["worktree", "list", "--porcelain"])).not.toContain(target);
+    expect(git(source, ["rev-parse", "refs/heads/feature/missing"]).trim()).toBe(headSha);
+  });
+
+  it("refuses a missing-registration request when the checkout still exists", async () => {
+    const { service, headSha, source } = await setupRemote();
+    const destination = ".worktrees/still-present";
+    await service.createWorktree({ workspaceId: "test", destination, expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    await expect(service.removeWorktree({ workspaceId: "test", destination,
+      expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha, pruneMissingRegistration: true }))
+      .rejects.toMatchObject({ code: "GIT_BRANCH_CONFLICT" });
+    expect(await readFile(path.join(source, destination, "base.txt"), "utf8")).toContain("base");
+  });
+
+  it("prunes exactly approved ignored historical files together with known caches", async () => {
+    if (process.platform !== "linux") return;
+    const { headSha, source } = await setupRemote();
+    await writePolicy(fixture!.policyPath, [{ ...makeWorkspacePolicy(source, { profile: "full-repo-write" }), allowWrites: ["."] }]);
+    const service = await GitRepositoryService.create(await WorkspaceRegistry.load(fixture!.policyPath));
+    const destination = ".worktrees/historical";
+    await service.createWorktree({ workspaceId: "test", destination, expectedHeadSha: headSha, expectedRemoteSha: headSha });
+    const target = path.join(source, destination);
+    await writeWorkspaceFile(source, ".git/info/exclude", "node_modules/\n.codex/\nruntime/\n");
+    await writeWorkspaceFile(target, "node_modules/cache.txt", "generated\n");
+    await writeWorkspaceFile(target, ".codex/HANDOFF.md", "historical\n");
+    const input = { workspaceId: "test", destination, expectedSourceHeadSha: headSha, expectedWorktreeHeadSha: headSha,
+      pruneGeneratedArtifacts: true, pruneIgnoredFiles: [{ path: ".codex/HANDOFF.md",
+        expectedSha256: createHash("sha256").update("historical\n").digest("hex") }] };
+    await writeWorkspaceFile(target, ".codex/UNKNOWN.md", "not approved\n");
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "GIT_INDEX_CHANGED" });
+    await unlink(path.join(target, ".codex/UNKNOWN.md"));
+    await writeWorkspaceFile(target, "runtime/keep.txt", "runtime\n");
+    await expect(service.removeWorktree({ ...input, pruneIgnoredFiles: [...input.pruneIgnoredFiles,
+      { path: "runtime/keep.txt", expectedSha256: createHash("sha256").update("runtime\n").digest("hex") }] })).rejects.toThrow();
+    expect(await readFile(path.join(target, "runtime/keep.txt"), "utf8")).toBe("runtime\n");
+    await unlink(path.join(target, "runtime/keep.txt"));
+    await expect(service.removeWorktree(input)).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    expect((await lstat(path.join(target, "runtime"))).isDirectory()).toBe(true);
+    await rmdir(path.join(target, "runtime"));
+    await expect(service.removeWorktree({ ...input, pruneIgnoredFiles: [{ path: input.pruneIgnoredFiles[0]!.path, expectedSha256: "f".repeat(64) }] }))
+      .rejects.toThrow();
+    expect(await readFile(path.join(target, "node_modules/cache.txt"), "utf8")).toBe("generated\n");
+    expect(await readFile(path.join(target, ".codex/HANDOFF.md"), "utf8")).toBe("historical\n");
+    await expect(service.removeWorktree(input)).resolves.toMatchObject({ removed: true });
     await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -632,6 +743,115 @@ describe("GitRepositoryService fast-forward merge", () => {
       fastForwarded: true,
     });
     expect(head()).toBe(sourceSha);
+  });
+});
+
+describe("GitRepositoryService explicit stash", () => {
+  const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+
+  async function setupStash() {
+    const { headSha } = await setupRepository({ branch: "feature/stash" });
+    const root = fixture!.workspacePath;
+    await writePolicy(fixture!.policyPath, [{
+      ...makeWorkspacePolicy(root, { profile: "full-repo-write" }),
+      allowWrites: ["."],
+    }]);
+    const service = await GitRepositoryService.create(await WorkspaceRegistry.load(fixture!.policyPath));
+    await writeWorkspaceFile(root, ".git/info/exclude", "runtime/\n");
+    await writeWorkspaceFile(root, "runtime/keep.txt", "ignored\n");
+    await writeWorkspaceFile(root, "base.txt", "staged\n");
+    git(root, ["add", "base.txt"]);
+    await writeWorkspaceFile(root, "base.txt", "unstaged\n");
+    await writeWorkspaceFile(root, "note[1].txt", "untracked\n");
+    const input: GitStashPathsInput = {
+      workspaceId: "test", expectedHeadSha: headSha, expectedBranch: "feature/stash",
+      expectedIndexTreeSha: writeTree(), expectedStashSha: null,
+      files: [{ path: "base.txt", status: "MM", expectedSha256: sha256("unstaged\n") },
+        { path: "note[1].txt", status: "??", expectedSha256: sha256("untracked\n") }],
+    };
+    return { service, root, input };
+  }
+
+  it("preserves staged, unstaged and explicit untracked files in one native stash without touching ignored files", async () => {
+    const { service, root, input } = await setupStash();
+    const result = await service.stashPaths(input);
+    expect(result).toMatchObject({ root: ".", branch: input.expectedBranch, headSha: input.expectedHeadSha,
+      paths: ["base.txt", "note[1].txt"], previousStashSha: null, stashSha: expect.stringMatching(/^[a-f0-9]{40}$/u) });
+    expect(git(root, ["rev-parse", "refs/stash"]).trim()).toBe(result.stashSha);
+    expect(git(root, ["status", "--porcelain"]).trim()).toBe("");
+    expect(await readFile(path.join(root, "runtime/keep.txt"), "utf8")).toBe("ignored\n");
+    expect(head()).toBe(input.expectedHeadSha);
+    expect(currentBranch()).toBe(input.expectedBranch);
+    git(root, ["stash", "apply", "--index", result.stashSha]);
+    expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\n");
+    expect(git(root, ["show", ":base.txt"])).toBe("staged\n");
+    expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\n");
+  });
+
+  it("preserves Git's native CRLF checkout and LF index semantics with autocrlf enabled", async () => {
+    const { service, root, input } = await setupStash();
+    git(root, ["config", "core.autocrlf", "true"]);
+    await writeWorkspaceFile(root, "base.txt", "unstaged\r\n");
+    await writeWorkspaceFile(root, "note[1].txt", "untracked\r\n");
+    const result = await service.stashPaths({ ...input, files: [
+      { path: "base.txt", status: "MM", expectedSha256: sha256("unstaged\r\n") },
+      { path: "note[1].txt", status: "??", expectedSha256: sha256("untracked\r\n") },
+    ] });
+    git(root, ["stash", "apply", "--index", result.stashSha]);
+    expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\r\n");
+    expect(git(root, ["show", ":base.txt"])).toBe("staged\n");
+    expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\r\n");
+  });
+
+  it("preserves a previously existing stash and checkpoints an explicit deletion", async () => {
+    const { service, root, input } = await setupStash();
+    const first = await service.stashPaths(input);
+    await unlink(path.join(root, "base.txt"));
+    const deletion: GitStashPathsInput = {
+      ...input, expectedIndexTreeSha: writeTree(), expectedStashSha: first.stashSha,
+      files: [{ path: "base.txt", status: " D", expectedSha256: null }],
+    };
+    const second = await service.stashPaths(deletion);
+    expect(second.previousStashSha).toBe(first.stashSha);
+    expect(second.stashSha).not.toBe(first.stashSha);
+    expect(git(root, ["rev-parse", "stash@{1}"]).trim()).toBe(first.stashSha);
+    expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("base\n");
+    git(root, ["stash", "apply", "--index", second.stashSha]);
+    await expect(lstat(path.join(root, "base.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(root, "runtime/keep.txt"), "utf8")).toBe("ignored\n");
+  });
+
+  it("refuses incomplete inventory, stale hashes, index, branch and stash CAS without clearing changes", async () => {
+    const { service, root, input } = await setupStash();
+    for (const invalid of [
+      { ...input, files: input.files.slice(0, 1) },
+      { ...input, expectedIndexTreeSha: "a".repeat(40) },
+      { ...input, expectedHeadSha: "b".repeat(40) },
+      { ...input, expectedBranch: "feature/wrong" },
+      { ...input, expectedStashSha: "c".repeat(40) },
+      { ...input, files: input.files.map((file) => ({ ...file, expectedSha256: "d".repeat(64) })) },
+    ]) {
+      await expect(service.stashPaths(invalid)).rejects.toThrow();
+      expect(git(root, ["stash", "list"])).toBe("");
+      expect(await readFile(path.join(root, "base.txt"), "utf8")).toBe("unstaged\n");
+      expect(await readFile(path.join(root, "note[1].txt"), "utf8")).toBe("untracked\n");
+      expect(writeTree()).toBe(input.expectedIndexTreeSha);
+    }
+  });
+
+  it("refuses blocked and symbolic link paths before native stash", async () => {
+    const { service, root, input } = await setupStash();
+    await writeWorkspaceFile(root, ".env", "private\n");
+    await expect(service.stashPaths({ ...input, files: [...input.files,
+      { path: ".env", status: "??", expectedSha256: sha256("private\n") }] })).rejects.toMatchObject({ code: "BLOCKED_PATH" });
+    await unlink(path.join(root, ".env"));
+    if (process.platform !== "win32") {
+      await symlink(path.join(root, "base.txt"), path.join(root, "link.txt"));
+      await expect(service.stashPaths({ ...input, files: [...input.files,
+        { path: "link.txt", status: "??", expectedSha256: sha256("unstaged\n") }] })).rejects.toThrow();
+      expect((await lstat(path.join(root, "link.txt"))).isSymbolicLink()).toBe(true);
+    }
+    expect(git(root, ["stash", "list"])).toBe("");
   });
 });
 

@@ -28,6 +28,7 @@ export interface ResolvedWorkspace {
   limits: WorkspaceLimits;
   allowWrites: string[];
   allowShell: string[];
+  dependencyInstallRoots?: string[];
   allowedShells: ShellName[];
   sourceControl?: SourceControlPolicy;
 }

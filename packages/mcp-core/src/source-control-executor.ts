@@ -8,6 +8,10 @@ import type {
   GitCreateWorktreeResult,
   GitRemoveWorktreeInput,
   GitRemoveWorktreeResult,
+  GitDetachWorktreeInput,
+  GitDetachWorktreeResult,
+  GitStashPathsInput,
+  GitStashPathsResult,
   GitHubCreatePullRequestInput,
   GitHubCreatePullRequestResult,
   GitHubClosePullRequestInput,
@@ -20,6 +24,8 @@ import type {
   GitHubGetCommitChecksInput,
   GitHubWorkflowOperationInput,
   GitHubWorkflowOperationResult,
+  GitHubRerunFailedJobsInput,
+  GitHubRerunFailedJobsResult,
   GitHubMaterializeActionsArtifactInput,
   GitHubMaterializeActionsArtifactResult,
   GitHubGetPullRequestInput,
@@ -65,6 +71,14 @@ export interface GitRepositoryExecutor {
     input: GitRemoveWorktreeInput,
     context?: OperationContext,
   ): Promise<GitRemoveWorktreeResult>;
+  detachWorktree(
+    input: GitDetachWorktreeInput,
+    context?: OperationContext,
+  ): Promise<GitDetachWorktreeResult>;
+  stashPaths(
+    input: GitStashPathsInput,
+    context?: OperationContext,
+  ): Promise<GitStashPathsResult>;
   stagePaths(
     input: GitStagePathsInput,
     context?: OperationContext,
@@ -112,6 +126,8 @@ export interface GitHubChecksWatchExecutor {
 
 /** Unified typed GitHub Actions control, dispatch and reconciliation in one operation. */
 export interface GitHubWorkflowExecutor {
+  githubRerunFailedJobs(input: GitHubRerunFailedJobsInput,
+    context?: OperationContext): Promise<GitHubRerunFailedJobsResult>;
   githubWorkflowOperation(input: GitHubWorkflowOperationInput,
     context?: OperationContext): Promise<GitHubWorkflowOperationResult>;
 }

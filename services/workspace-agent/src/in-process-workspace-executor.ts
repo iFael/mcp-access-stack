@@ -132,6 +132,10 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
     return this.agent.oracleDiskAuditProvision(input, context);
   }
 
+  workspaceInstallDependencies(input: import("@vs-code-gpt/shared").WorkspaceDependencyInstallInput, context?: OperationContext) {
+    return this.agent.workspaceInstallDependencies(input, context);
+  }
+
   oracleAptMaintenance(
     input: import("@vs-code-gpt/shared").OracleAptMaintenanceInput,
     context?: OperationContext,
@@ -267,6 +271,12 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   removeWorktree(...args: Parameters<GitRepositoryExecutor["removeWorktree"]>) {
     return this.agent.gitRemoveWorktree(...args);
   }
+  detachWorktree(...args: Parameters<GitRepositoryExecutor["detachWorktree"]>) {
+    return this.agent.gitDetachWorktree(...args);
+  }
+  stashPaths(...args: Parameters<GitRepositoryExecutor["stashPaths"]>) {
+    return this.agent.gitStashPaths(...args);
+  }
   stagePaths(...args: Parameters<GitRepositoryExecutor["stagePaths"]>) {
     return this.agent.gitStagePaths(...args);
   }
@@ -293,6 +303,9 @@ export class InProcessWorkspaceExecutor implements WorkspaceExecutor, GitReposit
   }
   getCommitChecks(...args: Parameters<GitHubExecutor["getCommitChecks"]>) {
     return this.agent.githubGetCommitChecks(...args);
+  }
+  githubRerunFailedJobs(...args: Parameters<LocalAgent["githubRerunFailedJobs"]>) {
+    return this.agent.githubRerunFailedJobs(...args);
   }
   githubWorkflowOperation(...args: Parameters<LocalAgent["githubWorkflowOperation"]>) {
     return this.agent.githubWorkflowOperation(...args);

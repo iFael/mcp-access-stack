@@ -220,10 +220,12 @@ describe("policy-merge", () => {
   it("clamps discovered limits to hard-coded ceilings", () => {
     const limits = clampDiscoveredLimits({
       maxFileBytes: 999_999,
+      maxDeleteFileBytes: 64 * 1024 * 1024,
       maxSearchResults: 5,
     });
 
     expect(limits.maxFileBytes).toBe(DISCOVERED_WORKSPACE_LIMIT_CEILINGS.maxFileBytes);
+    expect(limits.maxDeleteFileBytes).toBeUndefined();
     expect(limits.maxSearchResults).toBe(5);
   });
 
