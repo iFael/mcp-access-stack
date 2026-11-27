@@ -76,7 +76,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Cut over (only with the user's explicit go-ahead): promote_release with the candidate releaseId. The connector reconnects during the swap; then call get_release_state until candidate is empty and active is the new release.",
     ],
     rules: [
-      "When the user asks to update or publish MCP V3 on the execution node, mcp_fluxo operation=update_mcp action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: call it with expectedMainSha (it shows the plan card by itself), end your answer and wait to be woken. When it stops with an error, find and fix its cause yourself and call mcp_fluxo operation=update_mcp action=resume, which continues from that step, without waiting for the user; then tell them what failed and what you did. Do the steps by hand only when the user asks for that.",
+      "When the user asks to update or publish MCP V3 on the execution node, mcp_fluxo operation=update_mcp action=start does the Edge catalog (topic edge_catalog), these steps, the /health check and the Windows companion (topic companion) by itself, in this order: call it with expectedMainSha (it shows the plan card by itself), reconcile the same updateId with mcp_fluxo operation=update_mcp action=read. A Windows notice may arrive; automatic chat resumption requires the Windows ChatGPT app and an exact verified conversation ID, and is not guaranteed. Do not end solely in reliance on a notification. When it stops with an error, find and fix its cause yourself and call mcp_fluxo operation=update_mcp action=resume, which continues from that step, without waiting for the user; then tell them what failed and what you did. Do the steps by hand only when the user asks for that.",
       "Use the nextStep returned by get_release_state when unsure which phase comes next.",
       "Each phase is a separate authorization; do not chain into the next phase unless the user asked for it.",
       "Never run Update-McpAccessStack.sh, Start-McpAccessStackCutover.sh or systemctl through a shell: prepare_release and promote_release are the only supported routes.",
@@ -210,7 +210,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
       "Branch: git_create_branch from the current main, then edit files with write_file or patch_files.",
       "Commit: inspect_workspace_git to check the diff, git_stage_paths and git_commit (or git_commit_paths), then git_push_branch.",
       "Pull request: github_create_pull_request with a title and a body that says what changed and how it was checked.",
-      "Checks: github_start_commit_checks_watch on the pushed head SHA. If CI takes long, end your answer and wait: when the watch ends (passed, failed, time out), MCP V3 writes it into this chat and you continue from there with github_wait_commit_checks_watch. Otherwise follow it with github_wait_commit_checks_watch in bounded waits.",
+      "Checks: github_start_commit_checks_watch on the pushed head SHA. Follow the same watchId with github_wait_commit_checks_watch in bounded waits until terminal. Windows notices and automatic chat resumption are best-effort, not proof of completion.",
       "A failed check: diagnose it as topic refusals says (run_jobs, job_logs), fix it on the same branch, push, and watch the new head SHA.",
       "Ready for review: github_mark_pull_request_ready on an open draft PR with expectedPullRequestHeadSha, then github_start_commit_checks_watch on the same head.",
       "Reviews: github_read kind=pull_request_reviews and kind=pull_request_review_comments; fix what is asked on the same branch, or answer with github_issue_write action=comment saying why not.",
@@ -246,7 +246,7 @@ const GUIDES: Record<OperationGuideTopic, GuideBody> = {
     steps: [
       "Start: start_background_task for a project command, or the typed tool that starts one (prepare_release).",
       "Follow: wait_background_task with the task id, in bounded waits; get_background_task for a quick look.",
-      "Waiting long: once a task or a GitHub checks watch is running, you may end your answer instead of polling. When it ends, on this PC or on the execution node, MCP V3 writes that into this chat (the Windows ChatGPT app, or its Chrome tab) and you continue from where you stopped.",
+      "Waiting long: retain the original task or watch ID and use bounded waits. Windows notifications are best-effort; automatic chat resumption requires the Windows ChatGPT app and an exact verified conversation ID. It is not supported in ordinary Chrome chat tabs. Never rely on notification delivery as proof of completion.",
       "Result: read_background_task_output (or read_background_task_logs) once the task finished.",
     ],
     rules: [

@@ -143,8 +143,9 @@ export class ChatWake {
     }
     const queued: Queued = { ...event, at: this.now() };
     this.pending = [...this.pending, queued].slice(-MAX_EVENTS);
-    // The update waits for the user whether or not the conversation is open.
-    if (event.kind === "update" && event.state === "needs_confirmation") this.notifyOnce([queued]);
+    // Release outcomes require a user-visible notice even if no exact
+    // conversation is known or the desktop app is busy.
+    if (event.kind === "update") this.notifyOnce([queued]);
     this.publish();
     this.schedule(0);
   }
@@ -333,12 +334,20 @@ export class ChatWake {
     const fresh = events.filter((event) => event.kind !== "message" && !this.notified.has(event));
     if (fresh.length === 0 || !this.options.notify) return;
     for (const event of fresh) this.notified.add(event);
-    const confirm = fresh.some((event) => event.kind === "update" && event.state === "needs_confirmation");
+    const update = fresh.length === 1 && fresh[0]?.kind === "update" ? fresh[0] : undefined;
     try {
-      this.options.notify({
-        title: confirm ? "O agente espera sua confirmação" : "O agente tem novidade no ChatGPT",
-        body: `${chatWakeText(fresh).replaceAll("[MCP V3] ", "")}\n\nAbra no app do ChatGPT a conversa dessa tarefa: eu escrevo lá.`,
-      });
+      if (update) {
+        const title = update.state === "succeeded" ? "MCP V3 — atualização concluída"
+          : update.state === "failed" ? "MCP V3 — atualização interrompida" : "O agente espera sua confirmação";
+        const action = update.state === "succeeded" ? "Confira o resultado no Fluxo antes de recarregar o MCP no ChatGPT."
+          : update.state === "failed" ? "Consulte o Fluxo para verificar a falha." : "Abra o Fluxo para revisar a confirmação.";
+        this.options.notify({ title, body: `${chatWakeText(fresh).replaceAll("[MCP V3] ", "")}\n\n${action}` });
+      } else {
+        this.options.notify({
+          title: "O agente tem novidade no ChatGPT",
+          body: `${chatWakeText(fresh).replaceAll("[MCP V3] ", "")}\n\nConsulte a conversa da tarefa. O envio automático depende do app Windows e de uma conversa identificada.`,
+        });
+      }
     } catch {
       // ChatGPT retains the pending reply-card message.
     }

@@ -67,6 +67,26 @@ describe("ChatWake per conversation", () => {
     wake.close();
   });
 
+  it.each(["succeeded", "failed"] as const)("notifies the user immediately of update %s even without an exact conversation", async (state) => {
+    const notices: Array<{ title: string; body: string }> = [];
+    const app = target("app", ["busy"]);
+    const wake = new ChatWake({ targets: () => [app], spacingMs: 1, retryMs: 10,
+      notify: notice => notices.push(notice), conversationOf: () => undefined });
+    try {
+      const event = { kind: "update", updateId: "upd-1", workspaceId: "w", state } as const;
+      wake.queue(event);
+      expect(notices).toEqual([{
+        title: state === "succeeded" ? "MCP V3 — atualização concluída" : "MCP V3 — atualização interrompida",
+        body: expect.stringContaining("upd-1"),
+      }]);
+      expect(notices[0]!.body).not.toContain("eu escrevo lá");
+      if (state === "succeeded") expect(notices[0]!.body).toContain("recarregar");
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(notices).toHaveLength(1);
+      expect(app.texts).toHaveLength(0);
+    } finally { wake.close(); }
+  });
+
   it("notifies an update that waits for confirmation at once, and keeps the user's words with no time limit", async () => {
     let now = 0;
     const notices: Array<{ title: string; body: string }> = [];

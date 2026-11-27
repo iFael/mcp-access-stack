@@ -586,7 +586,7 @@ describe("registerWorkspaceTools", () => {
     const started=await tools.mcp_update!.handler({action:"start",workspaceId:"mcp-access-stack",
       expectedMainSha:"a".repeat(40),planId:"plan_00000000-0000-4000-8000-000000000001"},extra);
     expect(started.isError).toBeFalsy();
-    expect((started.content as Array<{text:string}>)[0]!.text).toContain("End your answer");
+    expect((started.content as Array<{text:string}>)[0]!.text).toContain("automatic chat resumption is not guaranteed");
     // It names the exact next call and shows the plan card by itself.
     expect((started.content as Array<{text:string}>)[0]!.text).toContain('Next: mcp_update {"action":"read","workspaceId":"mcp-access-stack","updateId":');
     expect(tools.mcp_update?._meta).toMatchObject({"openai/outputTemplate":PROGRESS_CARD_URI});

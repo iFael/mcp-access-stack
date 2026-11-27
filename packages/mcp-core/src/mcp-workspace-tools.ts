@@ -1428,7 +1428,7 @@ export function registerWorkspaceTools(
         const next = (action: string, extra: Record<string, string> = {}) => update === null ? "" :
           ` Next: ${name} ${JSON.stringify({ ...(generic ? { operation: "update_mcp" } : {}), action, workspaceId: "mcp-access-stack", updateId: update.updateId, ...extra })}.`;
         const text = update === null ? "No MCP update yet."
-          : update.status === "running" ? `MCP update ${update.updateId} is running (${update.step}). End your answer; you are woken when it stops.${next("read")}`
+          : update.status === "running" ? `MCP update ${update.updateId} is running (${update.step}). Reconcile the same updateId until terminal. Notifications are best-effort; automatic chat resumption is not guaranteed.${next("read")}`
             : update.status === "succeeded" ? `MCP update ${update.updateId} succeeded (${update.tag ?? "no tag"}).`
               : update.status === "needs_confirmation" ? `MCP update ${update.updateId} waits for confirmation at ${update.step}; show the reasons to the user and, once they approve,${next("confirm", { confirmationId: update.confirmation?.confirmationId ?? "" }).slice(0, -1)}.`
                 : `MCP update ${update.updateId} stopped at ${update.step}: ${update.error?.code}: ${update.error?.message}. Find and fix the cause yourself, then resume.${next("resume")}`;
